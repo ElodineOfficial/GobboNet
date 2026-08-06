@@ -64,7 +64,7 @@ The `pid` field is **always present** — it's the Go server's own PID (useful f
 | **Local** | GGUF header parsing (`gguf-parser-go`) reads `general.architecture`, `tokenizer.chat_template`, `<arch>.context_length` from the `.gguf` binary | — | — |
 | **Remote** | `/props` → `model_hf_architecture` field | Filename heuristics (see code) | `thinkingFormat: "none"` |
 
-The `/models-list.json` endpoint is handled entirely on the client side: Go serves it as a static file generated during setup (`launch.sh` scans `models/` via GGUF parsing). On hot-swap, the Go server updates the `active` flag in that static file. The client fetches it once at boot and caches it; the server never regenerates it at runtime.
+The `/models-list.json` endpoint is generated on-demand: Go scans `models/` at boot using `gguf-parser-go`, caches the result keyed on directory mtime, and re-scans on each request if the mtime changed. On hot-swap, the new entry appears on the next request. No mutable file, no drift.
 
 **Degradation chain for remote mode:**
 
@@ -254,6 +254,84 @@ Windows also has internal functions not exposed as endpoints:
 | 8 | Static file serving | ✅ | ✅ | ✅ |
 | 9 | CORS + OPTIONS | ✅ | ✅ | ✅ |
 | 10 | Model identification (`identify.py` + `gguf.py`) | ✅ (`identify-model.ps1`) | ✅ | **Solved** — uses `github.com/gpustack/gguf-parser-go` (Go-native, chunked reading, no model download needed) |
+
+---
+
+### ⚠️ Review Feedback — Action Items
+
+> External review of the Go migration design. Each item includes the verdict and rationale.
+
+#### Precondition: Write a conformance test suite
+
+**Status: DO FIRST — budget 1 week.** Write a pytest + httpx suite parameterized on `BASE_URL`, run it against the PowerShell server to capture golden responses. Then Go is done when the suite is green.
+
+This prevents the exact `/state/info` regression described above: the wildcard route swallowed it, the client parsed the body fine, and boot conflict detection silently never fired. Prose can't catch that a second time. The suite must assert on:
+- Field names (`mtime`, `size`) on all `/state*` responses
+- `X-State-Mtime` header on all `/state*` responses
+- 405 on `POST /state/info`
+- `..` and dot-file rejection on static file serving
+- 401 content-negotiation split (HTML vs JSON)
+
+---
+
+#### §1 Auth: rate limit + Argon2 migration
+
+**Rate limit on `POST /login`** — Adopt. Constant-time compare doesn't protect against connection floods. Per-IP token bucket, ~10 lines. Highest-ROI security fix.
+
+**Password hashing: switch from SHA-256 to Argon2** — Adopt. `access_secret` is a salted SHA-256, which is a single-round hash — trivially bruteforceable on a 4090. Use `golang.org/x/crypto/argon2` (id-mode). Implement rehash-on-login so existing users get migrated to Argon2 on their next login without forced re-auth.
+
+---
+
+#### §2 Health: upstream liveness + mode detection
+
+**Add `upstream_ok` to `/health-fileserver`** — Adopt. The endpoint currently reports only the Go process's own liveness. For a proxy server, this is misleading — the diagnostic endpoint lies in the scenario you'd use it to debug. Add a cached (~3s TTL) `upstream_ok` boolean.
+
+**Fix mode detection — fatal error for misconfigured local mode** — Adopt. Current logic: `server_exe != "" && file exists && model_dir is a dir` → local, else remote. A typo'd path silently demotes you to remote mode, proxying to `127.0.0.1:11434` where nothing listens, and `/health-fileserver` cheerfully reports `"status":"ok"`.
+
+Treat non-empty `server_exe` pointing at a missing file as a **fatal config error**, not a mode switch. Non-empty is a statement of intent. Also decouple `model_dir` from mode — "do I supervise the process" and "where do I enumerate models" are unrelated questions.
+
+---
+
+#### §3 Model metadata: dynamic models-list
+
+**Replace static `models-list.json` with on-demand GGUF scanning** — Adopt. The current design writes a static file during setup and mutates the `active` flag on hot-swap. This reintroduces the exact drift risk that motivated the Go migration (the Windows failure mode). Scan `model_dir` at boot using `gguf-parser-go`, cache keyed on directory mtime, re-scan on each request if the mtime changed. This eliminates the mutable file entirely and makes dropping a GGUF into `models/` just work.
+
+---
+
+#### §5 Hot-swap: process groups, stderr ring buffer, rollback
+
+**Process group management** — Adopt, critical. `SysProcAttr{Setpgid: true}` on Linux and job objects on Windows are mandatory. Without them, llama.cpp children outlive the swap and hold the port and VRAM. This is the single most likely cross-platform bug.
+
+**Stderr ring buffer** — Adopt. Replace log-tail regex parsing with a ring buffer capturing llama-server's stderr. Structured errors instead of grepping a file.
+
+**Auto-rollback on failed swap** — Adopt. Retain the previous command line and auto-rollback when the new one fails to load. A bad GGUF shouldn't leave you with no server at all. On a 4090 with dual-model constraints, kill-then-start is the only viable strategy, so rollback is essential.
+
+---
+
+#### §6 Generation jobs: in-memory redesign
+
+**Keep jobs in memory, drop disk spooling** — Adopt. The current design (SSE to disk, 256KB poll budgets, base64 framing, cancel-flag files) exists because CPython's threading and JSON forced it. At ~150 tok/s, thirty minutes is single-digit MB; four concurrent jobs is tens of MB. Just hold it in memory.
+
+**`context.Context` for cancellation** — Adopt. No flag files. Context propagates into the upstream request.
+
+**Drop base64 framing** — Adopt. SSE payloads are UTF-8; a JSON string carries them fine. Saves 33% bandwidth.
+
+**Keep polling as primary interface** — The reviewer suggests adding `GET /llm/jobs/{id}/stream?from=N` with `Last-Event-ID` as the primary interface. This adds client complexity for no client benefit. Keep the polling endpoint as primary; if a stream endpoint is added later, it's a separate feature.
+
+---
+
+#### §7 Reverse proxy: use httputil
+
+**Use `httputil.ReverseProxy` with `FlushInterval: -1`** — Adopt. Reimplementing hop-by-hop header stripping is reinventing the wheel. Use Go's standard library with `ResponseHeaderTimeout` given real headroom (a 40K-context prefill can run 30s before the first byte). The 600-second timeout should be the *idle* timeout, not total.
+
+---
+
+#### §9 CORS: SameSite + Host validation
+
+**Fix CORS cookie attack surface** — Adopt partially. The reviewer's scenario (CORS `*` + cookie auth) is mitigated by the auth gate (401 blocks unauthenticated requests regardless of CORS). However, the fixes are trivial and good practice:
+- `SameSite=Lax` on the session cookie
+- `Host` header validation against an allowlist (relevant because we bind `0.0.0.0` by default — DNS rebinding is in scope)
+- Keep `*` for `Access-Control-Allow-Origin` — browsers reject `*` for credentialed XHR anyway, and form POSTs / `<img>` tags aren't gated by CORS at all, so the auth gate is the real boundary
 
 ---
 

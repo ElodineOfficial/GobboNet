@@ -27,10 +27,12 @@ This means:
 
 | Platform | Default path | Overridden via |
 |---|---|---|
-| Windows | `%~dp0\.gobbonet-config.toml` | `GEMMA_CONFIG` env var |
-| Linux | `~/.local/share/gobbonet/config.toml` | `XDG_DATA_HOME` / `GEMMA_ROOT` / `GEMMA_CONFIG` |
+| Windows | `%~dp0\.gobbonet-config.toml` | `GOBBONET_CONFIG` env var |
+| Linux | `~/.config/gobbonet/config.toml` | `XDG_CONFIG_HOME/gobbonet/config.toml` / `GOBBONET_CONFIG` env var |
 
 This keeps the Windows behavior identical (config lives next to `launch.bat`) while giving Linux a proper XDG home. Both paths are overridable.
+
+> **Review note — Fix XDG inconsistency:** The current design puts config at `~/.local/share` (wrong XDG directory — that's for *data*, not config). Fix: config → `~/.config/gobbonet/config.toml`. Models, state, and spool directories → `~/.local/share/gobbonet/`. Also rename `GEMMA_*` env vars to `GOBBONET_*` and accept old names with a deprecation warning.
 
 ### Default config (Go writes this when absent)
 
@@ -80,6 +82,9 @@ embed_url = "http://127.0.0.1:11436"
 
 # API key sent to the upstream llama.cpp server (never exposed to the
 # browser). Set this if your upstream requires authentication.
+# For security: the config file is written with 0600 permissions. Alternative:
+#   llm_api_key_file = "/path/to/key"     # read from file at startup
+#   LLAMA_API_KEY=...                      # or set via environment variable
 llm_api_key = ""
 
 # --- Listener -----------------------------------------------------------
@@ -128,6 +133,7 @@ model_dir = "./models"
 # --- Access control -----------------------------------------------------
 # The server can be password-protected. If this is set, the value is
 # a salted SHA-256 hash in "salt:hash" format (lowercase hex).
+# MIGRATION: on first login after upgrade, passwords are rehashed as Argon2.
 # If empty, no password is required.
 #
 # After initial setup this file is written automatically. To change
@@ -144,15 +150,26 @@ access_secret = ""
 # chat_template_file = ""          # absolute or relative path to a .jinja file
 
 # --- Session & job settings ---------------------------------------------
-# Session cookie lifetime in hours. Short for LAN use.
+# Session cookie lifetime in hours. Short for LAN use. Set SameSite=Lax.
 session_ttl_hours = 12
 
 # Maximum concurrent detached-generation workers.
 job_max_concurrent = 4
 
-# How long to keep spooled generation data (hours).
-job_max_age_hours = 48
+# Generation jobs are held in memory (no disk spooling). At ~150 tok/s,
+# 4 concurrent jobs for 30 minutes is tens of MB — trivial for modern systems.
+# job_max_age_hours is retained as a soft limit for memory management.
 ```
+
+### Mode detection — fatal error for missing local binary
+
+Current design: `server_exe != ""` AND file exists AND `model_dir` is a directory → local mode.
+
+> **Review note — Fix silent degradation:** Non-empty `server_exe` is a statement of intent. If the binary is missing, that's a fatal error, not a fallback to remote mode. A typo'd path silently demotes you to remote mode where nothing listens, and the health endpoint lies.
+
+### `gobbonet config get/set` subcommands
+
+> **Review note — Adopt:** Don't make PowerShell or shell scripts parse TOML. Ship CLI subcommands (`gobbonet config get <key>`, `gobbonet config set <key> <value>`) and have both launchers shell out to the binary they already carry. Go stays the only TOML parser. (Note: `gobbonet setup` — collapsing hardware probe + model download + process supervision — is deferred to a later phase; it's platform-specific and one-time, so drift risk is lower.)
 
 ### What each script reads/writes
 
@@ -179,7 +196,9 @@ job_max_age_hours = 48
 - Determines operating mode by inspecting `server_exe`:
   - **Local mode**: `server_exe != ""` AND the file exists AND `model_dir` is a directory
     → Hot-swap enabled. `active-model.json` from GGUF header parsing. Model dropdown offers swap.
-  - **Remote mode**: `server_exe` is empty or the file is not found
+  - **Fatal error**: `server_exe != ""` AND the file does NOT exist
+    → Exit with error. Non-empty `server_exe` is a statement of intent.
+  - **Remote mode**: `server_exe` is empty
     → Hot-swap disabled (503). `active-model.json` from upstream `/props` (with filename heuristics and graceful degradation as fallbacks).
   - **Both modes serve identically**: static files, reverse proxy (all three upstreams), auth, state sync, generation jobs, web search, RAG, and all other features. The only difference is hot-swap and the source of model metadata.
 
@@ -188,8 +207,8 @@ job_max_age_hours = 48
 ```
 1. Find config.toml:
    a. --config flag
-   b. GEMMA_CONFIG env var
-   c. XDG_CONFIG_HOME/gobbonet/config.toml or ~/.config/gobbonet/config.toml
+   b. GOBBONET_CONFIG env var (accept GEMMA_CONFIG with deprecation warning)
+   c. ~/.config/gobbonet/config.toml (or XDG_CONFIG_HOME/gobbonet/config.toml)
    d. ./config.toml (project root, same as Windows)
 
 2. If absent → write default with comments → explain → exit
@@ -197,8 +216,10 @@ job_max_age_hours = 48
 3. Parse TOML → Config struct
 
 4. Determine operating mode:
-   - `server_exe != ""` AND file exists AND `model_dir` is a directory → **local mode**
-   - Otherwise → **remote mode**
+   - `server_exe != ""` AND the file exists AND `model_dir` is a directory → **local mode**
+   - `server_exe != ""` AND the file does NOT exist → **FATAL: server_exe set but binary missing**
+   - `server_exe == ""` → **remote mode**
+   - model_dir absence does NOT affect mode detection (decoupled)
 
 5. If access_secret empty:
    a. If --no-auth → skip
@@ -239,7 +260,7 @@ Key reasons:
 - Exposes structured Go types: `ModelInfo` with `General`, `Architecture`, `ContextLength`, `ChatTemplate`, etc. — exactly the fields `identify-model.ps1` extracts
 - Also provides memory-usage estimation and TPS calculation (useful later for `launch.sh`'s hardware-aware model recommendation)
 
-The Go server will call it during `launch.sh` setup to scan the `models/` directory and build `models-list.json`, and on hot-swap to verify a newly-selected model's metadata.
+The Go server calls it during `launch.sh` setup to scan the `models/` directory and build the initial `models-list.json`, and on hot-swap to verify a newly-selected model's metadata.
 
 ### Model metadata — primary/fallback strategy
 
@@ -250,7 +271,7 @@ The Go server will call it during `launch.sh` setup to scan the `models/` direct
 | **Local** | GGUF header parsing (`gguf-parser-go`) reads `general.architecture`, `tokenizer.chat_template`, `<arch>.context_length` directly from the `.gguf` file | — | — |
 | **Remote** | llama.cpp's `/props` endpoint → `model_hf_architecture` field | Filename heuristics (see code) | `thinkingFormat: "none"` |
 
-The `/models-list.json` endpoint serves a static file generated during setup (`launch.sh` scans `models/` via GGUF parsing). On hot-swap, the server updates the `active` flag in that file. The client fetches it once at boot and caches it.
+The `/models-list.json` endpoint is generated on-demand: Go scans `models/` at boot via `gguf-parser-go`, caches keyed on directory mtime, re-scans on request if mtime changed. No mutable file, no drift.
 
 **Degradation chain for remote mode:** The `/props` endpoint may or may not include `model_hf_architecture` depending on the llama.cpp build version. The Go server handles all three levels gracefully:
 
@@ -272,9 +293,11 @@ After this design, both scripts are thin wrappers. They operate differently depe
 
 **Local mode (default for both scripts):**
 1. **One-time setup** — hardware probe → recommend model → download llama.cpp → download GGUF → set password → write `config.toml` with `server_exe` set
-2. **Start llama-server** as a background process using the config values
-3. **Start the Go server** as a sibling background process
-4. **Health monitor loop** — poll llama-server's `/health`, restart if dead, respect `.swap-in-progress`
+2. **Start llama-server** as a background process (managed by `gobbonet serve` supervisor)
+3. **Start the Go server** as a single process that also supervises llama-server
+4. **Health monitor loop** — handled by `gobbonet serve` with exponential backoff
+
+> **Review note — Collapse launch.sh health monitor into Go:** The health monitor loop, swap coordination, and process supervision should be inside the Go binary, not duplicated in `launch.sh`. This eliminates the drift on the hot path. Use `gobbonet serve` as a proper supervisor with exponential backoff. The setup scripts (hardware probe + model download) can remain as thin wrappers for now — they're one-time interactive flows, not drift-prone hot paths. `gobbonet setup` consolidation is a v2 goal.
 
 **Remote mode (manual setup, no scripts involved):**
 1. User edits `config.toml` — points `llm_url` at remote, clears `server_exe`
