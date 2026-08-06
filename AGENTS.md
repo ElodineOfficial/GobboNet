@@ -1,0 +1,365 @@
+# Gobbonet — Developer Guide
+
+> A self-hosted, offline AI chat frontend for local GGUF models, running entirely on Windows via PowerShell + batch scripts. No build step, no external dependencies, no accounts.
+
+---
+
+## Quick start for developers
+
+```bash
+# The project root is the only directory that matters
+# All files run as-is — no npm, no bundler, no transpiler
+
+# To run:
+.\launch.bat              # Start the full app
+.\setup-lan.bat           # One-time: open firewall for phone access
+.\fileserver.ps1          # Manual server start (rarely needed — launch.bat handles this)
+```
+
+---
+
+## File map
+
+```
+gobbonet/
+├── chat.html              # Frontend SPA — 11,402 lines of inline HTML + JS + CSS
+│                           # All views, modals, rendering logic in one file
+├── style.css              # Terminal/greentext theme — 2,943 lines
+├── default-characters.json # 4 built-in character presets (CodeGoblin, Informant, DM, Storyteller)
+├── models-list.json       # Available models for the download menu (populated at runtime)
+├── granite.jinja          # Custom Jinja chat template for Granite models (tool-calling stripped)
+│
+├── launch.bat             # Orchestrator — 1,687 lines
+│                           # Password setup, hardware probe, model download, health monitoring
+├── fileserver.ps1         # Web server + reverse proxy — 1,169 lines
+│                           # Static files, /llm/* proxy, model hot-swap, state sync
+├── hardware-probe.ps1     # GPU/RAM/disk detection for model recommendation
+├── identify-model.ps1     # Model metadata extraction (family, max context, thinking format)
+├── setup-lan.bat          # Firewall rule setup for LAN/phone access (one-time)
+├── fileserver.ps1         # Also used standalone for development
+│
+├── INDEX.md               # Structural index of chat.html — views, modals, functions, CSS classes
+│
+└── .gitignore (implied)
+    ├── .gobbonet-secret   # Salt+hash of user password (never committed)
+    ├── .gobbonet-state.json  # Runtime state sync file
+    ├── .swap-in-progress  # Sentinel for model hot-swap coordination
+    └── models/            # User-downloaded .gguf model files
+```
+
+---
+
+## Architecture overview
+
+```
+┌──────────────────────────────────────────────────────────┐
+│                      User's Browser                       │
+│         chat.html (11,402 lines of HTML/JS/CSS)           │
+│  ┌─────────┬─────────┬──────────┬────────────────────┐   │
+│  │Chat UI  │Characters│  Threads │  Settings/Mods     │   │
+│  │Streaming │& Personas│ (sidebar)│  Web Search toggle │   │
+│  └─────────┴─────────┴──────────┴────────────────────┘   │
+└───────────────────────┬──────────────────────────────────┘
+                        │ HTTP :8080
+┌───────────────────────▼──────────────────────────────────┐
+│           fileserver.ps1 (PowerShell)                     │
+│  ┌──────────────────────────────────────────────────────┐│
+│  │  Static File Server   │  Reverse Proxy /llm/*        ││
+│  │  (chat.html, css, etc)│  Reverse Proxy /search/*     ││
+│  │                       │  State sync (GET/POST /state)││
+│  │                       │  Model hot-swap handler      ││
+│  └──────────────────────────────────────────────────────┘│
+└───────┬───────────────────┬───────────────────┐          │
+        │ :11434 (loopback) │ :11435 (optional) │          │
+┌───────▼───────┐ ┌────────▼───────┐ ┌─────────▼────┐     │
+│ llama-server  │ │  Ollama proxy  │ │ Embed server │     │
+│ (llama.cpp)   │ │  (web search)  │ │ (optional RAG)│     │
+│               │ │                │ │              │     │
+│ GGUF Model    │ │                │ │              │     │
+└───────────────┘ └────────────────┴────────────────┘     │
+        ▲                                                  │
+        │  launch.bat orchestrates                          │
+        │  health monitoring,                               │
+        │  model selection,                                 │
+        │  GPU detection,                                   │
+        │  password setup                                   │
+        └──────────────────────────────────────────────────┘
+```
+
+---
+
+## The big files
+
+### `chat.html` — Frontend (11,402 lines)
+
+The entire UI in one file. No build step, no module system, no framework.
+
+- **HTML** (~700 lines): Layout shell, modals, inline SVG
+- **CSS** (~300 lines of `<style>` + `@font-face`): Terminal theme, responsive mobile
+- **JavaScript** (~10,400 lines): Everything — state management, rendering, SSE streaming, model hot-swap UI, character system, lore/RAG, macros, extensions
+
+> **See `INDEX.md` for a complete line-numbered reference** of every view, modal, function, CSS class, and data structure.
+
+#### Key patterns in `chat.html`:
+
+1. **Single render loop** — `render()` at line 7263 calls `renderSidebar()` and `renderMessages()`. Most state mutations call `render()` to refresh.
+2. **SSE streaming** — `renderStreamingUpdate()` at 8569 does surgical DOM updates per token (avoids full re-render flicker during streaming).
+3. **Modal sub-views** — The characters modal (`#char-modal`) contains 3 sub-views toggled via `display: none/block`: card list, card editor, persona editor.
+4. **State object** — A single `state` object lives in JS, persisted to `localStorage`, and synced to the server via `/state` endpoint for cross-device access.
+5. **No routing** — `goHome()` (8505) clears the active thread and the main render loop shows the landing page. Selecting a thread from the sidebar sets `state.activeThreadId` and shows the chat view.
+6. **Character template system** — Characters define system prompts, sampler settings, lore, RAG storybooks, carousel prompts, greetings, alt greetings, and visual themes. The template engine expands `{{char}}`, `{{user}}`, `{{current_DAT}}`, and custom macros before sending to the model.
+
+### `fileserver.ps1` — Web server + proxy (1,169 lines)
+
+PowerShell using `System.Net.HttpListener` — no external runtime needed.
+
+- **Static file serving** — Serves `chat.html`, `style.css`, model metadata files
+- **Reverse proxy** — Forwards `/llm/*` to llama-server (127.0.0.1:11434), `/search/*` to Ollama (11435), `/embed/*` to embedding server (11436)
+- **Hot-swap handler** — `POST /swap-model` coordinates model switching without full restart. Creates `.swap-in-progress` sentinel so `launch.bat`'s health monitor doesn't interfere.
+- **State sync** — `GET/POST /state` persists conversation state for cross-device access (phone ↔ PC)
+- **Configuration** — Reads env vars from `launch.bat` (ports, GPU layers, context size, etc.)
+
+### `launch.bat` — Orchestrator (1,687 lines)
+
+Windows batch script — the entry point for end users and the coordination layer for dev work.
+
+- **Password setup** — First-run: prompts for password, stores salted SHA-256 hash in `.gobbonet-secret`
+- **Hardware probe** — Detects GPU VRAM, RAM, disk space via `hardware-probe.ps1`
+- **Model download** — Interactive menu from `models-list.json`, auto-selects recommended model
+- **llama-server launch** — Starts with appropriate `--gpu-layers`, `--ctx-size`, `--chat-template` flags
+- **Health monitoring** — Loop that checks llama-server health; restarts on crash. Respects `.swap-in-progress` during hot-swap.
+- **Chat template selection** — Auto-detects Jinja vs C++ template based on model family
+- **Thinking mode detection** — Sets `MODEL_THINK_FMT` based on model family (deepseek, harmony, gemma, none)
+
+### `default-characters.json`
+
+4 built-in character presets with full definitions (name, description, personality, sampler settings, colors). These are installable from the landing page as user character cards.
+
+### `granite.jinja`
+
+Custom Jinja chat template for Granite 3.x models. Strips the tool-calling template (which causes crashes with llama.cpp's autoparser rewrite). Handles reasoning mode via `enable_thinking` kwarg.
+
+---
+
+## Data model
+
+All persistent state lives in a single `state` object, stored in `localStorage` and synced via the `/state` endpoint.
+
+```javascript
+state = {
+  threads: [
+    {
+      id: string,
+      name: string,
+      characterId: string,
+      messages: [
+        { role: "user"|"assistant", content: string, timestamp: number, variants?: [...] }
+      ],
+      folderId: string | null,
+      tags: string[],
+      pinned: boolean,
+      forkSource: string | null,
+      lore: string,  // auto-generated summary of older messages
+    }
+  ],
+  folders: [{ id: string, name: string, collapsed: boolean }],
+  characterCards: [
+    {
+      id, name, avatar, icon,
+      writingStyle: string,        // system prompt
+      personality: string,
+      carouselEnabled: boolean,
+      carouselPrompts: string,     // newline-separated rotating instructions
+      carouselMode: "random"|"sequential",
+      carouselIndex: number,
+      loreEnabled: boolean,
+      startingLore: string,
+      ragStorybook: string,        // user-controlled RAG with weighted tags
+      greeting: string,
+      altGreetings: string,
+      altGreetingsEnabled: boolean,
+      bgColor: string,
+      textColor: string,
+      dialogColor: string,
+      // Sampler settings
+      temperature: number,
+      minP: number,
+      topK: number,
+      topP: number,
+      repeatPenalty: number,
+      repeatLastN: number,
+      xtcProbability: number,
+      xtcThreshold: number,
+      dryMult: number,
+      bannedPhrases: string,
+    }
+  ],
+  activeThreadId: string | null,   // null = landing page
+  activeCardId: string,
+  activePersonaId: string,
+  schedules: [
+    { id, time: string, threadId, prompt, recurring: "once"|"daily", useSearch, lastFired }
+  ],
+  extensions: {
+    enabled: boolean,
+    stylesheets: [{ url, inline }],
+    scripts: [{ url }],
+    macros: [{ trigger, text }]
+  },
+  apiKey: string,
+  contextLimit: number,
+  cotTimeout: number,
+  avatarScale: number,
+  sidebarOpen: boolean,
+  activeModel: string
+}
+```
+
+---
+
+## API contracts
+
+### llama.cpp (proxied via `/llm/*`)
+
+Gobbonet speaks OpenAI-compatible API to llama.cpp:
+
+```
+POST /llm/v1/chat/completions
+  Content-Type: application/json
+  Body: { model, messages, stream, temperature, top_k, top_p, repeat_penalty, ... }
+  SSE Response: data: {...}  (token-by-token stream)
+```
+
+### Server state sync
+
+```
+GET  /state          → { threads, folders, characterCards, ... }  (full state)
+POST /state          → { ... }  (merge/update state from another device)
+```
+
+### Model hot-swap
+
+```
+POST /swap-model  → { file: "model.gguf" }   → 202 Accepted immediately
+GET  /swap-status → { phase: "downloading"|"starting"|"healthy"|"error" }
+```
+
+Phase transitions: `downloading` → `starting` → `healthy` (model loads) or `error`
+
+### Web search (optional)
+
+```
+POST /search/*  → proxied to Ollama's search API (requires free Ollama API key)
+```
+
+---
+
+## Development conventions
+
+### Code style in `chat.html`
+
+- **No linter, no formatter** — the file is edited manually as a single unit
+- **Comments use `/* === Section Title === */`** to delineate sections
+- **Variable names are descriptive but not verbose** — `renderSidebar()` not `renderThreadListInSidebar()`
+- **Strings use template literals** (`\`${var}\``) for HTML generation
+- **HTML escaping** — `escapeHtml()` wraps all user content before insertion into DOM
+- **SSE streaming** — uses `fetch()` with `ReadableStream` for token-by-token rendering
+
+### PowerShell conventions in `fileserver.ps1`
+
+- **ASCII-only output** — launcher routes output through batch `echo`, which mangles non-ASCII
+- **Env vars via `Get-EnvOrDefault()`** — all configuration comes from launch.bat
+- **`HttpListener`** — no external libraries, uses .NET built-in HTTP listener
+- **Sentinel files** — `.swap-in-progress` coordinates with launch.bat's health monitor
+
+### Batch conventions in `launch.bat`
+
+- **Keep-open guard** — relaunches via `cmd /k` to prevent window from vanishing on error
+- **`setlocal EnableDelayedExpansion`** — needed for `!variable!` syntax in loops
+- **Password reset** — `launch.bat reset-password` deletes `.gobbonet-secret` and re-prompts
+- **Model metadata** — written to `active-model.json` for the frontend to read
+
+### Security model
+
+| Layer | Mechanism |
+|---|---|
+| **llama-server** | Bound to `127.0.0.1` — not reachable from LAN |
+| **fileserver** | Bound to `+:8080` — reachable from LAN |
+| **auth** | Password-gated login (salted SHA-256, plaintext never stored) |
+| **encryption** | None (HTTP only). Fine for trusted home networks, never use on public Wi-Fi |
+
+### Known issues
+
+| Issue | Status | Affected area |
+|---|---|---|
+| **Logit bias / banned words** | **BROKEN** — logit bias not working in current llama.cpp | Character sampler settings |
+| **Tekken tokenizer** | **PATCHED but unthorough** — garbled output on some models | Chat rendering |
+
+---
+
+## Mod / extension system
+
+Users can inject custom CSS and JavaScript via the MODS panel:
+
+- **Stylesheets** — URLs or inline CSS. Applied in order, live preview available
+- **Scripts** — URLs or inline JS. Run at boot with full `state` + DOM access
+- **Macros** — `{{trigger}}` → text expansion. Available in all character card fields and chat input
+
+> ⚠️ **Warning in UI**: "Extensions run with full access to the Gobbonet interface."
+
+---
+
+## Lore and RAG system
+
+Gobbonet has a dual memory system for long conversations:
+
+1. **Auto-lore** — Older messages are automatically compressed into a running summary. Archived messages (dimmed in chat) stay in context as lore.
+2. **RAG Storybook** — User-controlled knowledge base with weighted tags. Structured entries like `# tag [weight] content` fire by theme relevance during chat.
+
+Both systems update as conversations extend, keeping the AI's effective context window much larger than the actual token limit.
+
+---
+
+## Testing and debugging
+
+### Diagnostic command
+Run `gobboDiag()` in browser console for a full system status dump.
+
+### State inspection
+Open browser DevTools → Application → Local Storage → `gobbonet-state` to inspect the state object.
+
+### Log files
+- `llama-server.log` — llama.cpp output (model loading, errors, performance)
+- Server console — PowerShell fileserver output
+
+### Recovery
+- **Lost chats**: The app shows a restore prompt if state migration fails
+- **Forgot password**: Run `launch.bat reset-password` or delete `.gobbonet-secret`
+- **Corrupt state**: Export → Purge all → Import backup
+
+---
+
+## Contributing
+
+This is a non-profit project by the GoblinCorps. No corporate backing, no venture capital.
+
+### Adding features to `chat.html`
+
+1. Find the relevant section comment (look for `/* === Title === */`)
+2. Add HTML inside the appropriate modal or view
+3. Add JavaScript functions near related code
+4. Add CSS in the `<style>` block near related rules
+5. Update `INDEX.md` with new line numbers
+
+### Adding new default characters
+
+Edit `default-characters.json`. Each entry supports:
+- `icon`, `name`, `desc`, `writingStyle`, `personality`
+- `startingLore`, `greeting`, `textColor`, `dialogColor`
+- Sampler settings: `temperature`, `minP`, `topK`, `topP`, `repeatPenalty`, `repeatLastN`
+
+New presets appear on the landing page as "installable" (user clicks to add as their own character card).
+
+---
+
+*Gobbonet is brought to you by the GoblinCorps. No corpo money, no venture capital, no masters.*
