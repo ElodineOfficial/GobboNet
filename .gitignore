@@ -35,6 +35,14 @@ active-model.json
 # Release bundles from build-release.sh
 /dist/
 
+# Installer build artifacts. models.ini IS committed -- it is generated, but
+# committing it means makensis works without running the generator first.
+/installer/payload/
+/installer/GobboNetSetup-*.exe
+
+# Bundled llama.cpp for the installer payload (~300 MB, fetched by hand)
+/vendor/
+
 # Runtime state written next to the config on a portable install
 /config.toml
 /models/
