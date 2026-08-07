@@ -27,3 +27,14 @@ conversations/
 active-model.json
 .llama-launch.cmd
 .embed-launch.cmd
+
+# Built binary
+/gobbonet
+/gobbonet.exe
+
+# Runtime state written next to the config on a portable install
+/config.toml
+/models/
+/llama-server.log
+/state.json
+/.gobbonet-secret

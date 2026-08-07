@@ -1,0 +1,529 @@
+// Package config resolves everything the server needs at startup from a single
+// TOML file, shared with launch.bat and launch.sh.
+//
+// This replaces three scattered sources that used to disagree with each other:
+// the CONFIG block at the top of launch.bat, the Get-EnvOrDefault block at the
+// top of fileserver.ps1, and the GEMMA_* environment variables launch.bat
+// exported to bridge the two. One file, one parser, one source of truth.
+//
+// Discovery order (first hit wins):
+//
+//	--config <path>
+//	$GOBBONET_CONFIG              ($GEMMA_CONFIG accepted, with a warning)
+//	$XDG_CONFIG_HOME/gobbonet/config.toml
+//	~/.config/gobbonet/config.toml
+//	./config.toml                 (matches the Windows layout, next to launch.bat)
+//
+// Data — state backup, downloaded models, logs — lives under
+// $XDG_DATA_HOME/gobbonet (~/.local/share/gobbonet). Config is not data; the
+// two directories are deliberately separate.
+package config
+
+import (
+	"errors"
+	"fmt"
+	"net"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+
+	"github.com/BurntSushi/toml"
+)
+
+// Mode is what the server does about llama.cpp: supervise it, or just proxy to
+// it. Everything else — auth, state sync, jobs, static files, the proxy itself
+// — behaves identically in both.
+type Mode string
+
+const (
+	// ModeLocal: we own the llama-server process, so hot-swap works and model
+	// metadata comes from GGUF headers on disk.
+	ModeLocal Mode = "local"
+	// ModeRemote: llama.cpp is somebody else's problem. Hot-swap answers 503
+	// and model metadata comes from the upstream's /props.
+	ModeRemote Mode = "remote"
+)
+
+// Defaults. These are also the values written into a freshly generated
+// config.toml, so the file documents itself.
+const (
+	DefaultLLMURL     = "http://127.0.0.1:11434"
+	DefaultSearchURL  = "http://127.0.0.1:11435"
+	DefaultEmbedURL   = "http://127.0.0.1:11436"
+	DefaultListenHost = "0.0.0.0"
+	DefaultListenPort = 8080
+
+	DefaultCtxSize     = 16384
+	DefaultGPULayers   = 99
+	DefaultKVCacheType = "q8_0"
+
+	DefaultSessionTTLHours  = 12
+	DefaultJobMaxConcurrent = 4
+	DefaultJobMaxAgeHours   = 48
+)
+
+// Config is the parsed config.toml. Field tags are the TOML keys; the launchers
+// write these names and `gobbonet config set` edits them in place.
+type Config struct {
+	// --- Upstreams ---------------------------------------------------------
+	LLMURL    string `toml:"llm_url"`
+	SearchURL string `toml:"search_url"`
+	EmbedURL  string `toml:"embed_url"`
+
+	// LLMAPIKey is sent upstream and never exposed to the browser.
+	// LLMAPIKeyFile is read at startup and wins over the inline value, so the
+	// secret can live outside a file that the launchers rewrite.
+	LLMAPIKey     string `toml:"llm_api_key"`
+	LLMAPIKeyFile string `toml:"llm_api_key_file"`
+
+	// --- Listener ----------------------------------------------------------
+	ListenHost string `toml:"listen_host"`
+	ListenPort int    `toml:"listen_port"`
+
+	// AllowedHosts extends the Host-header allowlist with extra names.
+	// Empty is not "allow everything" — see HostAllowed for the default policy,
+	// which permits IP literals and localhost but refuses unknown DNS names so a
+	// rebinding attack can't reach a server bound to 0.0.0.0.
+	AllowedHosts []string `toml:"allowed_hosts"`
+
+	// --- Local backend (hot-swap) ------------------------------------------
+	ServerExe   string `toml:"server_exe"`
+	GPULayers   int    `toml:"gpu_layers"`
+	CtxSize     int    `toml:"ctx_size"`
+	KVCacheType string `toml:"kv_cache_type"`
+
+	// --- Directories -------------------------------------------------------
+	ModelDir string `toml:"model_dir"`
+	WebRoot  string `toml:"web_root"`
+	DataDir  string `toml:"data_dir"`
+
+	// --- Access control ----------------------------------------------------
+	// AccessSecret is either a legacy "salt:hash" SHA-256 pair or an Argon2id
+	// PHC string. See internal/auth: a legacy secret is verified as-is and
+	// rewritten as Argon2id on the next successful login.
+	AccessSecret string `toml:"access_secret"`
+
+	// --- Chat template overrides -------------------------------------------
+	ChatTemplateName string `toml:"chat_template_name"`
+	ChatTemplateFile string `toml:"chat_template_file"`
+
+	// --- Sessions and jobs -------------------------------------------------
+	SessionTTLHours  int `toml:"session_ttl_hours"`
+	JobMaxConcurrent int `toml:"job_max_concurrent"`
+	JobMaxAgeHours   int `toml:"job_max_age_hours"`
+
+	// --- Not from the file -------------------------------------------------
+	// Path is where this config was loaded from; `config set` writes back here
+	// and set-password persists the new secret here.
+	Path string `toml:"-"`
+	// RequireAuth is cleared by --no-auth for a loopback-only run.
+	RequireAuth bool `toml:"-"`
+}
+
+// Default returns the configuration used when no file exists yet. It is also
+// what WriteDefault serialises, so the generated file and the in-memory
+// defaults can never drift.
+func Default() Config {
+	return Config{
+		LLMURL:           DefaultLLMURL,
+		SearchURL:        DefaultSearchURL,
+		EmbedURL:         DefaultEmbedURL,
+		ListenHost:       DefaultListenHost,
+		ListenPort:       DefaultListenPort,
+		GPULayers:        DefaultGPULayers,
+		CtxSize:          DefaultCtxSize,
+		KVCacheType:      DefaultKVCacheType,
+		ModelDir:         "./models",
+		SessionTTLHours:  DefaultSessionTTLHours,
+		JobMaxConcurrent: DefaultJobMaxConcurrent,
+		JobMaxAgeHours:   DefaultJobMaxAgeHours,
+		RequireAuth:      true,
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Paths
+// ---------------------------------------------------------------------------
+
+func homeDir() string {
+	if h, err := os.UserHomeDir(); err == nil && h != "" {
+		return h
+	}
+	return "."
+}
+
+// ConfigDir is $XDG_CONFIG_HOME/gobbonet, falling back to ~/.config/gobbonet.
+func ConfigDir() string {
+	if x := os.Getenv("XDG_CONFIG_HOME"); x != "" {
+		return filepath.Join(x, "gobbonet")
+	}
+	return filepath.Join(homeDir(), ".config", "gobbonet")
+}
+
+// DataDir is $XDG_DATA_HOME/gobbonet, falling back to ~/.local/share/gobbonet.
+// State, models and logs live here — never in ConfigDir.
+func DataDir() string {
+	if x := os.Getenv("XDG_DATA_HOME"); x != "" {
+		return filepath.Join(x, "gobbonet")
+	}
+	return filepath.Join(homeDir(), ".local", "share", "gobbonet")
+}
+
+// DefaultPath is where a config is written when none was found.
+func DefaultPath() string { return filepath.Join(ConfigDir(), "config.toml") }
+
+// Discover returns the config path to use, and whether it already exists.
+// An explicit path (flag or env) is returned even when missing — the caller
+// reports that as an error rather than silently writing a new file somewhere
+// the user didn't ask for.
+func Discover(flagPath string) (path string, explicit bool) {
+	if flagPath != "" {
+		return flagPath, true
+	}
+	if p := os.Getenv("GOBBONET_CONFIG"); p != "" {
+		return p, true
+	}
+	if p := os.Getenv("GEMMA_CONFIG"); p != "" {
+		warnDeprecated("GEMMA_CONFIG", "GOBBONET_CONFIG")
+		return p, true
+	}
+	if p := DefaultPath(); fileExists(p) {
+		return p, false
+	}
+	if p := "config.toml"; fileExists(p) {
+		abs, err := filepath.Abs(p)
+		if err != nil {
+			return p, false
+		}
+		return abs, false
+	}
+	return DefaultPath(), false
+}
+
+func fileExists(p string) bool {
+	st, err := os.Stat(p)
+	return err == nil && !st.IsDir()
+}
+
+func isDir(p string) bool {
+	st, err := os.Stat(p)
+	return err == nil && st.IsDir()
+}
+
+// ---------------------------------------------------------------------------
+// Loading
+// ---------------------------------------------------------------------------
+
+// ErrNotFound means no config file exists at the resolved path. The caller is
+// expected to write the commented default, tell the user, and exit — not to
+// carry on with in-memory defaults, which would leave no artifact to edit.
+var ErrNotFound = errors.New("config file not found")
+
+// Load reads and normalises the config at path. Missing file yields ErrNotFound.
+func Load(path string) (Config, error) {
+	cfg := Default()
+	cfg.Path = path
+
+	if !fileExists(path) {
+		return cfg, ErrNotFound
+	}
+
+	md, err := toml.DecodeFile(path, &cfg)
+	if err != nil {
+		return cfg, fmt.Errorf("parse %s: %w", path, err)
+	}
+	// An unrecognised key is almost always a typo in a hand-edited file, and
+	// silently ignoring it means the setting the user thought they changed
+	// never took effect. Say so rather than let it pass.
+	if undecoded := md.Undecoded(); len(undecoded) > 0 {
+		keys := make([]string, 0, len(undecoded))
+		for _, k := range undecoded {
+			keys = append(keys, k.String())
+		}
+		return cfg, fmt.Errorf("%s: unknown setting(s): %s", path, strings.Join(keys, ", "))
+	}
+
+	cfg.applyEnv()
+	if err := cfg.normalise(); err != nil {
+		return cfg, err
+	}
+	return cfg, nil
+}
+
+// applyEnv lets environment variables override the file. GOBBONET_* is the
+// current spelling; the GEMMA_* names fileserver.ps1 read are still honoured so
+// an existing Windows-side setup carries over, but each one warns once.
+func (c *Config) applyEnv() {
+	envStr := func(key string, dst *string) {
+		if v := os.Getenv("GOBBONET_" + key); v != "" {
+			*dst = v
+			return
+		}
+		if v := os.Getenv("GEMMA_" + key); v != "" {
+			warnDeprecated("GEMMA_"+key, "GOBBONET_"+key)
+			*dst = v
+		}
+	}
+	envInt := func(key string, dst *int) {
+		var raw string
+		if v := os.Getenv("GOBBONET_" + key); v != "" {
+			raw = v
+		} else if v := os.Getenv("GEMMA_" + key); v != "" {
+			warnDeprecated("GEMMA_"+key, "GOBBONET_"+key)
+			raw = v
+		}
+		if raw == "" {
+			return
+		}
+		// A malformed number is a mistake worth surfacing, but the environment
+		// is not the place to abort startup over — keep the file's value and
+		// say why it was not used.
+		n, err := strconv.Atoi(raw)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, " [!] ignoring %s=%q: not a number\n", key, raw)
+			return
+		}
+		*dst = n
+	}
+
+	envStr("LLM_URL", &c.LLMURL)
+	envStr("SEARCH_URL", &c.SearchURL)
+	envStr("EMBED_URL", &c.EmbedURL)
+	envStr("LLM_API_KEY", &c.LLMAPIKey)
+	envStr("LISTEN_HOST", &c.ListenHost)
+	envInt("LISTEN_PORT", &c.ListenPort)
+	envStr("SERVER_EXE", &c.ServerExe)
+	envStr("MODEL_DIR", &c.ModelDir)
+	envStr("WEB_ROOT", &c.WebRoot)
+	envStr("DATA_DIR", &c.DataDir)
+	envInt("CTX_SIZE", &c.CtxSize)
+	envInt("GPU_LAYERS", &c.GPULayers)
+	envStr("KV_CACHE_TYPE", &c.KVCacheType)
+	envStr("ACCESS_SECRET", &c.AccessSecret)
+}
+
+var warnedDeprecated = map[string]bool{}
+
+func warnDeprecated(old, current string) {
+	if warnedDeprecated[old] {
+		return
+	}
+	warnedDeprecated[old] = true
+	fmt.Fprintf(os.Stderr, " [!] %s is deprecated; use %s\n", old, current)
+}
+
+// normalise resolves relative paths, fills in derived defaults, and reads the
+// API key file. Relative paths in the config are interpreted against the config
+// file's own directory, so a config that lives next to launch.bat behaves the
+// way the Windows tree always did.
+func (c *Config) normalise() error {
+	base := filepath.Dir(c.Path)
+
+	c.LLMURL = normaliseBaseURL(c.LLMURL)
+	c.SearchURL = normaliseBaseURL(c.SearchURL)
+	c.EmbedURL = normaliseBaseURL(c.EmbedURL)
+
+	if c.DataDir == "" {
+		c.DataDir = DataDir()
+	}
+	c.DataDir = resolveAgainst(base, c.DataDir)
+
+	if c.ModelDir == "" {
+		c.ModelDir = filepath.Join(c.DataDir, "models")
+	}
+	c.ModelDir = resolveAgainst(base, c.ModelDir)
+
+	if c.WebRoot == "" {
+		// Auto-detection failing is not a load error. `config get`, `config set`
+		// and `check` have no use for the web root, and failing here would stop
+		// them working on a machine where the assets live somewhere unusual.
+		// The serve path validates it explicitly, where the failure is real and
+		// the error message can say what to do about it.
+		c.WebRoot = detectWebRoot()
+	}
+	if c.WebRoot != "" {
+		c.WebRoot = resolveAgainst(base, c.WebRoot)
+	}
+
+	if c.ServerExe != "" {
+		c.ServerExe = resolveAgainst(base, c.ServerExe)
+	}
+	if c.ChatTemplateFile != "" {
+		c.ChatTemplateFile = resolveAgainst(base, c.ChatTemplateFile)
+	}
+
+	if c.LLMAPIKeyFile != "" {
+		path := resolveAgainst(base, c.LLMAPIKeyFile)
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			// The user pointed at a key file; a missing one means requests
+			// upstream would go out unauthenticated and fail confusingly later.
+			return fmt.Errorf("llm_api_key_file %s: %w", path, err)
+		}
+		c.LLMAPIKey = strings.TrimSpace(string(raw))
+	}
+
+	if c.SessionTTLHours <= 0 {
+		c.SessionTTLHours = DefaultSessionTTLHours
+	}
+	if c.JobMaxConcurrent <= 0 {
+		c.JobMaxConcurrent = DefaultJobMaxConcurrent
+	}
+	if c.JobMaxAgeHours <= 0 {
+		c.JobMaxAgeHours = DefaultJobMaxAgeHours
+	}
+	if c.ListenPort <= 0 || c.ListenPort > 65535 {
+		return fmt.Errorf("listen_port %d is out of range", c.ListenPort)
+	}
+	return nil
+}
+
+// detectWebRoot finds chat.html relative to the running binary, then the
+// current directory, and returns "" if it cannot. A dev run from the repo and an
+// installed binary sitting next to a web/ directory both work unconfigured.
+func detectWebRoot() string {
+	var candidates []string
+	if exe, err := os.Executable(); err == nil {
+		dir := filepath.Dir(exe)
+		candidates = append(candidates, filepath.Join(dir, "web"), dir)
+	}
+	if wd, err := os.Getwd(); err == nil {
+		candidates = append(candidates, filepath.Join(wd, "web"), wd)
+	}
+	for _, c := range candidates {
+		if fileExists(filepath.Join(c, "chat.html")) {
+			return c
+		}
+	}
+	return ""
+}
+
+func resolveAgainst(base, path string) string {
+	if path == "" {
+		return path
+	}
+	if strings.HasPrefix(path, "~") {
+		path = filepath.Join(homeDir(), strings.TrimPrefix(path, "~"))
+	}
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(base, path)
+	}
+	return filepath.Clean(path)
+}
+
+// normaliseBaseURL accepts "host:port" shorthand and strips trailing slashes so
+// callers can concatenate paths without thinking about it.
+func normaliseBaseURL(raw string) string {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return ""
+	}
+	if !strings.Contains(s, "://") {
+		s = "http://" + s
+	}
+	return strings.TrimRight(s, "/")
+}
+
+// ---------------------------------------------------------------------------
+// Mode
+// ---------------------------------------------------------------------------
+
+// Mode reports whether this process supervises llama.cpp.
+//
+// A non-empty server_exe is a statement of intent. If it points at nothing, that
+// is a fatal configuration error, NOT a quiet demotion to remote mode: the old
+// behaviour turned one typo into a server that proxied to a port nothing
+// listened on while /health-fileserver cheerfully reported "ok".
+//
+// model_dir deliberately does not enter into it. "Do I supervise the process"
+// and "where do I enumerate models" are unrelated questions.
+func (c *Config) Mode() (Mode, error) {
+	if c.ServerExe == "" {
+		return ModeRemote, nil
+	}
+	st, err := os.Stat(c.ServerExe)
+	if err != nil {
+		return "", fmt.Errorf("server_exe is set to %q but that file does not exist.\n"+
+			"    Fix the path, or set server_exe = \"\" to run in remote mode.", c.ServerExe)
+	}
+	if st.IsDir() {
+		return "", fmt.Errorf("server_exe %q is a directory, not the llama-server binary", c.ServerExe)
+	}
+	return ModeLocal, nil
+}
+
+// ---------------------------------------------------------------------------
+// Derived paths
+// ---------------------------------------------------------------------------
+
+func (c *Config) StatePath() string { return filepath.Join(c.DataDir, "state.json") }
+func (c *Config) LogFile() string   { return filepath.Join(c.DataDir, "llama-server.log") }
+
+// ModelDirUsable reports whether there is a directory to enumerate GGUFs from.
+// Independent of Mode: a remote-mode install may still list local files, and a
+// local-mode install may have an empty models directory at first boot.
+func (c *Config) ModelDirUsable() bool { return c.ModelDir != "" && isDir(c.ModelDir) }
+
+// HostAllowed implements the Host-header check.
+//
+// We bind 0.0.0.0 by default, which puts DNS rebinding in scope: an attacker's
+// page resolves their domain to 127.0.0.1 and the browser then makes
+// same-origin requests to us carrying the session cookie. The defence is to
+// refuse Host values we don't recognise.
+//
+// IP literals are always allowed, because that is exactly how the LAN use case
+// works (a phone hits http://192.168.1.50:8080). Rebinding needs a *name*;
+// there is nothing to rebind about a literal address the user typed.
+func (c *Config) HostAllowed(host string) bool {
+	if host == "" {
+		// HTTP/1.1 requires Host. Something is malformed; don't guess.
+		return false
+	}
+	name := host
+	if h, _, err := splitHostPort(host); err == nil {
+		name = h
+	}
+	name = strings.ToLower(strings.TrimSuffix(name, "."))
+
+	if isIPLiteral(name) {
+		return true
+	}
+	switch name {
+	case "localhost", "localhost.localdomain":
+		return true
+	}
+	// mDNS names are how a machine advertises itself on a home LAN, and they
+	// resolve only there.
+	if strings.HasSuffix(name, ".local") {
+		return true
+	}
+	for _, allowed := range c.AllowedHosts {
+		if strings.EqualFold(strings.TrimSpace(allowed), name) {
+			return true
+		}
+	}
+	return false
+}
+
+func splitHostPort(hostport string) (string, string, error) {
+	// net.SplitHostPort rejects a bare host, which is a legal Host header.
+	if strings.HasPrefix(hostport, "[") {
+		if end := strings.LastIndex(hostport, "]"); end > 0 {
+			rest := hostport[end+1:]
+			return hostport[1:end], strings.TrimPrefix(rest, ":"), nil
+		}
+		return "", "", errors.New("malformed bracketed host")
+	}
+	if i := strings.LastIndex(hostport, ":"); i >= 0 {
+		// A bare IPv6 literal has several colons and no port.
+		if strings.Count(hostport, ":") == 1 {
+			return hostport[:i], hostport[i+1:], nil
+		}
+	}
+	return hostport, "", nil
+}
+
+func isIPLiteral(s string) bool {
+	return s != "" && net.ParseIP(s) != nil
+}
