@@ -119,6 +119,19 @@ type Config struct {
 	Path string `toml:"-"`
 	// RequireAuth is cleared by --no-auth for a loopback-only run.
 	RequireAuth bool `toml:"-"`
+	// Deferred holds misconfigurations that are fatal to running a server but
+	// irrelevant to inspecting the config. Load records them; Runnable reports
+	// them. Keeps `config get` working on a config that `serve` would reject.
+	Deferred []error `toml:"-"`
+}
+
+// Runnable reports the first misconfiguration that makes this config unfit to
+// serve with. Call it from every command that actually starts doing work.
+func (c *Config) Runnable() error {
+	if len(c.Deferred) > 0 {
+		return c.Deferred[0]
+	}
+	return nil
 }
 
 // Default returns the configuration used when no file exists yet. It is also
@@ -126,15 +139,20 @@ type Config struct {
 // defaults can never drift.
 func Default() Config {
 	return Config{
-		LLMURL:           DefaultLLMURL,
-		SearchURL:        DefaultSearchURL,
-		EmbedURL:         DefaultEmbedURL,
-		ListenHost:       DefaultListenHost,
-		ListenPort:       DefaultListenPort,
-		GPULayers:        DefaultGPULayers,
-		CtxSize:          DefaultCtxSize,
-		KVCacheType:      DefaultKVCacheType,
-		ModelDir:         "./models",
+		LLMURL:      DefaultLLMURL,
+		SearchURL:   DefaultSearchURL,
+		EmbedURL:    DefaultEmbedURL,
+		ListenHost:  DefaultListenHost,
+		ListenPort:  DefaultListenPort,
+		GPULayers:   DefaultGPULayers,
+		CtxSize:     DefaultCtxSize,
+		KVCacheType: DefaultKVCacheType,
+		// Left empty on purpose: normalise() then resolves it to
+		// <data_dir>/models, i.e. the XDG data directory. A literal "./models"
+		// here would resolve against the *config* directory and put multi-
+		// gigabyte GGUFs under ~/.config, which is what the XDG split exists to
+		// prevent. A portable install opts back in by setting a relative path.
+		ModelDir:         "",
 		SessionTTLHours:  DefaultSessionTTLHours,
 		JobMaxConcurrent: DefaultJobMaxConcurrent,
 		JobMaxAgeHours:   DefaultJobMaxAgeHours,
@@ -355,13 +373,22 @@ func (c *Config) normalise() error {
 
 	if c.LLMAPIKeyFile != "" {
 		path := resolveAgainst(base, c.LLMAPIKeyFile)
+		c.LLMAPIKeyFile = path
 		raw, err := os.ReadFile(path)
 		if err != nil {
 			// The user pointed at a key file; a missing one means requests
 			// upstream would go out unauthenticated and fail confusingly later.
-			return fmt.Errorf("llm_api_key_file %s: %w", path, err)
+			// That is fatal — but only for the commands that actually talk
+			// upstream. Reporting it from Load() would break `config get`, which
+			// launcher scripts depend on, and would leave the user unable to
+			// read or repair any other setting until they hand-edited the file.
+			//
+			// Same placement as the missing server_exe: recorded here, raised by
+			// serve and check, where the failure is real.
+			c.Deferred = append(c.Deferred, fmt.Errorf("llm_api_key_file %s: %w", path, err))
+		} else {
+			c.LLMAPIKey = strings.TrimSpace(string(raw))
 		}
-		c.LLMAPIKey = strings.TrimSpace(string(raw))
 	}
 
 	if c.SessionTTLHours <= 0 {

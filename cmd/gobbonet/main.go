@@ -92,8 +92,8 @@ func usage() {
   gobbonet [serve] [--config PATH] [--no-auth] [--host H] [--port N]
   gobbonet set-password [--config PATH]
   gobbonet check [--config PATH]
-  gobbonet config get <key>
-  gobbonet config set <key> <value>
+  gobbonet config get [--config PATH] <key>
+  gobbonet config set [--config PATH] <key> <value>
   gobbonet config keys
 `)
 }
@@ -141,6 +141,9 @@ func cmdServe(argv []string) error {
 
 	cfg, err := loadConfig(*configPath)
 	if err != nil {
+		return err
+	}
+	if err := cfg.Runnable(); err != nil {
 		return err
 	}
 	if *host != "" {
@@ -354,6 +357,9 @@ func cmdCheck(argv []string) error {
 	if err != nil {
 		return err
 	}
+	if err := cfg.Runnable(); err != nil {
+		return err
+	}
 	mode, err := cfg.Mode()
 	if err != nil {
 		return err
@@ -393,7 +399,18 @@ func cmdConfig(argv []string) error {
 		return errors.New("usage: gobbonet config get|set|keys ...")
 	}
 
-	switch argv[0] {
+	// --config is accepted here for the same reason serve, check and
+	// set-password accept it: a launcher that pins an explicit config path must
+	// be able to read and write that same file. Without it, `config set` would
+	// silently edit the *discovered* config instead — a different file from the
+	// one the very next `serve --config` is about to read.
+	sub := argv[0]
+	rest, configPath, err := extractConfigFlag(argv[1:])
+	if err != nil {
+		return err
+	}
+
+	switch sub {
 	case "keys":
 		for _, key := range config.Keys() {
 			fmt.Println(key)
@@ -401,14 +418,14 @@ func cmdConfig(argv []string) error {
 		return nil
 
 	case "get":
-		if len(argv) < 2 {
-			return errors.New("usage: gobbonet config get <key>")
+		if len(rest) < 1 {
+			return errors.New("usage: gobbonet config get [--config PATH] <key>")
 		}
-		cfg, err := loadConfig("")
+		cfg, err := loadConfig(configPath)
 		if err != nil {
 			return err
 		}
-		value, err := cfg.Get(argv[1])
+		value, err := cfg.Get(rest[0])
 		if err != nil {
 			return err
 		}
@@ -416,21 +433,49 @@ func cmdConfig(argv []string) error {
 		return nil
 
 	case "set":
-		if len(argv) < 3 {
-			return errors.New("usage: gobbonet config set <key> <value>")
+		if len(rest) < 2 {
+			return errors.New("usage: gobbonet config set [--config PATH] <key> <value>")
 		}
-		path, _ := config.Discover("")
+		path := configPath
+		if path == "" {
+			path, _ = config.Discover("")
+		}
 		if _, err := os.Stat(path); err != nil {
 			if err := config.WriteDefault(path); err != nil {
 				return fmt.Errorf("could not create %s: %w", path, err)
 			}
 		}
-		if err := config.Set(path, argv[1], strings.Join(argv[2:], " ")); err != nil {
+		if err := config.Set(path, rest[0], strings.Join(rest[1:], " ")); err != nil {
 			return err
 		}
 		return nil
 
 	default:
-		return fmt.Errorf("unknown config subcommand %q", argv[0])
+		return fmt.Errorf("unknown config subcommand %q", sub)
 	}
+}
+
+// extractConfigFlag pulls --config/-config (in both "--config PATH" and
+// "--config=PATH" forms) out of the argument list, leaving the positional
+// key/value arguments behind. Hand-rolled rather than flag.FlagSet because the
+// positionals come *after* the subcommand name, which FlagSet will not parse.
+func extractConfigFlag(argv []string) (rest []string, path string, err error) {
+	for i := 0; i < len(argv); i++ {
+		arg := argv[i]
+		switch {
+		case arg == "--config" || arg == "-config":
+			if i+1 >= len(argv) {
+				return nil, "", errors.New("--config needs a path")
+			}
+			path = argv[i+1]
+			i++
+		case strings.HasPrefix(arg, "--config="):
+			path = strings.TrimPrefix(arg, "--config=")
+		case strings.HasPrefix(arg, "-config="):
+			path = strings.TrimPrefix(arg, "-config=")
+		default:
+			rest = append(rest, arg)
+		}
+	}
+	return rest, path, nil
 }

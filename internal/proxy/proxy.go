@@ -76,16 +76,22 @@ func New(prefix, upstreamBase, apiKey string) (*Proxy, error) {
 		FlushInterval: -1, // flush every write: this is what makes streaming stream
 		ErrorHandler:  p.handleError,
 		ModifyResponse: func(resp *http.Response) error {
-			// We emit our own permissive CORS headers on every response.
-			// Letting the upstream's copies through as well produces duplicates
-			// that browsers reject outright.
-			for _, h := range []string{
-				"Access-Control-Allow-Origin",
-				"Access-Control-Allow-Methods",
-				"Access-Control-Allow-Headers",
-			} {
-				resp.Header.Del(h)
-			}
+			// Replace the upstream's CORS headers with ours.
+			//
+			// Deleting is not enough. ReverseProxy writes the upstream headers
+			// straight to the client, so a proxied response never passes through
+			// httpx.CommonHeaders the way our own handlers do — strip-only
+			// leaves /llm, /search and /embed with no CORS headers at all, while
+			// the OPTIONS preflight for those same paths answers "*". A browser
+			// that is told the preflight passes and then gets an actual response
+			// with no Allow-Origin blocks the result, which is exactly the
+			// file:// and cross-origin case the "*" policy exists to support.
+			//
+			// Set, don't Add: the upstream sends its own copies, and duplicates
+			// are rejected outright.
+			resp.Header.Set("Access-Control-Allow-Origin", "*")
+			resp.Header.Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+			resp.Header.Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 			// Watchdog on the streaming body. ReverseProxy has no notion of an
 			// idle stream, so we wrap the body and cancel the request context
 			// if it goes quiet for too long.

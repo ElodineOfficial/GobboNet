@@ -378,9 +378,161 @@ func TestAPIKeyFileWins(t *testing.T) {
 
 // A key file the user named but that isn't readable must stop startup: silently
 // going out unauthenticated would fail confusingly much later.
-func TestMissingAPIKeyFileIsFatal(t *testing.T) {
+// A missing llm_api_key_file must stop the server starting, but must NOT stop
+// the config being read. Launcher scripts call `gobbonet config get`, and a
+// broken key path is no reason they cannot ask for the port — or repair the
+// setting with `config set`.
+func TestMissingAPIKeyFileIsFatalToServeButNotToRead(t *testing.T) {
 	path := writeConfig(t, "llm_url = \"http://x:1\"\nllm_api_key_file = \"/nonexistent/key\"\n")
-	if _, err := Load(path); err == nil {
-		t.Error("a missing llm_api_key_file was silently ignored")
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load must succeed so `config get` keeps working: %v", err)
+	}
+	if cfg.LLMURL != "http://x:1" {
+		t.Errorf("the rest of the config did not survive: llm_url = %q", cfg.LLMURL)
+	}
+	if err := cfg.Runnable(); err == nil {
+		t.Error("a missing llm_api_key_file was silently ignored; serve would run unauthenticated")
+	} else if !strings.Contains(err.Error(), "/nonexistent/key") {
+		t.Errorf("error should name the missing file, got %v", err)
+	}
+	// It must never be mistaken for a usable key.
+	if cfg.LLMAPIKey != "" {
+		t.Errorf("LLMAPIKey should stay empty, got %q", cfg.LLMAPIKey)
+	}
+}
+
+// A key file that IS present is read, trimmed, and wins over the inline value.
+func TestAPIKeyFileWinsOverInlineKey(t *testing.T) {
+	dir := t.TempDir()
+	keyPath := filepath.Join(dir, "key")
+	if err := os.WriteFile(keyPath, []byte("  file-key\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	path := writeConfig(t, "llm_api_key = \"inline-key\"\nllm_api_key_file = \""+keyPath+"\"\n")
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Runnable(); err != nil {
+		t.Fatalf("a readable key file must not be an error: %v", err)
+	}
+	if cfg.LLMAPIKey != "file-key" {
+		t.Errorf("want trimmed file-key, got %q", cfg.LLMAPIKey)
+	}
+}
+
+// The XDG split: nothing large may default into the config directory.
+func TestModelDirDefaultsIntoDataDirNotConfigDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "cfg"))
+	t.Setenv("XDG_DATA_HOME", filepath.Join(home, "data"))
+
+	cfgDir := filepath.Join(home, "cfg", "gobbonet")
+	if err := os.MkdirAll(cfgDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(cfgDir, "config.toml")
+	if err := WriteDefault(path); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantModels := filepath.Join(home, "data", "gobbonet", "models")
+	if cfg.ModelDir != wantModels {
+		t.Errorf("model_dir = %q, want %q — GGUFs must not land in the config dir", cfg.ModelDir, wantModels)
+	}
+	if strings.HasPrefix(cfg.ModelDir, cfgDir) {
+		t.Errorf("model_dir %q is inside the config dir %q", cfg.ModelDir, cfgDir)
+	}
+	if strings.HasPrefix(cfg.StatePath(), cfgDir) {
+		t.Errorf("state %q is inside the config dir %q", cfg.StatePath(), cfgDir)
+	}
+	if strings.HasPrefix(cfg.LogFile(), cfgDir) {
+		t.Errorf("log %q is inside the config dir %q", cfg.LogFile(), cfgDir)
+	}
+}
+
+// A portable install opts back in to a one-folder layout with a relative path,
+// which resolves against the config file rather than the XDG data dir.
+func TestRelativeModelDirResolvesAgainstConfigDir(t *testing.T) {
+	path := writeConfig(t, "model_dir = \"./models\"\n")
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(filepath.Dir(path), "models")
+	if cfg.ModelDir != want {
+		t.Errorf("model_dir = %q, want %q", cfg.ModelDir, want)
+	}
+}
+
+// `config set` must not cannibalise the documentation. DefaultTOML carries
+// indented examples inside prose blocks that look exactly like assignments.
+func TestSetLeavesIndentedProseExamplesAlone(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	if err := WriteDefault(path); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Present ONLY as an indented example, never as a real assignment.
+	const prose = `#   llm_api_key_file = "/path/to/key"`
+	if !strings.Contains(string(before), prose) {
+		t.Skip("DefaultTOML no longer carries this prose example")
+	}
+
+	if err := Set(path, "llm_api_key_file", "/etc/gobbonet.key"); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(after), prose) {
+		t.Error("Set ate the documentation example instead of appending a setting")
+	}
+	if !strings.Contains(string(after), `llm_api_key_file = "/etc/gobbonet.key"`) {
+		t.Error("Set did not write the value")
+	}
+}
+
+// Setting a commented-out default uncomments it in place — exactly once.
+func TestSetUncommentsDefaultWithoutDuplicating(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	if err := WriteDefault(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := Set(path, "model_dir", "/srv/models"); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	active := 0
+	for _, line := range strings.Split(string(raw), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "model_dir") {
+			active++
+		}
+	}
+	if active != 1 {
+		t.Errorf("want exactly 1 active model_dir assignment, got %d\n%s", active, raw)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ModelDir != "/srv/models" {
+		t.Errorf("model_dir = %q", cfg.ModelDir)
 	}
 }

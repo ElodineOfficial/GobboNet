@@ -109,10 +109,16 @@ func FindSidecarTemplate(ggufPath string) string {
 
 // IdentifyFile identifies a local GGUF, reading its header for ground truth.
 func IdentifyFile(path string) Record {
+	meta, err := ReadGGUFMeta(path)
+	return identifyFrom(path, meta, err)
+}
+
+// identifyFrom is IdentifyFile with the header already read, so a directory
+// scan pays for it once.
+func identifyFrom(path string, meta *GGUFMeta, err error) Record {
 	sidecar := FindSidecarTemplate(path)
 	base := filepath.Base(path)
 
-	meta, err := ReadGGUFMeta(path)
 	if err != nil {
 		// The header could not be read — a truncated download, a permissions
 		// problem, or a format this parser doesn't know. Fall back to the
@@ -123,7 +129,15 @@ func IdentifyFile(path string) Record {
 		// llama-server will probably refuse to load too, and "the dropdown
 		// labelled it 'custom'" is a much worse first clue than the real error.
 		log.Printf("[models] could not read GGUF header from %s: %v (falling back to filename rules)", base, err)
-		return Classify(ClassifyInput{Filename: base, SidecarFile: sidecar})
+		// Guess the architecture from the name, exactly as IdentifyProps does
+		// when a build predates model_hf_architecture. Both are the degraded
+		// path; there is no reason for a local file to be identified less well
+		// than the same file behind a remote server.
+		return Classify(ClassifyInput{
+			Filename:     base,
+			Architecture: ArchitectureFromName(base),
+			SidecarFile:  sidecar,
+		})
 	}
 	return Classify(ClassifyInput{
 		Filename:      base,
@@ -136,7 +150,35 @@ func IdentifyFile(path string) Record {
 
 var ggufGlobRe = regexp.MustCompile(`(?i)\.gguf$`)
 
-// ScanDir identifies every GGUF in dir, sorted by filename.
+// projectorNameRe matches the naming convention llama.cpp's own conversion
+// scripts use for multimodal projectors, which is what every quantizer on
+// Hugging Face follows.
+var projectorNameRe = regexp.MustCompile(`(?i)(^|[-_.])mmproj([-_.]|$)`)
+
+// isProjector reports whether a GGUF is a multimodal projector rather than a
+// model that can be loaded for chat.
+//
+// Vision models ship the projector as a second .gguf right next to the weights
+// — LM Studio and Hugging Face both lay them out that way — so a plain scan of
+// model_dir picks them up. They are not chat models: llama-server takes one via
+// --mmproj alongside a real --model, and handed one as --model it refuses to
+// load. Listing them in the dropdown offers the user a choice that can only
+// fail, and the failure looks like a broken swap rather than a bad pick.
+//
+// The header is authoritative (projectors declare architecture "clip"); the
+// filename rule only decides files whose header could not be read at all.
+func isProjector(name string, meta *GGUFMeta, err error) bool {
+	if err == nil && meta != nil {
+		switch strings.ToLower(meta.Architecture) {
+		case "clip", "mmproj", "projector":
+			return true
+		}
+		return false
+	}
+	return projectorNameRe.MatchString(name)
+}
+
+// ScanDir identifies every chat-capable GGUF in dir, sorted by filename.
 func ScanDir(dir string) []Record {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -153,7 +195,12 @@ func ScanDir(dir string) []Record {
 
 	records := make([]Record, 0, len(names))
 	for _, name := range names {
-		records = append(records, IdentifyFile(filepath.Join(dir, name)))
+		path := filepath.Join(dir, name)
+		meta, metaErr := ReadGGUFMeta(path)
+		if isProjector(name, meta, metaErr) {
+			continue
+		}
+		records = append(records, identifyFrom(path, meta, metaErr))
 	}
 	return records
 }

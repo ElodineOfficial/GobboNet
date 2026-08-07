@@ -86,18 +86,23 @@ ctx_size = 16384
 kv_cache_type = "q8_0"
 
 # --- Directories --------------------------------------------------------
+# Server-side data: models, the chat state backup, and llama-server logs.
+# Defaults to ~/.local/share/gobbonet -- the XDG data directory. Config is
+# not data, so nothing large is ever written next to this file.
+# data_dir = ""
+
 # Directory containing .gguf model files. These appear in the model
 # selector dropdown. Scanned on demand, so dropping a new GGUF in here
 # makes it show up without a restart.
-model_dir = "./models"
+#
+# Defaults to <data_dir>/models. Set a RELATIVE path to pin it next to this
+# config file instead, which is what a portable one-folder install wants:
+#   model_dir = "./models"
+# model_dir = ""
 
 # Where chat.html and friends live. Leave empty to auto-detect next to
 # the binary.
 # web_root = ""
-
-# Server-side data: the chat state backup and llama-server logs.
-# Defaults to ~/.local/share/gobbonet.
-# data_dir = ""
 
 # --- Access control -----------------------------------------------------
 # Set by "gobbonet set-password". Stored as an Argon2id hash; a legacy
@@ -213,9 +218,17 @@ func Set(path, key, value string) error {
 	}
 
 	line := key + " = " + formatValue(key, value)
-	// Matches an active assignment or a commented-out one, so uncommenting a
-	// documented default is just `config set`.
-	pattern := regexp.MustCompile(`^\s*#?\s*` + regexp.QuoteMeta(key) + `\s*=`)
+	// Matches an active assignment, or a commented-out default written in the
+	// canonical form this file uses: comment marker at column 0, one optional
+	// space, then the key. Uncommenting a documented default is therefore just
+	// `config set`.
+	//
+	// The anchoring is deliberate. DefaultTOML also contains *indented* examples
+	// inside prose blocks ("#   model_dir = \"./models\""), and those are
+	// documentation, not settings. A looser `^\s*#?\s*` pattern matches them
+	// first — every key is replaced at its first hit — which silently eats the
+	// explanation and leaves the real commented default untouched below it.
+	pattern := regexp.MustCompile(`^#? ?` + regexp.QuoteMeta(key) + `\s*=`)
 
 	var out []string
 	replaced := false

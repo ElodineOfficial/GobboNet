@@ -91,8 +91,12 @@ type Supervisor struct {
 	stderr *ringBuffer
 	client *http.Client
 
-	mu      sync.Mutex
-	cmd     *exec.Cmd
+	mu  sync.Mutex
+	cmd *exec.Cmd
+	// pgid is the process group captured at launch. Kept separately from cmd
+	// because it stays valid after the reaper has Wait()ed the child, which is
+	// precisely when surviving helpers still need killing.
+	pgid    int
 	current string // GGUF basename currently loaded
 	// previous is the last model known to have started successfully. A failed
 	// swap rolls back to it rather than leaving the user with no server at all.
@@ -289,6 +293,7 @@ func (s *Supervisor) start(file string) error {
 
 	s.mu.Lock()
 	s.cmd = cmd
+	s.pgid = processGroupID(cmd)
 	s.current = file
 	s.exited = exited
 	s.mu.Unlock()
@@ -375,6 +380,7 @@ func (s *Supervisor) restartAfterCrash(file string) {
 func (s *Supervisor) stop() {
 	s.mu.Lock()
 	cmd := s.cmd
+	pgid := s.pgid
 	exited := s.exited
 	s.stopping = true
 	s.mu.Unlock()
@@ -383,43 +389,92 @@ func (s *Supervisor) stop() {
 		s.mu.Lock()
 		s.stopping = false
 		s.cmd = nil
+		s.pgid = 0
 		s.mu.Unlock()
 	}()
 
 	if cmd == nil || cmd.Process == nil {
+		// No handle, but possibly still a group: the reaper clears s.cmd when the
+		// process dies on its own, and that is exactly the crash case where
+		// orphaned helpers are most likely to be left behind.
+		s.reapGroup(pgid)
 		s.waitPortFree()
 		return
 	}
 
-	// A process that has already exited on its own is the normal case on the
+	// Has the process we launched already gone? That is the normal case on the
 	// rollback path — the model we were asked to load failed and died before we
-	// got here — so it is not worth reporting as a failure.
+	// got here — so its exit is not worth reporting as a failure.
+	//
+	// It is emphatically NOT a reason to stop here. The leader exiting says
+	// nothing about the rest of its group: llama-server's helpers get reparented
+	// to init and keep running, still holding VRAM. Returning early at this point
+	// is what leaves the next model unable to allocate a backend buffer. Whatever
+	// the leader did, the group still has to be swept.
+	leaderGone := false
 	select {
 	case <-exited:
-		s.waitPortFree()
-		return
+		leaderGone = true
 	default:
 	}
 
-	if err := terminateGroup(cmd, false); err != nil {
-		log.Printf("[swap] SIGTERM to process group failed: %v", err)
-	}
-
-	select {
-	case <-exited:
-	case <-time.After(gracePeriod):
-		log.Printf("[swap] llama-server did not exit in %s; forcing", gracePeriod)
-		if err := terminateGroup(cmd, true); err != nil {
-			log.Printf("[swap] SIGKILL to process group failed: %v", err)
+	if !leaderGone {
+		if err := terminateGroup(pgid, false); err != nil {
+			log.Printf("[swap] SIGTERM to process group failed: %v", err)
 		}
 		select {
 		case <-exited:
 		case <-time.After(gracePeriod):
-			log.Printf("[swap] llama-server still present after SIGKILL")
+			log.Printf("[swap] llama-server did not exit in %s; forcing", gracePeriod)
 		}
 	}
 
+	s.reapGroup(pgid)
 	s.waitPortFree()
+}
+
+// reapGroup ensures nothing from the launched process group is left running.
+//
+// Membership, not the leader's exit status, is the completion condition — a
+// helper that ignored SIGTERM, or one orphaned when llama-server crashed, is
+// invisible to cmd.Wait() and to any walk of our own descendants, but it still
+// holds the GPU memory the next model needs.
+func (s *Supervisor) reapGroup(pgid int) {
+	if pgid <= 0 || !groupAlive(pgid) {
+		return
+	}
+
+	// The leader may already have taken the polite signal; members still here
+	// have either ignored it or never received one.
+	if err := terminateGroup(pgid, false); err != nil {
+		log.Printf("[swap] SIGTERM to process group failed: %v", err)
+	}
+	if waitGroupGone(pgid, gracePeriod) {
+		return
+	}
+
+	log.Printf("[swap] process group %d outlived SIGTERM; forcing", pgid)
+	if err := terminateGroup(pgid, true); err != nil {
+		log.Printf("[swap] SIGKILL to process group failed: %v", err)
+	}
+	if !waitGroupGone(pgid, gracePeriod) {
+		// Worth shouting about: this is the state in which a swap will fail to
+		// allocate VRAM, and the cause is not something the next error message
+		// will explain.
+		log.Printf("[swap] WARNING: processes from group %d survived SIGKILL and may still hold GPU memory", pgid)
+	}
+}
+
+// waitGroupGone polls until the group is empty or the deadline passes.
+func waitGroupGone(pgid int, within time.Duration) bool {
+	deadline := time.Now().Add(within)
+	for time.Now().Before(deadline) {
+		if !groupAlive(pgid) {
+			return true
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return !groupAlive(pgid)
 }
 
 // waitPortFree blocks until nothing accepts on the upstream port.

@@ -811,3 +811,94 @@ func sha256Hex(s string) string {
 	sum := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(sum[:])
 }
+
+// A proxied response must carry the same permissive CORS headers as every other
+// response. ReverseProxy writes the upstream's headers straight through, so it
+// never passes httpx.CommonHeaders — stripping the upstream's copies without
+// setting our own leaves /llm, /search and /embed with no CORS at all, while the
+// OPTIONS preflight for those same paths answers "*". A browser told the
+// preflight passed and then handed a response with no Allow-Origin blocks it.
+func TestProxiedResponsesCarryCORSHeaders(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// llama.cpp sets its own CORS headers; ours must win, not duplicate.
+		w.Header().Set("Access-Control-Allow-Origin", "http://upstream.invalid")
+		w.Header().Set("Access-Control-Allow-Methods", "GET")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer upstream.Close()
+
+	srv, _ := newTestServer(t)
+	defer srv.Shutdown()
+
+	for _, route := range []string{"/llm/v1/models", "/search/x", "/embed/x"} {
+		t.Run(route, func(t *testing.T) {
+			cfg := config.Default()
+			cfg.Path = filepath.Join(t.TempDir(), "config.toml")
+			cfg.WebRoot = t.TempDir()
+			cfg.DataDir = t.TempDir()
+			cfg.LLMURL = upstream.URL
+			cfg.SearchURL = upstream.URL
+			cfg.EmbedURL = upstream.URL
+			cfg.RequireAuth = false
+			if err := os.WriteFile(filepath.Join(cfg.WebRoot, "chat.html"), []byte("x"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			s, err := New(cfg, config.ModeRemote, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Shutdown()
+
+			rec := httptest.NewRecorder()
+			s.ServeHTTP(rec, newReq(http.MethodGet, route, nil))
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200", rec.Code)
+			}
+			got := rec.Header().Values("Access-Control-Allow-Origin")
+			if len(got) != 1 {
+				t.Fatalf("Allow-Origin appeared %d times (%v); duplicates are rejected by browsers", len(got), got)
+			}
+			if got[0] != "*" {
+				t.Errorf("Allow-Origin = %q, want \"*\" (upstream's value must not survive)", got[0])
+			}
+			if m := rec.Header().Get("Access-Control-Allow-Methods"); m != "GET, POST, PUT, DELETE, OPTIONS" {
+				t.Errorf("Allow-Methods = %q, upstream's value survived", m)
+			}
+		})
+	}
+}
+
+// The preflight and the actual response must agree, or the browser blocks the
+// result after being told the request was allowed.
+func TestPreflightAndProxiedResponseAgreeOnCORS(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer upstream.Close()
+
+	cfg := config.Default()
+	cfg.Path = filepath.Join(t.TempDir(), "config.toml")
+	cfg.WebRoot = t.TempDir()
+	cfg.DataDir = t.TempDir()
+	cfg.LLMURL = upstream.URL
+	cfg.RequireAuth = false
+	if err := os.WriteFile(filepath.Join(cfg.WebRoot, "chat.html"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := New(cfg, config.ModeRemote, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Shutdown()
+
+	pre := httptest.NewRecorder()
+	s.ServeHTTP(pre, newReq(http.MethodOptions, "/llm/v1/chat/completions", nil))
+	post := httptest.NewRecorder()
+	s.ServeHTTP(post, newReq(http.MethodGet, "/llm/v1/chat/completions", nil))
+
+	if a, b := pre.Header().Get("Access-Control-Allow-Origin"), post.Header().Get("Access-Control-Allow-Origin"); a != b {
+		t.Errorf("preflight says Allow-Origin %q but the response says %q", a, b)
+	}
+}

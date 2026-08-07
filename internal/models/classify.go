@@ -174,6 +174,24 @@ func Classify(in ClassifyInput) Record {
 		UseJinja:       1,
 	}
 
+	// Context length is settled up front, before any of the identification
+	// branches below can return early.
+	//
+	// It is orthogonal to identity: the hard overrides and the sidecar path
+	// decide which *chat template* to use, and neither has anything to say about
+	// how many tokens the backend will accept. Leaving this until after them
+	// meant every model matching an override — llama3, mistral-small,
+	// mistral-nemo, granite, command-r, i.e. most of the common ones — kept the
+	// 131072 placeholder.
+	//
+	// That is not cosmetic. In remote mode ContextLength is the n_ctx the server
+	// was actually launched with, so advertising 131072 against a server started
+	// with --ctx-size 8192 makes the UI offer a window llama.cpp will reject on
+	// every request past the real limit.
+	if in.ContextLength > 0 {
+		rec.MaxCtx = min(in.ContextLength, MaxCtxCap)
+	}
+
 	prefix := in.SidecarPrefix
 	if prefix == "" {
 		prefix = "models"
@@ -269,10 +287,6 @@ func Classify(in ClassifyInput) Record {
 		return rec
 	}
 
-	if in.ContextLength > 0 {
-		rec.MaxCtx = min(in.ContextLength, MaxCtxCap)
-	}
-
 	digest := TemplateHash(template)
 	rec.TemplateHash = digest
 
@@ -345,7 +359,7 @@ func Classify(in ClassifyInput) Record {
 		case strings.HasPrefix(arch, "phi"):
 			rec.Family, rec.ID = "phi", "phi"
 		case arch != "":
-			rec.Family, rec.ID = arch, arch
+			rec.Family, rec.ID = familyFromArch(arch), arch
 		default:
 			rec.Family, rec.ID = "custom", "custom"
 		}
@@ -371,7 +385,7 @@ func Classify(in ClassifyInput) Record {
 		case strings.HasPrefix(arch, "llama"), arch == "":
 			rec.Family, rec.ID = "llama", "llama"
 		default:
-			rec.Family, rec.ID = arch, arch
+			rec.Family, rec.ID = familyFromArch(arch), arch
 		}
 	}
 
@@ -379,6 +393,45 @@ func Classify(in ClassifyInput) Record {
 		rec.ThinkingFormat = "deepseek"
 	}
 	return rec
+}
+
+// familyFromArch maps an architecture string onto the family vocabulary
+// chat.html actually indexes.
+//
+// The branches that fall through to "use the architecture as the family" emit
+// raw values like "qwen2", "qwen3moe" and "phi3". chat.html looks the family up
+// in its stop-string table by exact match — its own comment spells out the
+// consequence: "the key has to match exactly or getStopStrings() returns {} and
+// the END_OF_TURN_TOKEN marker leaks into the rendered output". That table is
+// keyed "qwen" and "phi", so every versioned architecture missed it and the
+// model's turn markers were printed to the user as if they were content.
+//
+// Only recognised prefixes are rewritten. Anything unknown is passed through
+// unchanged, so this can turn a non-matching key into a matching one and never
+// the reverse. The ID keeps the precise architecture — it drives display and
+// registry lookup, which degrade gracefully on a miss.
+func familyFromArch(arch string) string {
+	switch {
+	case strings.HasPrefix(arch, "qwen"):
+		return "qwen"
+	case strings.HasPrefix(arch, "phi"):
+		return "phi"
+	case strings.HasPrefix(arch, "llama"):
+		return "llama"
+	case strings.HasPrefix(arch, "gemma"):
+		return "gemma"
+	case strings.HasPrefix(arch, "glm"), strings.HasPrefix(arch, "chatglm"):
+		return "glm"
+	case strings.HasPrefix(arch, "cohere"), strings.HasPrefix(arch, "command"):
+		return "cohere"
+	case strings.HasPrefix(arch, "granite"):
+		return "granite"
+	case strings.HasPrefix(arch, "deepseek"):
+		return "deepseek"
+	case strings.HasPrefix(arch, "mistral"), strings.HasPrefix(arch, "mixtral"):
+		return "mistral"
+	}
+	return arch
 }
 
 // archFromName recovers a GGUF architecture string from a filename.

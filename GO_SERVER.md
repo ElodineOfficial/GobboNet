@@ -29,6 +29,10 @@ next to `web/`.
 ./gobbonet config keys           # list every settable key
 ```
 
+Every subcommand takes `--config PATH`, `config get`/`set` included — a launcher
+that pins an explicit config must be able to read and write that same file
+rather than whichever one discovery happens to find.
+
 The first run writes a fully commented `config.toml`, tells you where, and exits.
 Read it, adjust `llm_url` and `server_exe`, and run again.
 
@@ -43,11 +47,13 @@ First hit wins:
 5. `./config.toml` — matches the Windows layout, next to `launch.bat`
 
 Config and data are deliberately separate: config in `~/.config/gobbonet`, data
-(state backup, models, logs) in `~/.local/share/gobbonet`.
+(state backup, models, logs) in `~/.local/share/gobbonet`. Nothing large is ever
+written next to the config file — `model_dir` defaults to `<data_dir>/models`,
+not to a directory beside `config.toml`.
 
 Relative paths inside the config resolve against the config file's own directory,
 so a portable install that keeps everything in one folder behaves the way the
-Windows tree always did.
+Windows tree always did. That is what `model_dir = "./models"` opts into.
 
 `gobbonet config get` / `set` exist so the launcher scripts never have to parse
 TOML — Go stays the only TOML parser in the tree. `set` edits the file line by
@@ -104,6 +110,46 @@ base64, saving 33% of the bandwidth. The offset protocol still counts bytes, so
 the completing bytes have arrived, and trims back only when the tail character is
 genuinely still in flight. Without that, Go's JSON encoder turns a split
 character into U+FFFD and silently corrupts the stream.
+
+## Model identification
+
+`model_dir` is scanned on demand and every GGUF's header is read for ground
+truth — architecture, embedded chat template, context length. The same
+classifier runs against a remote server's `/props`, so a model is identified by
+one set of rules whether it is local or not.
+
+Two things the scan deliberately does:
+
+**Context length always comes from the metadata.** The filename hard overrides
+(llama3, mistral-small, mistral-nemo, granite, command-r) decide which chat
+template to use and nothing else. Advertising a model's theoretical window when
+the server was launched with `--ctx-size 8192` makes the UI offer a context
+llama.cpp rejects on every request past the real limit.
+
+**Multimodal projectors are excluded.** Vision models ship `mmproj-*.gguf` next
+to the weights, so a plain scan finds them. llama-server takes a projector via
+`--mmproj` alongside a real `--model`; handed one as `--model` it refuses to
+load. The header is authoritative (projectors declare architecture `clip`); the
+filename convention only decides files whose header cannot be read.
+
+The `family` a model reports is a key `chat.html` looks up in its stop-string
+table, by exact match. Architecture-derived families are normalised to that
+vocabulary — `qwen2`, `qwen3moe` and `phi3` all report `qwen`/`phi` — because a
+miss means the model's turn markers get rendered to the user as content.
+
+## Process supervision
+
+In local mode llama-server runs in its own process group, and the group id is
+captured at launch rather than derived later. Once the child has been reaped its
+PID is gone from the process table, so `Getpgid` fails — while the rest of the
+group is still running. Stopping therefore sweeps the group by id and confirms
+it is empty (`kill(-pgid, 0)`) rather than trusting the leader's exit, which
+says nothing about its helpers.
+
+This matters because the failure is silent and expensive: an orphaned helper is
+reparented to init, disappears from any walk of our own descendants, and keeps
+holding GPU memory. The next model then fails to allocate a backend buffer, and
+nothing in that error points at the real cause.
 
 ## Tests
 
