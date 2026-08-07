@@ -37,6 +37,7 @@ import (
 	"github.com/jmccardle/gobbonet/internal/state"
 	"github.com/jmccardle/gobbonet/internal/static"
 	"github.com/jmccardle/gobbonet/internal/supervisor"
+	"github.com/jmccardle/gobbonet/internal/version"
 )
 
 // Server holds the long-lived state shared by every request.
@@ -349,6 +350,7 @@ func (s *Server) upstreamOK() bool {
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{
 		"status":      "ok",
+		"version":     version.String(),
 		"pid":         os.Getpid(),
 		"hotswap":     s.sup != nil,
 		"mode":        string(s.mode),

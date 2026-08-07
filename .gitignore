@@ -32,6 +32,9 @@ active-model.json
 /gobbonet
 /gobbonet.exe
 
+# Release bundles from build-release.sh
+/dist/
+
 # Runtime state written next to the config on a portable install
 /config.toml
 /models/

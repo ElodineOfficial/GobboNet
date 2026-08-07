@@ -17,6 +17,29 @@ go build -o gobbonet ./cmd/gobbonet
 Go 1.25+. No cgo, no runtime dependencies — the result is one file you can copy
 next to `web/`.
 
+## Releases
+
+```sh
+./build-release.sh
+```
+
+Cross-compiles for linux/amd64, linux/arm64, windows/amd64, darwin/arm64 and
+darwin/amd64, and bundles each binary with `web/` into an archive under
+`dist/<version>/` with a `SHA256SUMS`. Static, `-trimpath`, no cgo — a tester
+unpacks it and runs it.
+
+Builds are stamped `1.3-go-<short sha>` at link time and report it from
+`gobbonet version`, the startup banner, and `/health-fileserver` — the last so a
+tester can copy a build identity out of a browser without a terminal.
+
+The script refuses to build from a dirty tree. A stamped sha that does not
+describe the code inside the binary is worse than no stamp: a bug gets reported
+against a commit that does not contain it and cannot be reproduced.
+`--allow-dirty` overrides, and marks the version `-dirty` so it stays obvious.
+
+Note that `web/chat.html` is bundled and the repo-root `chat.html` is not — the
+root file is the older Windows-lineage copy without the `/llm/jobs` client.
+
 ## Run
 
 ```sh

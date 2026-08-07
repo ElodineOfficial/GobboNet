@@ -28,6 +28,7 @@ import (
 	"github.com/jmccardle/gobbonet/internal/models"
 	"github.com/jmccardle/gobbonet/internal/server"
 	"github.com/jmccardle/gobbonet/internal/supervisor"
+	"github.com/jmccardle/gobbonet/internal/version"
 	"golang.org/x/term"
 )
 
@@ -77,6 +78,9 @@ func run(argv []string) error {
 		return cmdCheck(argv)
 	case "config":
 		return cmdConfig(argv)
+	case "version", "-v", "--version":
+		fmt.Println(version.Full())
+		return nil
 	case "help", "-h", "--help":
 		usage()
 		return nil
@@ -95,6 +99,7 @@ func usage() {
   gobbonet config get [--config PATH] <key>
   gobbonet config set [--config PATH] <key> <value>
   gobbonet config keys
+  gobbonet version
 `)
 }
 
@@ -166,6 +171,7 @@ func cmdServe(argv []string) error {
 	}
 
 	fmt.Print(banner)
+	fmt.Printf(" [OK] version: %s\n", version.Full())
 
 	if cfg.RequireAuth {
 		if err := ensurePassword(&cfg); err != nil {
