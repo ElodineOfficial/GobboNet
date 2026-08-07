@@ -75,7 +75,9 @@ fi
 cp "$GOBBONET_EXE" "$PAYLOAD/gobbonet.exe"
 
 # llama.cpp -- bundled, not downloaded. See the header comment in gobbonet.nsi.
-LLAMA_CPP="${LLAMA_CPP:-$ROOT/vendor/llama-cpp}"
+# Deliberately not $ROOT/vendor: a "vendor" directory at a Go module root is
+# reserved by the toolchain, and putting non-Go files there breaks go build.
+LLAMA_CPP="${LLAMA_CPP:-$(pwd)/vendor/llama-cpp}"
 if [ ! -f "$LLAMA_CPP/llama-server.exe" ]; then
     echo "ERROR: llama-server.exe not found under $LLAMA_CPP" >&2
     echo "       Download the Windows build and extract it there:" >&2

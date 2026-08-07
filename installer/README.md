@@ -80,9 +80,9 @@ sudo apt-get install nsis          # 3.09 preferred; see below
 unzip -d /tmp/gn dist/*/gobbonet-*-windows-amd64.zip
 
 # llama.cpp is bundled, so it has to be on disk first
-mkdir -p ../vendor/llama-cpp
+mkdir -p vendor/llama-cpp
 #   https://github.com/ggml-org/llama.cpp/releases  →  -bin-win-vulkan-x64.zip
-#   extract it into ../vendor/llama-cpp/
+#   extract it into installer/vendor/llama-cpp/
 
 GOBBONET_EXE=/tmp/gn/*/gobbonet.exe ./build-installer.sh
 ```
@@ -103,13 +103,19 @@ art/                 modern-header.bmp, modern-wizard.bmp, gobbonet.ico
                      (extracted from GobboNetSetup-1.3.exe — Elodine's work)
 plugins/x86-unicode/ INetC.dll, for the GGUF download progress dialog
 payload/             GENERATED staging folder. Not committed.
+vendor/llama-cpp/    the bundled engine. Not committed (fetched by hand).
 ```
+
+`vendor/` lives here rather than at the repo root on purpose: a directory
+named `vendor` at a Go module root is reserved by the toolchain, and putting
+non-Go files there breaks `go build`.
 
 ## Not done yet
 
-- **Untested on Windows.** Written and reviewed on Linux; `makensis` was not
-  available in the authoring environment, so this has never been compiled.
-  Expect to shake out syntax before it runs.
+- **Untested on Windows.** Compiles clean under NSIS 3.08 with zero warnings,
+  but compiling only proves the syntax. Nothing here has been *run*: not the
+  probe timer, not the `-IniPath` parse, not the listbox index mapping, not
+  the LFS pointer check.
 - **Unsigned.** See the signing discussion — a cert changes the SmartScreen
   story but not the behavioral-AV story, which is why the bundle/download
   split above still stands regardless.

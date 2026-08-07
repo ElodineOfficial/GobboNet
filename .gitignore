@@ -40,8 +40,10 @@ active-model.json
 /installer/payload/
 /installer/GobboNetSetup-*.exe
 
-# Bundled llama.cpp for the installer payload (~300 MB, fetched by hand)
-/vendor/
+# Bundled llama.cpp for the installer payload (fetched by hand).
+# NOT /vendor/ -- that path at the module root is reserved by the Go
+# toolchain, and a non-Go directory there breaks `go build`.
+/installer/vendor/
 
 # Runtime state written next to the config on a portable install
 /config.toml
