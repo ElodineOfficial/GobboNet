@@ -12,8 +12,16 @@
 
 set -euo pipefail
 
-RELEASE="1.3"
 cd "$(dirname "$0")"
+
+# Single source of truth, shared with installer/build-installer.sh. These were
+# separate literals once and drifted to 1.3 and 1.4 while the tree carried
+# upstream's 1.5.1 frontend -- so a tester's report named a build that did not
+# describe what they were running, which is the exact failure the sha stamping
+# below exists to prevent.
+[ -f VERSION ] || { echo "ERROR: VERSION file is missing" >&2; exit 1; }
+RELEASE="$(tr -d '[:space:]' < VERSION)"
+[ -n "$RELEASE" ] || { echo "ERROR: VERSION file is empty" >&2; exit 1; }
 
 GO="${GO:-go}"
 if ! command -v "$GO" >/dev/null 2>&1; then
@@ -50,13 +58,10 @@ DIST="dist/$VERSION"
 rm -rf "$DIST"
 mkdir -p "$DIST"
 
-# The web assets ship with every platform. web/chat.html is the fork with the
-# /llm/jobs client; the repo-root chat.html is the older Windows-lineage copy
-# and is deliberately NOT bundled.
-if [ ! -f web/chat.html ]; then
-    echo "ERROR: web/chat.html is missing; nothing to serve" >&2
-    exit 1
-fi
+# The web assets ship with every platform. web/ is generated from the repo-root
+# frontend rather than committed -- see stage-web.sh for why -- so assemble it
+# fresh here instead of trusting whatever a previous run left behind.
+./stage-web.sh
 
 echo "building $VERSION with $($GO version)"
 echo

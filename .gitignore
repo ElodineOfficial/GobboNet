@@ -27,10 +27,23 @@ conversations/
 active-model.json
 .llama-launch.cmd
 .embed-launch.cmd
+# Detached-generation spools written by fileserver.ps1. Reply text, same
+# sensitivity class as .gobbonet-state.json above.
+.jobs/
+# hardware-probe.ps1 writes these next to itself; they describe the machine
+# that ran it and mean nothing on any other one.
+hardware.json
+hardware.ini
 
 # Built binary
 /gobbonet
 /gobbonet.exe
+
+# The served web root, assembled from the repo-root frontend by stage-web.sh.
+# Generated, never committed: a committed copy of chat.html + js/ + css/ goes
+# stale the moment upstream touches one of the 39 files, and serves the stale
+# copy without complaining.
+/web/
 
 # Release bundles from build-release.sh
 /dist/

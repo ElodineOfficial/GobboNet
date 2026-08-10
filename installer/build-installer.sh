@@ -39,14 +39,22 @@ fi
 # Version. Matches build-release.sh's scheme so a tester's report names
 # the same build for the server and the installer that carried it.
 #--------------------------------------------------------------------
-RELEASE="1.4"
+[ -f "$ROOT/VERSION" ] || { echo "ERROR: $ROOT/VERSION is missing" >&2; exit 1; }
+RELEASE="$(tr -d '[:space:]' < "$ROOT/VERSION")"
+[ -n "$RELEASE" ] || { echo "ERROR: $ROOT/VERSION is empty" >&2; exit 1; }
 SHA="$(cd "$ROOT" && git rev-parse --short HEAD)"
 if [ -n "$(cd "$ROOT" && git status --porcelain)" ]; then
     SHA="$SHA-dirty"
     echo "WARNING: building from a modified tree; stamping $SHA" >&2
 fi
 VERSION="$RELEASE-go-$SHA"
-VERSION_QUAD="${RELEASE}.0.0"
+# VIProductVersion demands exactly four numeric components. Pad rather than
+# append ".0.0": a three-part RELEASE like 1.5.1 would otherwise produce
+# "1.5.1.0.0" and makensis aborts with "invalid VIProductVersion format".
+IFS=. read -r _v1 _v2 _v3 _v4 <<EOF
+$RELEASE
+EOF
+VERSION_QUAD="${_v1:-0}.${_v2:-0}.${_v3:-0}.${_v4:-0}"
 
 #--------------------------------------------------------------------
 # Regenerate the catalogue. Always, not just when missing -- the whole
@@ -89,9 +97,10 @@ fi
 mkdir -p "$PAYLOAD/llama-cpp"
 cp -r "$LLAMA_CPP/." "$PAYLOAD/llama-cpp/"
 
-# Web assets. web/chat.html is the Go fork with the /llm/jobs client; the
-# repo-root chat.html is the older Windows-lineage copy and is not shipped.
-[ -f "$ROOT/web/chat.html" ] || { echo "ERROR: web/chat.html missing" >&2; exit 1; }
+# Web assets. web/ is generated from the repo-root frontend rather than
+# committed -- see stage-web.sh -- so assemble it fresh rather than trusting
+# whatever a previous run left behind.
+"$ROOT/stage-web.sh"
 cp -r "$ROOT/web" "$PAYLOAD/web"
 
 # Scripts kept from the Windows lineage. launch.bat still owns adding further
