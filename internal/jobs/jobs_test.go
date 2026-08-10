@@ -1,6 +1,8 @@
 package jobs
 
 import (
+	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -8,39 +10,49 @@ import (
 	"strings"
 	"testing"
 	"time"
-	"unicode/utf8"
 )
 
-// Dropping base64 traded 33% of the bandwidth for one hazard: byte offsets can
-// land in the middle of a multi-byte character. If that ever reaches the JSON
-// encoder it substitutes U+FFFD and the client's stream is silently corrupted —
-// a corruption that only shows up on non-ASCII text, which is exactly the kind
-// of bug that ships.
-func TestTrimToRuneBoundary(t *testing.T) {
-	// "héllo→" has 2-byte é and a 3-byte arrow.
-	full := []byte("héllo→")
-
-	for cut := 1; cut <= len(full); cut++ {
-		got := trimToRuneBoundary(full[:cut])
-		if !utf8.Valid(got) {
-			t.Errorf("cut at %d produced invalid UTF-8: %q", cut, got)
-		}
-		// What survives must be a prefix of the original, never rewritten.
-		if string(got) != string(full[:len(got)]) {
-			t.Errorf("cut at %d altered the bytes: got %q", cut, got)
-		}
-		// Round-tripping through JSON must not introduce a replacement char.
-		encoded, err := json.Marshal(string(got))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if strings.Contains(string(encoded), `�`) {
-			t.Errorf("cut at %d produced U+FFFD after JSON encoding", cut)
-		}
+// read hands back a raw byte window and must ALWAYS advance `next`, whatever
+// the bytes are. The predecessor to this test guarded rune alignment, which
+// base64 framing made unnecessary; what matters now is the property that
+// replaced it. A window that cannot advance is not a corrupt character, it is a
+// client polling a healthy job forever with nothing to show for it.
+func TestReadAdvancesOverArbitraryBytes(t *testing.T) {
+	// Deliberately not UTF-8: a lone continuation byte, a truncated 3-byte
+	// sequence, and a 0xFF that can never appear in valid UTF-8 at all.
+	body := []byte("data: ok\n\x80\xe2\x82\xff\xfe binary tail")
+	job := &Job{ID: "x", status: StatusRunning}
+	if _, err := job.write(body); err != nil {
+		t.Fatal(err)
 	}
 
-	if got := trimToRuneBoundary([]byte("plain ascii")); string(got) != "plain ascii" {
-		t.Errorf("valid input was altered: %q", got)
+	// Drain one byte at a time — the tightest window a client can ask for, and
+	// the one most likely to land mid-character.
+	var assembled []byte
+	offset := 0
+	for i := 0; i < len(body)+8; i++ {
+		chunk, size, next := job.read(offset, 1)
+		if offset >= size {
+			break
+		}
+		if next <= offset {
+			t.Fatalf("read stalled at offset %d of %d (chunk %q)", offset, size, chunk)
+		}
+		if len(chunk) != next-offset {
+			t.Fatalf("chunk is %d bytes but next advanced by %d", len(chunk), next-offset)
+		}
+		assembled = append(assembled, chunk...)
+		offset = next
+	}
+
+	if !bytes.Equal(assembled, body) {
+		t.Errorf("reassembled bytes differ:\n got %q\nwant %q", assembled, body)
+	}
+
+	// And the framing must survive the encoding the poll response actually uses.
+	if got, err := base64.StdEncoding.DecodeString(
+		base64.StdEncoding.EncodeToString(body)); err != nil || !bytes.Equal(got, body) {
+		t.Errorf("base64 round-trip altered the bytes: %q (err %v)", got, err)
 	}
 }
 
@@ -57,8 +69,10 @@ func TestPollOffsetsAreByteExact(t *testing.T) {
 	// reassemble. Every window size must produce the original bytes exactly.
 	//
 	// max=1 and max=2 are the cases that matter: they are narrower than the
-	// multi-byte characters in the payload, so read() must extend forward to a
-	// character boundary rather than stall or emit a partial sequence.
+	// multi-byte characters in the payload, so they split those characters
+	// across polls. That is fine and expected — base64 carries the fragments
+	// intact and the client's TextDecoder rejoins them — but it is exactly
+	// where an off-by-one in the offset bookkeeping would hide.
 	for _, window := range []int{1, 2, 3, 4, 7, maxPollBytes} {
 		var assembled []byte
 		offset := 0
@@ -70,13 +84,17 @@ func TestPollOffsetsAreByteExact(t *testing.T) {
 			if len(chunk) == 0 {
 				t.Fatalf("window %d: no progress at offset %d of %d", window, offset, size)
 			}
-			// What the client receives is a JSON string; re-encoding it must
-			// yield exactly the bytes the offset advanced by.
-			if len([]byte(string(chunk))) != next-offset {
-				t.Fatalf("window %d: chunk re-encodes to %d bytes but next advanced %d",
-					window, len(string(chunk)), next-offset)
+			// What the client receives is base64; decoding it must yield
+			// exactly the bytes the offset advanced by.
+			decoded, err := base64.StdEncoding.DecodeString(base64.StdEncoding.EncodeToString(chunk))
+			if err != nil {
+				t.Fatalf("window %d: chunk did not survive base64: %v", window, err)
 			}
-			assembled = append(assembled, chunk...)
+			if len(decoded) != next-offset {
+				t.Fatalf("window %d: chunk decodes to %d bytes but next advanced %d",
+					window, len(decoded), next-offset)
+			}
+			assembled = append(assembled, decoded...)
 			offset = next
 		}
 		if string(assembled) != body {
@@ -85,9 +103,13 @@ func TestPollOffsetsAreByteExact(t *testing.T) {
 	}
 }
 
-// Every chunk handed to the client must survive a JSON round trip unchanged.
-// This is the invariant base64 used to provide for free.
-func TestPollChunksSurviveJSONRoundTrip(t *testing.T) {
+// Awkward multi-byte payloads reassemble byte-exactly at every window size.
+// This used to assert that each chunk survived a JSON round trip unchanged --
+// the invariant base64 provides for free, and which only had to be tested
+// because an earlier revision framed chunks as plain JSON strings. With
+// chunk_b64 restored, what is worth pinning is that the offsets stay exact
+// across characters wide enough to be split several ways.
+func TestPollReassemblesWideCharacters(t *testing.T) {
 	job := &Job{ID: "x", status: StatusRunning}
 	// Deliberately awkward: 2-byte, 3-byte and 4-byte characters back to back.
 	body := "data: {\"c\":\"éñ→𝄞漢字\"}\n\n"
@@ -106,16 +128,9 @@ func TestPollChunksSurviveJSONRoundTrip(t *testing.T) {
 			if len(chunk) == 0 {
 				t.Fatalf("window %d: stalled at offset %d", window, offset)
 			}
-			encoded, err := json.Marshal(string(chunk))
+			decoded, err := base64.StdEncoding.DecodeString(base64.StdEncoding.EncodeToString(chunk))
 			if err != nil {
-				t.Fatal(err)
-			}
-			var decoded string
-			if err := json.Unmarshal(encoded, &decoded); err != nil {
-				t.Fatal(err)
-			}
-			if decoded != string(chunk) {
-				t.Fatalf("window %d: chunk changed across JSON: %q -> %q", window, chunk, decoded)
+				t.Fatalf("window %d: chunk did not survive base64: %v", window, err)
 			}
 			if len(decoded) != next-offset {
 				t.Fatalf("window %d: decoded %d bytes but offset advanced %d", window, len(decoded), next-offset)
@@ -177,8 +192,8 @@ func TestJobStreamsFromUpstream(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Poll exactly as chat.html does: feed `chunk`, advance to `next`, stop on
-	// a terminal status once drained.
+	// Poll exactly as js/03-generation.js does: decode `chunk_b64`, advance to
+	// `next`, stop on a terminal status once drained.
 	var assembled []byte
 	offset := 0
 	var status string
@@ -193,21 +208,26 @@ func TestJobStreamsFromUpstream(t *testing.T) {
 		}
 
 		var poll struct {
-			Status string `json:"status"`
-			Size   int    `json:"size"`
-			Next   int    `json:"next"`
-			Chunk  string `json:"chunk"`
-			Error  string `json:"error"`
+			Status   string `json:"status"`
+			Size     int    `json:"size"`
+			Next     int    `json:"next"`
+			ChunkB64 string `json:"chunk_b64"`
+			Error    string `json:"error"`
 		}
 		if err := json.Unmarshal(rec.Body.Bytes(), &poll); err != nil {
 			t.Fatal(err)
 		}
-		if poll.Chunk != "" {
-			// The byte length of what arrived must equal the offset advance.
-			if len(poll.Chunk) != poll.Next-offset {
-				t.Fatalf("chunk is %d bytes but next advanced by %d", len(poll.Chunk), poll.Next-offset)
+		if poll.ChunkB64 != "" {
+			decoded, err := base64.StdEncoding.DecodeString(poll.ChunkB64)
+			if err != nil {
+				t.Fatalf("chunk_b64 is not valid base64: %v", err)
 			}
-			assembled = append(assembled, poll.Chunk...)
+			// The byte length of what arrived must equal the offset advance,
+			// or a resume from `next` would skip or repeat bytes.
+			if len(decoded) != poll.Next-offset {
+				t.Fatalf("chunk decodes to %d bytes but next advanced by %d", len(decoded), poll.Next-offset)
+			}
+			assembled = append(assembled, decoded...)
 			offset = poll.Next
 		}
 		status = poll.Status

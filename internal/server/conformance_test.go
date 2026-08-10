@@ -755,9 +755,12 @@ func TestJobLifecycleAgainstDeadUpstream(t *testing.T) {
 			t.Errorf("poll response is missing the %q field", field)
 		}
 	}
-	// Never base64: the client feeds `chunk` through TextEncoder now.
-	if _, legacy := final["chunk_b64"]; legacy {
-		t.Error("poll response still carries chunk_b64")
+	// Chunks must be framed the way fileserver.ps1 frames them. js/03-generation.js
+	// reads chunk_b64 and nothing else, and its failure mode for an unrecognised
+	// payload is an infinite poll with no error — so pin the field name here
+	// rather than discover it as a hung UI.
+	if _, plain := final["chunk"]; plain {
+		t.Error(`poll response carries "chunk"; the stock frontend only reads "chunk_b64"`)
 	}
 
 	// DELETE acknowledges and drops the job.

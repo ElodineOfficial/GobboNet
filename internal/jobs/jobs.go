@@ -25,17 +25,27 @@
 // splitting, tool-call unwrapping and reasoning-field routing all stay in
 // chat.html where they already live. This package stays a dumb, faithful pipe.
 //
-// Everything is held in memory. The Python port spooled to disk with cancel-flag
-// files and base64 poll framing because CPython's threading and JSON pushed it
-// there; none of that applies here. At ~150 tok/s a thirty-minute generation is
-// single-digit megabytes, and four concurrent jobs is tens of megabytes.
-// Cancellation is a context, not a file.
+// The wire contract belongs to fileserver.ps1, which defined it, and the stock
+// frontend is written against that. Poll chunks go out base64-encoded as
+// chunk_b64; job ids stay 32 lowercase hex; the status vocabulary is unchanged.
+// Deviating buys nothing and costs compatibility with the one client there is.
+//
+// What DOES differ is storage, and only because nothing observable depends on
+// it: everything is held in memory. The PowerShell original spools to .jobs/
+// with cancel-flag files because a runspace cannot share state with the
+// listener; a goroutine can, so cancellation is a context and the spool is a
+// bytes.Buffer. At ~150 tok/s a thirty-minute generation is single-digit
+// megabytes, and four concurrent jobs is tens of megabytes. The visible
+// consequence is that a restart drops jobs entirely (the client sees 404 →
+// 'lost') where PowerShell reports them 'interrupted'; both are terminal and
+// the frontend handles each.
 package jobs
 
 import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -46,7 +56,6 @@ import (
 	"strconv"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	"github.com/jmccardle/gobbonet/internal/httpx"
 )
@@ -101,18 +110,21 @@ func (j *Job) snapshot() (status, errMsg string, size int, startedAt, updatedAt 
 	return j.status, j.errMsg, j.buf.Len(), j.startedAt, j.updatedAt
 }
 
-// read returns a rune-aligned window of up to ~max bytes starting at from.
+// read returns the raw byte window [from, from+max) of the spool, exactly as
+// fileserver.ps1's poll branch does.
 //
-// Alignment is the whole job here. The poll protocol counts BYTES, but the wire
-// format is now a JSON string rather than base64, and Go turns an invalid UTF-8
-// byte into U+FFFD on encode — silently corrupting the stream at every chunk
-// boundary that lands inside a multi-byte character.
+// No character alignment, deliberately. An earlier revision nudged the window
+// to a rune boundary because the chunk went out as a JSON string and Go turns
+// an invalid UTF-8 byte into U+FFFD on encode. base64 has no such problem, and
+// the client is decoding with `new TextDecoder().decode(bytes, {stream: true})`
+// (js/03-generation.js, makeStreamFeeder), which reassembles characters split
+// across chunk boundaries on its own.
 //
-// So the window end is nudged to a character boundary. It moves FORWARD when the
-// completing bytes have already arrived, which guarantees progress even when max
-// is smaller than a single character. It only trims backward when the tail
-// character genuinely hasn't been received yet, in which case the next poll
-// picks it up whole.
+// Alignment is worse than merely redundant now: it could not represent a window
+// containing no complete character, so it returned an empty chunk and left
+// `next` at `from`. Bytes that are not UTF-8 at all — which base64 would carry
+// perfectly — would stall the offset forever while the job streamed on, i.e.
+// the same silent infinite poll that sending the wrong field name causes.
 func (j *Job) read(from, max int) (chunk []byte, size, next int) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
@@ -130,21 +142,7 @@ func (j *Job) read(from, max int) (chunk []byte, size, next int) {
 	if end > size {
 		end = size
 	}
-
-	// Extend forward over an incomplete trailing character. Bounded by
-	// utf8.UTFMax, so this can overshoot max by at most three bytes.
-	for end < size && end-from < max+utf8.UTFMax && !utf8.Valid(all[from:end]) {
-		end++
-	}
-
-	chunk = all[from:end]
-	if !utf8.Valid(chunk) {
-		// The completing bytes are still in flight. Hand back whole characters
-		// only and let the remainder arrive on the next poll.
-		chunk = trimToRuneBoundary(chunk)
-		end = from + len(chunk)
-	}
-	return chunk, size, end
+	return all[from:end], size, end
 }
 
 func (j *Job) setStatus(status, errMsg string) {
@@ -503,11 +501,18 @@ func (m *Manager) handlePoll(w http.ResponseWriter, r *http.Request, job *Job) {
 	}
 
 	if len(chunk) > 0 {
-		// SSE payloads are UTF-8, so a JSON string carries them directly — no
-		// base64, which cost 33% of the bandwidth for nothing. job.read has
-		// already aligned the window to character boundaries, so `chunk`
-		// re-encodes to exactly (next - from) bytes on the client.
-		out["chunk"] = string(chunk)
+		// base64, and NOT a plain JSON string, because chunk_b64 is the wire
+		// contract fileserver.ps1 defined and the stock frontend is the only
+		// client: js/03-generation.js reads j.chunk_b64 and nothing else.
+		//
+		// Sending UTF-8 directly does save the 33% base64 overhead, and an
+		// earlier revision of this file did exactly that. Do not restore it.
+		// The frontend does not error on an unknown payload shape — it sees no
+		// chunk_b64, leaves `offset` where it was, computes drained = offset >=
+		// size as false, and polls forever against a job that is streaming
+		// perfectly well. The reply never appears and nothing is logged
+		// anywhere. A wire-format opinion is not worth a silent hang.
+		out["chunk_b64"] = base64.StdEncoding.EncodeToString(chunk)
 	}
 
 	if errMsg != "" {
@@ -525,27 +530,6 @@ func (m *Manager) handlePoll(w http.ResponseWriter, r *http.Request, job *Job) {
 	}
 
 	httpx.WriteJSON(w, r, http.StatusOK, out)
-}
-
-// trimToRuneBoundary drops a trailing partial UTF-8 sequence.
-//
-// The bound runs to len(b) inclusive, so a slice that is nothing but a partial
-// character correctly trims to empty. Stopping short of that was a real bug: a
-// lone continuation byte survived, and string() turned it into U+FFFD.
-func trimToRuneBoundary(b []byte) []byte {
-	if utf8.Valid(b) {
-		return b
-	}
-	// A UTF-8 sequence is at most 4 bytes, so the truncation point is within
-	// the last three.
-	for i := 1; i <= utf8.UTFMax-1 && i <= len(b); i++ {
-		if utf8.Valid(b[:len(b)-i]) {
-			return b[:len(b)-i]
-		}
-	}
-	// Invalid somewhere other than the tail: the upstream sent bytes that are
-	// not UTF-8 at all. Nothing here can be framed safely.
-	return nil
 }
 
 func intParam(r *http.Request, name string, def int) int {
