@@ -398,9 +398,14 @@ Function RunProbe
   ; -Quiet keeps the console chatter out; we read the INI for the numbers.
   ; Not fatal on failure: a probe that cannot see the GPU should leave the
   ; user with an unfiltered catalogue, not a dead installer.
+  ;
+  ; Everything here lives in $PLUGINSDIR, not $INSTDIR: this page runs before
+  ; the install section, so $INSTDIR holds nothing yet and may not even exist.
+  ; SecMain copies hardware.json across afterwards so launch.bat inherits the
+  ; probe rather than re-running it.
   nsExec::ExecToLog '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile \
-    -ExecutionPolicy Bypass -File "$INSTDIR\hardware-probe.ps1" \
-    -OutputPath "$INSTDIR\hardware.json" -IniPath "$HwIni" \
+    -ExecutionPolicy Bypass -File "$PLUGINSDIR\hardware-probe.ps1" \
+    -OutputPath "$PLUGINSDIR\hardware.json" -IniPath "$HwIni" \
     -ModelsDir "$INSTDIR\models" -Quiet'
   Pop $0
 
@@ -661,12 +666,20 @@ Section "GobboNet" SecMain
   File /r "${PAYLOAD}\web"
 
   ; The PowerShell helpers stay: launch.bat still uses them for adding
-  ; further models, and the probe page above calls hardware-probe.ps1.
+  ; further models. The probe page ran its own copy out of $PLUGINSDIR
+  ; (see .onInit) because this section had not executed yet.
   File "${PAYLOAD}\launch.bat"
   File "${PAYLOAD}\setup-lan.bat"
   File "${PAYLOAD}\hardware-probe.ps1"
   File "${PAYLOAD}\identify-model.ps1"
   File "${PAYLOAD}\fileserver.ps1"
+
+  ; Carry the probe result forward. $PLUGINSDIR is deleted when the
+  ; installer exits, and launch.bat reads hardware.json from its own
+  ; folder; without this the first launch re-probes for no reason. Silent
+  ; and unconditional: a remote-backend install skipped the probe page
+  ; entirely, and a missing source here is simply nothing to copy.
+  CopyFiles /SILENT "$PLUGINSDIR\hardware.json" "$INSTDIR\hardware.json"
 
   DetailPrint "Installing bundled llama.cpp..."
   SetOutPath "$INSTDIR\llama-cpp"
@@ -886,6 +899,13 @@ FunctionEnd
 Function .onInit
   InitPluginsDir
   File /oname=$PLUGINSDIR\models.ini "models.ini"
+  ; The probe page runs BEFORE MUI_PAGE_INSTFILES, so nothing has been
+  ; written to $INSTDIR yet when it fires. Extract the probe here, into
+  ; the temp plugins dir, or RunProbe invokes a path that does not exist
+  ; and every install silently takes the "could not read this machine's
+  ; hardware" branch. Section SecMain still installs its own copy into
+  ; $INSTDIR -- launch.bat calls it later, long after $PLUGINSDIR is gone.
+  File /oname=$PLUGINSDIR\hardware-probe.ps1 "${PAYLOAD}\hardware-probe.ps1"
 
   StrCpy $Backend "local"
   StrCpy $RemoteUrl "http://"
