@@ -310,11 +310,17 @@ Treat non-empty `server_exe` pointing at a missing file as a **fatal config erro
 
 #### §6 Generation jobs: in-memory redesign
 
-**Keep jobs in memory, drop disk spooling** — Adopt. The current design (SSE to disk, 256KB poll budgets, base64 framing, cancel-flag files) exists because CPython's threading and JSON forced it. At ~150 tok/s, thirty minutes is single-digit MB; four concurrent jobs is tens of MB. Just hold it in memory.
+**Keep jobs in memory, drop disk spooling** — Adopt. Disk spooling and cancel-flag files exist because a PowerShell runspace cannot share state with the listener; a goroutine can. At ~150 tok/s, thirty minutes is single-digit MB; four concurrent jobs is tens of MB. Just hold it in memory.
 
-**`context.Context` for cancellation** — Adopt. No flag files. Context propagates into the upstream request.
+This is the one job-related divergence, and it is safe because it changes nothing on the wire except a restart's terminal status: a dropped job 404s and the client reports `lost` where PowerShell reports `interrupted`. Both are terminal and `js/03-generation.js` handles each.
 
-**Drop base64 framing** — Adopt. SSE payloads are UTF-8; a JSON string carries them fine. Saves 33% bandwidth.
+**`context.Context` for cancellation** — Adopt. No flag files. Context propagates into the upstream request, so a cancel frees the llama.cpp slot immediately rather than at end of generation.
+
+**Drop base64 framing** — ~~Adopt~~ **REVERSED.** This was implemented, shipped, and then backed out. The reasoning ("SSE payloads are UTF-8; a JSON string carries them fine, saves 33%") is technically correct and entirely beside the point: `chunk_b64` is the framing `fileserver.ps1` defined, and the stock frontend reads that key and no other. Sending `chunk` does not fail loudly — `js/03-generation.js` finds no `chunk_b64`, leaves its offset unmoved, computes `drained = offset >= size` as false, and polls a perfectly healthy job forever while the user watches a spinner. Nothing is logged on either side.
+
+Two things followed the reversal. The rune-alignment logic in `read()` went with it — it existed only to stop Go's JSON encoder turning a split character into U+FFFD, base64 has no such hazard, and it carried its own stall: a window holding no complete character returned empty and never advanced `next`. And the wire format is now pinned by `internal/server/conformance_test.go`, because a silent infinite poll is not something to rediscover by hand.
+
+The general rule this cost us: the poll response is a contract with a client that reports unknown shapes as silence. Optimise the transport all you like; do not rename its fields.
 
 **Keep polling as primary interface** — The reviewer suggests adding `GET /llm/jobs/{id}/stream?from=N` with `Last-Event-ID` as the primary interface. This adds client complexity for no client benefit. Keep the polling endpoint as primary; if a stream endpoint is added later, it's a separate feature.
 

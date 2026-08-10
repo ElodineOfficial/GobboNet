@@ -37,8 +37,11 @@ describe the code inside the binary is worse than no stamp: a bug gets reported
 against a commit that does not contain it and cannot be reproduced.
 `--allow-dirty` overrides, and marks the version `-dirty` so it stays obvious.
 
-Note that `web/chat.html` is bundled and the repo-root `chat.html` is not — the
-root file is the older Windows-lineage copy without the `/llm/jobs` client.
+The bundled `web/` directory is generated, not committed: `stage-web.sh` copies
+the repo-root frontend (`chat.html` plus `js/` and `css/`) into it and derives
+`favicon.ico` from `gobbonet.ico`. `build-release.sh` runs it for you. Keeping a
+second committed copy of 39 upstream files was how the fork previously drifted
+without anything reporting it.
 
 ## Run
 
@@ -101,6 +104,37 @@ error**, not a quiet fall back to remote mode. Non-empty is a statement of
 intent; the old behaviour turned one typo into a server that proxied into a void
 while reporting `"status":"ok"`.
 
+## Platform coverage, and what is missing off Windows
+
+The **server** is fully cross-platform. `build-release.sh` cross-compiles
+linux/amd64, linux/arm64, windows/amd64, darwin/arm64 and darwin/amd64, and every
+runtime feature above works identically on all five: auth, state sync, generation
+jobs, proxying, hot-swap, GGUF identification, process supervision.
+
+**First-run setup does not.** Hardware detection (`hardware-probe.ps1`) and the
+guided model download (`launch.bat`, wrapped by the NSIS wizard) are PowerShell
+and batch, and they are what turn a bare binary into a working install. On
+Windows the installer runs them for you. On Linux and macOS there is currently no
+equivalent: you write `config.toml` yourself and fetch a GGUF yourself.
+
+That is a deliberate scope line, not an oversight. Bringing the two into line
+means one of:
+
+1. **Leave it.** Cheapest. Non-Windows first run stays manual.
+2. **Port detection to Go** as `gobbonet probe`, emitting the same JSON and INI
+   (`nvidia-smi`, `/sys/class/drm`, `sysctl` on Darwin). NSIS would then call the
+   Go binary, `hardware-probe.ps1` retires, and all three platforms share one
+   flow — at the cost of owning hardware-detection edge cases that upstream's
+   probe spent ~1,400 lines learning, on platforms it never targeted.
+3. **Port only the catalogue.** It is already machine-readable as
+   `installer/models.ini`; a `gobbonet setup` CLI could drive the download while
+   probing stays behind a platform-specific interface.
+
+Current state is (1). (2) is the one that actually retires `launch.bat` and gets
+Unix-philosophy parity rather than a Windows installer with two second-class
+ports hanging off it, and is the recommended next step — as its own piece of
+work, not folded into a release.
+
 ## Passwords
 
 `access_secret` holds an Argon2id hash. A legacy `salt:hash` SHA-256 secret from
@@ -127,12 +161,17 @@ Jobs are held **in memory** — no disk spooling, no cancel flag files. Cancella
 is a `context.Context` that propagates into the upstream request, so a cancel
 frees the llama.cpp slot immediately.
 
-Poll responses carry the raw SSE bytes in a `chunk` JSON string rather than
-base64, saving 33% of the bandwidth. The offset protocol still counts bytes, so
-`read` aligns each window to a UTF-8 character boundary: it extends forward when
-the completing bytes have arrived, and trims back only when the tail character is
-genuinely still in flight. Without that, Go's JSON encoder turns a split
-character into U+FFFD and silently corrupts the stream.
+Poll responses carry the SSE bytes base64-encoded in `chunk_b64`, and the window
+is a plain byte range with no character alignment — byte-for-byte the framing
+`fileserver.ps1` defined. `js/03-generation.js` reads `chunk_b64` and nothing
+else, and it does not error on an unrecognised payload: it leaves the offset
+where it was and polls a healthy job forever with nothing to show. Character
+splits are the client's problem to solve and it already does, decoding with
+`TextDecoder(..., {stream: true})`.
+
+An earlier revision sent raw UTF-8 in a `chunk` string to save the 33% base64
+overhead. That is why the alignment logic existed — Go's JSON encoder turns a
+split character into U+FFFD — and it is why both are gone.
 
 ## Model identification
 

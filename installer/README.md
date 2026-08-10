@@ -12,13 +12,22 @@ page's **Start GobboNet** checkbox lands on a working chat.
 | 1 | Welcome | Elodine's 1.3 artwork and copy, reworded for the bundled engine |
 | 2 | Directory | Per-user, `$LOCALAPPDATA\GobboNet`, no elevation |
 | 3 | Backend | *On this PC* (bundled llama.cpp) or *remote* (URL + API key) |
-| 4 | Hardware | Runs `hardware-probe.ps1`, shows GPU/VRAM/RAM/disk — local only |
+| 4 | Hardware | Runs `hardware-probe.ps1` out of `$PLUGINSDIR`, shows GPU/VRAM/RAM/disk — local only |
 | 5 | Model | Catalogue from `models.ini`, recommendation preselected — local only |
 | 6 | Install | Copies files, downloads the GGUF, verifies it, writes config |
 | 7 | Finish | **Start GobboNet**, plus the opt-in LAN setup |
 
 Pages 4 and 5 `Abort` out of their create functions when the backend is
 remote, which is how NSIS skips a page.
+
+Page 4 runs **before** the install section, so `$INSTDIR` is still empty when
+the probe fires. `.onInit` extracts `hardware-probe.ps1` into `$PLUGINSDIR`
+and the page runs that copy, writing `hardware.json` and `hardware.ini` there
+too; the install section copies `hardware.json` into `$INSTDIR` afterwards so
+`launch.bat` inherits the result instead of re-probing. Reading the probe from
+`$INSTDIR` instead — as an earlier revision did — invokes a path that does not
+exist yet, and every install silently takes the "could not read this machine's
+hardware" branch.
 
 ## What is bundled vs downloaded
 
@@ -112,10 +121,19 @@ non-Go files there breaks `go build`.
 
 ## Not done yet
 
-- **Untested on Windows.** Compiles clean under NSIS 3.08 with zero warnings,
-  but compiling only proves the syntax. Nothing here has been *run*: not the
-  probe timer, not the `-IniPath` parse, not the listbox index mapping, not
-  the LFS pointer check.
+- **Untested on Windows.** Compiles clean under NSIS with zero warnings, but
+  compiling only proves the syntax. Nothing here has been *run*: not the probe
+  timer, not the `-IniPath` parse, not the listbox index mapping, not the LFS
+  pointer check.
+
+  `-IniPath` is a local addition to `hardware-probe.ps1`, re-ported onto
+  upstream's v1.5 rewrite of that file (schema 2, ~1,960 lines). Upstream's
+  own `-EmitEnv` does not substitute for it: it writes bare `KEY=VALUE` lines,
+  and `ReadINIStr` needs a `[section]` header. The sanitiser differs from
+  `ConvertTo-EnvSafe` too — `!` and `%` are batch hazards, not INI hazards, and
+  must survive; newlines and `;` must not. Those three cases are covered by
+  `hardware-probe.ps1 -SelfTest`, which is runnable on any Windows box without
+  touching the installer.
 - **Unsigned.** See the signing discussion — a cert changes the SmartScreen
   story but not the behavioral-AV story, which is why the bundle/download
   split above still stands regardless.
