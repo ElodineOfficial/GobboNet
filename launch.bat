@@ -236,12 +236,14 @@ set "LOG_FILE=%~dp0llama-server.log"
 :: this deliberately after testing a new build. Leave empty to use 'latest'.
 set "LLAMA_PIN_TAG=b9294"
 :: Known-good SHA-256 of the pinned release's Windows Vulkan x64 zip.
-:: Leave EMPTY to download without verifying the hash -- after the first
-:: successful download the script prints the hash and the exact line to
-:: paste here. Once set, any future download whose hash doesn't match is
-:: refused. This value must correspond to LLAMA_PIN_TAG above; if you bump
-:: the tag, clear this and re-pin from the next download.
-set "LLAMA_PIN_SHA256="
+:: This is the digest GitHub publishes for that release asset. Pinning it
+:: means the zip is refused if the asset is ever replaced under the same
+:: tag (GitHub permits that), if a TLS-intercepting proxy substitutes it,
+:: or if the download is simply truncated -- none of which HTTPS alone
+:: catches. This value must correspond to LLAMA_PIN_TAG above; if you bump
+:: the tag, clear this and re-pin from the next download. Leaving it EMPTY
+:: still works but now asks for confirmation before running the result.
+set "LLAMA_PIN_SHA256=1aff5b8159303b44a5570b85f99d730336935314dec389f0857f992699f43d44"
 
 :: LAUNCH_SCRIPT holds the cmd line we hand to the OS to start llama-server.
 :: It lives in the project root (not %TEMP%) on purpose: fileserver.ps1
@@ -281,11 +283,13 @@ set "EMBED_CTX=2048"
 set "EMBED_GPU_LAYERS=0"
 set "EMBED_MODEL_GGUF=nomic-embed-text-v1.5.Q8_0.gguf"
 set "EMBED_MODEL_URL=https://huggingface.co/nomic-ai/nomic-embed-text-v1.5-GGUF/resolve/main/nomic-embed-text-v1.5.Q8_0.gguf?download=true"
-:: Known-good SHA-256 of the embedding GGUF. Leave EMPTY to download
-:: without verifying; after the first download the script prints the
-:: hash and the exact line to paste here to pin it (same mechanism as
-:: LLAMA_PIN_SHA256 above).
-set "EMBED_PIN_SHA256="
+:: Known-good SHA-256 of the embedding GGUF -- the sha256 HuggingFace
+:: records for that LFS object. Leave EMPTY to download without verifying;
+:: the script then prints the hash and the exact line to paste here (same
+:: mechanism as LLAMA_PIN_SHA256 above). A mismatch discards the file and
+:: leaves semantic retrieval off rather than failing the launch, since
+:: this model is optional.
+set "EMBED_PIN_SHA256=3e24342164b3d94991ba9692fdc0dd08e3fd7362e0aacc396a9a5c54a544c3b7"
 set "EMBED_LOG_FILE=%~dp0embed-server.log"
 set "EMBED_LAUNCH_SCRIPT=%~dp0.embed-launch.cmd"
 
@@ -594,14 +598,24 @@ goto :fatal
 
 :llama_hash_unpinned
 echo.
-echo  [*] No SHA-256 is pinned for this build, so the download was NOT
-echo      verified against a known-good hash. It arrived over HTTPS from
-echo      github.com, which is normally fine -- but to lock it down for
-echo      every machine you install this on, set this near the top of
-echo      launch.bat (replacing the empty LLAMA_PIN_SHA256):
+echo  [*] WARNING: no SHA-256 is pinned for this build, so this download
+echo      was NOT verified against a known-good hash. What is about to be
+echo      extracted includes the executables that run the model on this
+echo      machine.
+echo.
+echo      It arrived over HTTPS from github.com, which is normally fine.
+echo      Pinning it additionally refuses a release asset that gets
+echo      replaced later, and a proxy that intercepts TLS. Set this near
+echo      the top of launch.bat to pin what you just downloaded:
 echo.
 echo        set "LLAMA_PIN_SHA256=!LLAMA_ACTUAL!"
 echo.
+call :prompt_yn "  Extract and run this UNVERIFIED download?" LLAMA_UNPINNED_OK
+if /i not "!LLAMA_UNPINNED_OK!"=="Y" (
+    echo  [*] Cancelled. The downloaded zip has been deleted.
+    del /f /q "!LLAMA_ZIP!" >nul 2>&1
+    goto :fatal
+)
 goto :llama_extract
 
 :llama_hash_ok
