@@ -309,7 +309,12 @@ exit /b
 
 :setup_password
 :: First-run password setup. Reads the password WITHOUT echoing, confirms it,
-:: enforces a minimum length, then writes a salted SHA-256 hash to SECRET_FILE.
+:: enforces a minimum length, then writes a PBKDF2-SHA256 hash to SECRET_FILE.
+:: PBKDF2 (210k iterations, the OWASP figure) rather than a single SHA-256
+:: round: the hash sits in a file on disk, and one round over a short password
+:: is seconds of GPU work if that file is ever read by anything else. The
+:: minimum is 10 characters because this password guards a service every
+:: device on the network can reach.
 :: All of this happens inside PowerShell so the plaintext never lands in a
 :: batch variable, the environment, or the console.
 ::
@@ -327,14 +332,18 @@ echo   This password protects the chat from anyone else on
 echo   your network. You'll enter it once here, then type it
 echo   on your phone/browser the first time you connect.
 echo.
-echo   It is stored only as a salted hash -- not as plain
-echo   text -- and never leaves this machine.
+echo   It is stored only as a slow salted hash -- not as
+echo   plain text -- and never leaves this machine.
+echo.
+echo   Use at least 10 characters, and not one you use
+echo   anywhere else: it crosses the LAN unencrypted.
 echo  ====================================================
 echo.
 set "GOBBONET_SECRET_OUT=!SECRET_FILE!"
 set "PW_SCRIPT=%TEMP%\gobbonet_setpw_%RANDOM%.ps1"
 (
-echo $min = 6
+echo $min = 10
+echo $iters = 210000
 echo while ^($true^) {
 echo     $p1 = Read-Host 'Enter a password' -AsSecureString
 echo     $b1 = [Runtime.InteropServices.Marshal]::SecureStringToBSTR^($p1^)
@@ -349,10 +358,10 @@ echo     if ^($t1 -ne $t2^) { Write-Host '  Passwords did not match -- try again
 echo     $saltBytes = New-Object byte[] 16
 echo     [Security.Cryptography.RandomNumberGenerator]::Create^(^).GetBytes^($saltBytes^)
 echo     $salt = ^([BitConverter]::ToString^($saltBytes^) -replace '-'^).ToLower^(^)
-echo     $sha = [Security.Cryptography.SHA256]::Create^(^)
-echo     $bytes = [Text.Encoding]::UTF8.GetBytes^($salt + $t1^)
-echo     $hash = ^([BitConverter]::ToString^($sha.ComputeHash^($bytes^)^) -replace '-'^).ToLower^(^)
-echo     Set-Content -Path $env:GOBBONET_SECRET_OUT -Value ^($salt + ':' + $hash^) -Encoding ascii -NoNewline
+echo     $kdf = New-Object System.Security.Cryptography.Rfc2898DeriveBytes^($t1, $saltBytes, $iters, [System.Security.Cryptography.HashAlgorithmName]::SHA256^)
+echo     $hash = ^([BitConverter]::ToString^($kdf.GetBytes^(32^)^) -replace '-'^).ToLower^(^)
+echo     $kdf.Dispose^(^)
+echo     Set-Content -Path $env:GOBBONET_SECRET_OUT -Value ^('pbkdf2-sha256:' + $iters + ':' + $salt + ':' + $hash^) -Encoding ascii -NoNewline
 echo     Write-Host '  [OK] Password set.' -Foreground Green
 echo     break
 echo }
@@ -368,7 +377,9 @@ set "GOBBONET_SECRET_OUT="
 :: return empty. Every one of those used to surface as "No password was
 :: set. Cannot start securely." several lines later, with no hint why.
 ::
-:: The file must be one line of <hex>:<hex> -- that is exactly what
+:: The file must be one line of pbkdf2-sha256:<iters>:<hex>:<hex> (or the
+:: legacy <hex>:<hex>, still accepted so an existing install keeps working)
+:: -- that is exactly what
 :: fileserver.ps1 parses at startup, so if it does not match here it was
 :: never going to work there either.
 set "PW_OK="
@@ -396,7 +407,7 @@ if not defined HAVE_PS goto :pw_batch_check
 :: Ask the consumer's own question. Passing through an environment variable
 :: rather than interpolating keeps a malformed secret off the command line.
 set "GN_PWCHECK=!PW_LINE!"
-powershell -NoProfile -Command "if ($env:GN_PWCHECK -match '^([0-9a-fA-F]+):([0-9a-fA-F]+)$') { exit 0 } else { exit 1 }" >nul 2>&1
+powershell -NoProfile -Command "if ($env:GN_PWCHECK -match '^pbkdf2-sha256:\d+:[0-9a-fA-F]+:[0-9a-fA-F]+$' -or $env:GN_PWCHECK -match '^[0-9a-fA-F]+:[0-9a-fA-F]+$') { exit 0 } else { exit 1 }" >nul 2>&1
 if not errorlevel 1 set "PW_OK=1"
 set "GN_PWCHECK="
 goto :pw_verdict

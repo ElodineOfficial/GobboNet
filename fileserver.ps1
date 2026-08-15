@@ -93,10 +93,26 @@ $Script:JobWorkers = @{}  # jobId -> @{ PS; Handle; Runspace } for live runspace
 #   and constant-time compare to $AccessHash. The plaintext exists only for the
 #   instant a login request is being checked.
 # $LlmApiKey : optional key for llama-server (empty in the loopback build).
-$AccessSecret = Get-EnvOrDefault 'GEMMA_ACCESS_SECRET' ''
-$AccessSalt   = ''
-$AccessHash   = ''
-if ($AccessSecret -match '^([0-9a-fA-F]+):([0-9a-fA-F]+)$') {
+#
+# Two secret formats are accepted:
+#   pbkdf2-sha256:<iterations>:<salt-hex>:<hash-hex>   (what launch.bat writes now)
+#   <salt-hex>:<hash-hex>                              (legacy, single-round SHA-256)
+# The legacy form is still honoured so an existing install keeps working across
+# an update, but it is weak against offline cracking if .gobbonet-secret ever
+# leaks: one SHA-256 round over a short password is seconds of GPU work. Setting
+# a new password (delete .gobbonet-secret and re-run launch.bat) upgrades it.
+$AccessSecret     = Get-EnvOrDefault 'GEMMA_ACCESS_SECRET' ''
+$AccessKdf        = ''
+$AccessSalt       = ''
+$AccessIterations = 0
+$AccessHash       = ''
+if ($AccessSecret -match '^pbkdf2-sha256:(\d+):([0-9a-fA-F]+):([0-9a-fA-F]+)$') {
+    $AccessKdf        = 'pbkdf2-sha256'
+    $AccessIterations = [int]$Matches[1]
+    $AccessSalt       = $Matches[2].ToLower()
+    $AccessHash       = $Matches[3].ToLower()
+} elseif ($AccessSecret -match '^([0-9a-fA-F]+):([0-9a-fA-F]+)$') {
+    $AccessKdf  = 'sha256'
     $AccessSalt = $Matches[1].ToLower()
     $AccessHash = $Matches[2].ToLower()
 }
@@ -107,12 +123,88 @@ if ($AccessHash -eq '') {
 }
 $LlmApiKey = Get-EnvOrDefault 'GEMMA_LLM_API_KEY' ''
 
-# Compute the salted hash of a candidate password the same way launch.bat did.
+function ConvertFrom-HexString {
+    param([string]$Hex)
+    $bytes = New-Object byte[] ($Hex.Length / 2)
+    for ($i = 0; $i -lt $bytes.Length; $i++) {
+        $bytes[$i] = [Convert]::ToByte($Hex.Substring($i * 2, 2), 16)
+    }
+    return $bytes
+}
+
+# Compute the stored-hash form of a candidate password, using whichever KDF the
+# stored secret was written with. Constant work per call by design: PBKDF2 makes
+# each guess cost real CPU time, which is the half of brute-force resistance the
+# lockout below cannot provide (a stolen .gobbonet-secret is cracked offline,
+# where no lockout applies).
 function Get-PasswordHash {
     param([string]$Plain)
+    if ($AccessKdf -eq 'pbkdf2-sha256') {
+        $kdf = New-Object System.Security.Cryptography.Rfc2898DeriveBytes(
+            $Plain, (ConvertFrom-HexString $AccessSalt), $AccessIterations,
+            [System.Security.Cryptography.HashAlgorithmName]::SHA256)
+        try { $bytes = $kdf.GetBytes(32) } finally { $kdf.Dispose() }
+        return (([BitConverter]::ToString($bytes) -replace '-').ToLower())
+    }
+    # Legacy format written by older launch.bat versions.
     $sha = [System.Security.Cryptography.SHA256]::Create()
     $bytes = [System.Text.Encoding]::UTF8.GetBytes($AccessSalt + $Plain)
     return (([BitConverter]::ToString($sha.ComputeHash($bytes)) -replace '-').ToLower())
+}
+
+# --- Login throttling ---------------------------------------------------------
+# /login had no limit at all: anyone who can reach port 8080 could guess the
+# password as fast as they could send POSTs, and the launcher only asked for a
+# short one. Lock an address out after a few misses.
+#
+# Deliberately no artificial delay on a wrong password. The request loop below
+# is single-threaded, so a Start-Sleep here would hand an attacker a way to wedge
+# the whole server by flooding /login. Rejecting immediately once locked is both
+# cheaper for us and harder for them. The lock check also runs BEFORE the KDF,
+# so a flood cannot make us burn PBKDF2 time either.
+$Script:LoginFailures  = @{}   # client IP -> @{ Count; First; LockedUntil }
+$LoginMaxAttempts      = 5
+$LoginLockoutMinutes   = 15
+$LoginFailureWindowMin = 15
+
+function Get-ClientIp {
+    param($Request)
+    try { return $Request.RemoteEndPoint.Address.ToString() } catch { return 'unknown' }
+}
+
+# Returns the number of seconds still to wait, or 0 when not locked.
+function Get-LoginLockRemaining {
+    param([string]$Ip)
+    $rec = $Script:LoginFailures[$Ip]
+    if ($null -eq $rec -or $null -eq $rec.LockedUntil) { return 0 }
+    $left = ($rec.LockedUntil - (Get-Date)).TotalSeconds
+    if ($left -le 0) {
+        $Script:LoginFailures.Remove($Ip)
+        return 0
+    }
+    return [int][Math]::Ceiling($left)
+}
+
+function Register-LoginFailure {
+    param([string]$Ip)
+    $now = Get-Date
+    $rec = $Script:LoginFailures[$Ip]
+    # Start a fresh window if there was none, or the last one has aged out --
+    # otherwise a few typos spread over a week would eventually lock a real user.
+    if ($null -eq $rec -or ($now - $rec.First).TotalMinutes -gt $LoginFailureWindowMin) {
+        $rec = @{ Count = 0; First = $now; LockedUntil = $null }
+    }
+    $rec.Count++
+    if ($rec.Count -ge $LoginMaxAttempts) {
+        $rec.LockedUntil = $now.AddMinutes($LoginLockoutMinutes)
+        Write-Host ("[auth] {0} locked out for {1} min after {2} failed logins" -f $Ip, $LoginLockoutMinutes, $rec.Count)
+    }
+    $Script:LoginFailures[$Ip] = $rec
+}
+
+function Clear-LoginFailures {
+    param([string]$Ip)
+    if ($Script:LoginFailures.ContainsKey($Ip)) { $Script:LoginFailures.Remove($Ip) }
 }
 
 # Session tokens live in memory only -- restarting the server logs everyone out,
@@ -319,8 +411,12 @@ function Test-Authenticated {
 # Posts the password to /login; on success the server sets the cookie and the
 # page redirects to /.
 function Get-LoginPageHtml {
-    param([bool]$Failed)
-    $err = if ($Failed) { '<p class="err">Wrong password. Try again.</p>' } else { '' }
+    param([bool]$Failed, [int]$LockedSeconds = 0)
+    $err = if ($LockedSeconds -gt 0) {
+        ('<p class="err">Too many failed attempts. Try again in about {0} minute(s).</p>' -f [Math]::Ceiling($LockedSeconds / 60))
+    } elseif ($Failed) {
+        '<p class="err">Wrong password. Try again.</p>'
+    } else { '' }
     return @"
 <!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8">
@@ -1496,6 +1592,17 @@ while ($listener.IsListening) {
         # session cookie.
         if ($path -eq '/login') {
             if ($request.HttpMethod -eq 'POST') {
+                # Checked before the body is read and before the KDF runs, so a
+                # flood costs us nothing once the address is locked.
+                $clientIp = Get-ClientIp $request
+                $lockLeft = Get-LoginLockRemaining $clientIp
+                if ($lockLeft -gt 0) {
+                    $response.AddHeader('Retry-After', "$lockLeft")
+                    Write-Text $response 429 'text/html; charset=utf-8' `
+                        (Get-LoginPageHtml -Failed $false -LockedSeconds $lockLeft)
+                    $response.Close()
+                    continue
+                }
                 $body = ''
                 if ($request.HasEntityBody) {
                     $reader = New-Object System.IO.StreamReader($request.InputStream, $request.ContentEncoding)
@@ -1510,6 +1617,7 @@ while ($listener.IsListening) {
                     }
                 }
                 if (Test-SecretEqual (Get-PasswordHash $pw) $AccessHash) {
+                    Clear-LoginFailures $clientIp
                     $tok = New-SessionToken (Get-ClientId $request)
                     # HttpOnly: JS can't read it (blunts XSS token theft).
                     # SameSite=Lax + Path=/: sent on same-origin navigations and
@@ -1522,7 +1630,15 @@ while ($listener.IsListening) {
                     $response.StatusCode = 302
                     $response.AddHeader('Location', '/')
                 } else {
-                    Write-Text $response 401 'text/html; charset=utf-8' (Get-LoginPageHtml -Failed $true)
+                    Register-LoginFailure $clientIp
+                    $lockLeft = Get-LoginLockRemaining $clientIp
+                    if ($lockLeft -gt 0) {
+                        $response.AddHeader('Retry-After', "$lockLeft")
+                        Write-Text $response 429 'text/html; charset=utf-8' `
+                            (Get-LoginPageHtml -Failed $false -LockedSeconds $lockLeft)
+                    } else {
+                        Write-Text $response 401 'text/html; charset=utf-8' (Get-LoginPageHtml -Failed $true)
+                    }
                 }
             } else {
                 $code = 200
