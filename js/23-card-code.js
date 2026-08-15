@@ -298,6 +298,60 @@ function updateCardCodeStatus() {
  * its author's JavaScript the moment you activate it. The code is kept
  * so it can be read and opted into; the flag is always cleared.
  */
+/**
+ * Strip the "and run it" bit out of a whole state blob that did not originate
+ * on this device.
+ *
+ * applyImportedCardCode below covers the character-card file import. It was the
+ * only door with a lock on it. Two others reach the same executors:
+ *
+ *   - restoreFromServer() in 06-state-sync.js writes the /state blob straight
+ *     into storage and reloads. /state is password-gated, but it is one shared
+ *     document every paired device can overwrite, so a compromised phone (or
+ *     anyone who learned the password) could hand every other device a card
+ *     with customCodeEnabled already true, or an extensions list, and boot
+ *     would run it. The restore that fires when local storage is empty does
+ *     not even prompt.
+ *   - importAllData('all') in 21-data.js takes a backup file from anywhere and
+ *     calls applyExtensions() in the same tick.
+ *
+ * The rule is the one applyImportedCardCode already documents: the decision to
+ * run code is made by the person at the keyboard, on this device, and cannot
+ * be carried in a transferred blob. Code text is preserved so it can be read
+ * and opted into; only the enable flags are cleared. Restores are rare (a new
+ * device, a cleared cache, a quota recovery) rather than part of the routine
+ * push, so the cost is re-ticking a box once per device.
+ *
+ * Returns a summary so the caller can tell the user what was switched off
+ * instead of doing it silently.
+ */
+function neutralizeUntrustedCode(blob) {
+  const result = { cards: 0, extensions: false };
+  if (!blob || typeof blob !== 'object') return result;
+
+  if (Array.isArray(blob.characterCards)) {
+    for (const card of blob.characterCards) {
+      if (!card || typeof card !== 'object') continue;
+      if (card.customCodeEnabled) result.cards++;
+      card.customCodeEnabled = false;
+    }
+  }
+
+  const ext = blob.extensions;
+  if (ext && typeof ext === 'object' && ext.enabled) {
+    ext.enabled = false;
+    result.extensions = true;
+  }
+
+  if (result.cards || result.extensions) {
+    console.warn('[card-code] Incoming state carried code set to run: ' +
+                 result.cards + ' card(s)' +
+                 (result.extensions ? ' and the extensions list' : '') +
+                 '. Kept, but switched OFF. Review it and enable it here if you want it.');
+  }
+  return result;
+}
+
 function applyImportedCardCode(card, rawCode) {
   if (typeof rawCode === 'string' && rawCode.trim()) {
     card.customCode = rawCode;

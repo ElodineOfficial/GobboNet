@@ -151,12 +151,21 @@ function importData(fileInput, type) {
       state.schedules      = data.schedules      || [];
       state.folders        = data.folders        || [];
       state.extensions     = migrateExtensions(data.extensions);
+      // A backup file comes from wherever the user got it, and applyExtensions()
+      // below injects <script> from it while boot runs card code. Same rule as
+      // the character-card import: the content is kept, the run flags are not.
+      const neutralized = (typeof neutralizeUntrustedCode === 'function')
+        ? neutralizeUntrustedCode(state)
+        : { cards: 0, extensions: false };
       state.macros         = Array.isArray(data.macros) ? data.macros : DEFAULT_MACROS.map(m => ({ ...m }));
       state.searchEnabled  = data.searchEnabled  || false;
       saveState();
       applyExtensions();
       render();
-      showStatus('✓ Full backup restored successfully.', true);
+      const codeNote = (neutralized.cards || neutralized.extensions)
+        ? ' Custom code in the backup was kept but left switched OFF — review it before enabling.'
+        : '';
+      showStatus('✓ Full backup restored successfully.' + codeNote, true);
     }
 
     // Reset the file input so the same file can be re-imported if needed
