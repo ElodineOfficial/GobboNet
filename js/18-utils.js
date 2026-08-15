@@ -113,6 +113,53 @@ function escapeHtml(str) {
   return div.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
+// For a value going into an inline handler: onclick="fn('${...}')".
+//
+// escapeHtml alone is NOT enough there. The HTML parser decodes character
+// references in an attribute value BEFORE the JS is compiled, so escapeHtml's
+// &#39; turns back into a real ' and closes the string literal -- the classic
+// way an "escaped" id or filename still ends up executing. Escape for the JS
+// layer first (backslash before quotes, or we'd double-escape our own output),
+// then run escapeHtml over the result for the attribute layer. \r \n and the
+// two Unicode line separators are terminators inside a JS string literal.
+function escapeJsString(str) {
+  return String(str == null ? '' : str)
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'")
+    .replace(/"/g, '\\"')
+    .replace(/\r/g, '\\r')
+    .replace(/\n/g, '\\n')
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029');
+}
+
+function escapeJsAttr(str) {
+  return escapeHtml(escapeJsString(str));
+}
+
+// Colors ride into style="color:${...}" attributes from character cards, which
+// can arrive from an imported file or a synced peer. Escaping is the wrong tool
+// for a CSS context -- allowlist the shapes a color picker actually produces and
+// drop anything else, so there is no value that reaches the CSS parser at all.
+// Avatars and attachment thumbnails are stored as data: URLs. Accepting any
+// string there lets an imported or synced card point <img src> at a remote host,
+// which beacons the viewer's IP the moment a message renders -- a real leak in an
+// app whose whole premise is that nothing leaves the machine. Allow only inline
+// image data (and blob:, which the attachment path creates locally).
+function safeDataUrl(value) {
+  const s = String(value == null ? '' : value).trim();
+  if (/^data:image\/(png|jpeg|jpg|gif|webp|bmp);base64,[A-Za-z0-9+/=\s]*$/i.test(s)) return s;
+  if (/^blob:/i.test(s)) return s;
+  return '';
+}
+
+const CSS_COLOR_RE = /^(#[0-9a-fA-F]{3,8}|[a-zA-Z]{3,20}|rgba?\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}\s*(?:,\s*(?:0|1|0?\.\d+)\s*)?\))$/;
+function safeCssColor(value, fallback) {
+  const s = String(value == null ? '' : value).trim();
+  if (CSS_COLOR_RE.test(s)) return s;
+  return fallback || '';
+}
+
 function parseSearchData(raw) {
   if (!raw) return '';
   // Parse the structured format: - Title: content\n  Source: url\n
@@ -168,6 +215,10 @@ function buildSearchEntry(title, content, url) {
 
 function parseMarkdown(text, dialogColor) {
   if (!text) return '';
+  // dialogColor rides in from a character card, which can arrive from an
+  // imported file or a synced peer, and lands in a style="color:..." attribute
+  // below. Allowlist it once here so no caller has to remember to.
+  dialogColor = safeCssColor(dialogColor, '');
   let html = escapeHtml(text);
 
   // File blocks: ```file:filename.ext → rendered with download + copy buttons
@@ -175,7 +226,7 @@ function parseMarkdown(text, dialogColor) {
     const fn = filename.trim();
     const raw = content.trim();
     const id = 'file_' + Math.random().toString(36).slice(2, 8);
-    return `<div class="file-block"><div class="file-header"><span class="file-name">&#128196; ${fn}</span><div class="code-btns"><button class="btn btn-sm code-copy-btn" onclick="copyCodeBlock(this)">Copy</button><button class="btn btn-sm" onclick="downloadFile('${id}','${fn}')">Save</button></div></div><pre><code id="${id}">${raw}</code></pre></div>`;
+    return `<div class="file-block"><div class="file-header"><span class="file-name">&#128196; ${fn}</span><div class="code-btns"><button class="btn btn-sm code-copy-btn" onclick="copyCodeBlock(this)">Copy</button><button class="btn btn-sm" data-filename="${fn}" onclick="downloadFile(this)">Save</button></div></div><pre><code id="${id}">${raw}</code></pre></div>`;
   });
 
   // Regular code blocks → wrapped with a header bar carrying a Copy button.
@@ -417,7 +468,7 @@ function renderAttachTray() {
       <span class="attach-chip-icon">${icon}</span>
       <span class="attach-chip-name">${escapeHtml(a.name)}</span>
       <span class="attach-chip-meta">${escapeHtml(meta)}</span>
-      <button class="attach-chip-x" onclick="removeAttachment('${a.id}')" title="Remove">×</button>
+      <button class="attach-chip-x" onclick="removeAttachment('${escapeJsAttr(a.id)}')" title="Remove">×</button>
     </span>`;
   }).join('');
 }
@@ -531,9 +582,19 @@ function setupDragAndDrop() {
    FILE GENERATION — download .txt/.json to browser downloads
    AI outputs ```file:filename.ext blocks, rendered with Save button.
 ================================================================ */
-function downloadFile(elementId, filename) {
-  const el = document.getElementById(elementId);
+// Takes the button, not an id + filename pair. The filename comes from a
+// ```file:<name> fence, i.e. from model output or from a peer's message, and
+// interpolating it into onclick="downloadFile('...','<name>')" was exploitable:
+// parseMarkdown had already turned ' into &#39;, but the HTML parser decodes
+// character references in an attribute value before the JS is compiled, so the
+// entity became a real quote again and closed the string. Reading it off the
+// element -- the pattern copyCodeBlock already uses -- means the value never
+// passes through a JS parser at all.
+function downloadFile(btn) {
+  const block = btn && btn.closest && btn.closest('.file-block');
+  const el = block && block.querySelector('pre code');
   if (!el) return;
+  const filename = (btn.dataset && btn.dataset.filename) || 'download.txt';
   const content = el.textContent;
   const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
   const url = URL.createObjectURL(blob);

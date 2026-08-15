@@ -80,7 +80,7 @@ function toggleFolderCollapse(id) {
 
 function startFolderRename(id, event) {
   event.stopPropagation(); closePopover();
-  const el = document.querySelector(`[data-folder-id="${id}"] .folder-name-text`);
+  const el = document.querySelector(`[data-folder-id=${CSS.escape(id)}] .folder-name-text`);
   const folder = state.folders.find(f => f.id === id);
   if (!el || !folder) return;
   const input = document.createElement('input');
@@ -142,7 +142,7 @@ function openFolderPicker(threadId, event) {
   const t = state.threads.find(t => t.id === threadId);
   if (!t) return;
   const mkItem = (id, name, active) =>
-    `<button class="pop-item${active?' pop-item-active':''}" onclick="moveThread('${threadId}','${id}')">&#128193; ${escapeHtml(name)}</button>`;
+    `<button class="pop-item${active?' pop-item-active':''}" onclick="moveThread('${escapeJsAttr(threadId)}','${escapeJsAttr(id)}')">&#128193; ${escapeHtml(name)}</button>`;
   let items = mkItem('__none__', 'No folder', !t.folderId);
   if (state.folders.length === 0)
     items += `<div class="pop-hint">No folders yet — click + FOLDER</div>`;
@@ -169,14 +169,14 @@ function openTagEditor(threadId, event) {
 
   const currentHtml = t.tags.length > 0
     ? t.tags.map(tag =>
-        `<span class="tag-pill pop-tag" style="--tc:${getTagColor(tag)}" onclick="removeTag('${threadId}','${tag}')">${escapeHtml(tag)} <span class="tag-x">×</span></span>`
+        `<span class="tag-pill pop-tag" style="--tc:${safeCssColor(getTagColor(tag), 'var(--cyan)')}" onclick="removeTag('${escapeJsAttr(threadId)}','${escapeJsAttr(tag)}')">${escapeHtml(tag)} <span class="tag-x">×</span></span>`
       ).join('')
     : `<span class="pop-empty">none yet</span>`;
 
   const suggestHtml = suggestions.length > 0
     ? `<div class="pop-label">SUGGESTIONS</div><div class="pop-tags-row">${
         suggestions.map(tag =>
-          `<span class="tag-pill pop-tag-sug" style="--tc:${getTagColor(tag)}" onclick="addTag('${threadId}','${tag}')">${escapeHtml(tag)}</span>`
+          `<span class="tag-pill pop-tag-sug" style="--tc:${safeCssColor(getTagColor(tag), 'var(--cyan)')}" onclick="addTag('${escapeJsAttr(threadId)}','${escapeJsAttr(tag)}')">${escapeHtml(tag)}</span>`
         ).join('')
       }</div>`
     : '';
@@ -188,8 +188,8 @@ function openTagEditor(threadId, event) {
       ${suggestHtml}
       <div class="pop-add-row">
         <input class="pop-tag-input" id="pop-tag-input" placeholder="new tag..." maxlength="24"
-               onkeydown="handleTagKey('${threadId}',event)" autocomplete="off">
-        <button class="pop-add-btn" onclick="addTagFromInput('${threadId}')">+</button>
+               onkeydown="handleTagKey('${escapeJsAttr(threadId)}',event)" autocomplete="off">
+        <button class="pop-add-btn" onclick="addTagFromInput('${escapeJsAttr(threadId)}')">+</button>
       </div>
       <div class="pop-hint">Enter to add &nbsp;&middot;&nbsp; type #tag in search to filter</div>
     </div>`);
@@ -235,7 +235,7 @@ function renderThreadItem(t) {
   const isActive = t.id === state.activeThreadId;
   const tagPills = (t.tags && t.tags.length > 0)
     ? `<div class="thread-tags-row">${t.tags.map(tag =>
-        `<span class="tag-pill" style="--tc:${getTagColor(tag)}">${escapeHtml(tag)}</span>`
+        `<span class="tag-pill" style="--tc:${safeCssColor(getTagColor(tag), 'var(--cyan)')}">${escapeHtml(tag)}</span>`
       ).join('')}</div>`
     : '';
   // Pin badge: visible at rest, hidden when controls appear on hover
@@ -248,14 +248,18 @@ function renderThreadItem(t) {
   // Fork count badge (how many branches off THIS thread)
   const forkCount = getAllForksOf(t.id).length;
   const forkBadge = forkCount > 0 ? `<span class="thread-fork-count" title="${forkCount} branch${forkCount > 1 ? 'es' : ''}">⑂${forkCount}</span>` : '';
+  // t.id reaches both an attribute and seven inline handlers. It is normally a
+  // generated base-36 string, but a thread can arrive from a synced peer or an
+  // imported backup, where it is whatever the sender put there.
+  const tid = escapeJsAttr(t.id);
   return `<div class="thread-item${isActive?' active':''}${t.pinned?' thread-pinned':''}"
-       data-thread-id="${t.id}"
+       data-thread-id="${escapeHtml(t.id)}"
        draggable="true"
-       onclick="switchThread('${t.id}')"
-       ondragstart="onThreadDragStart('${t.id}',event)"
-       ondragover="onThreadDragOver('${t.id}',event)"
-       ondragleave="onThreadDragLeave('${t.id}',event)"
-       ondrop="onThreadDrop('${t.id}',event)"
+       onclick="switchThread('${tid}')"
+       ondragstart="onThreadDragStart('${tid}',event)"
+       ondragover="onThreadDragOver('${tid}',event)"
+       ondragleave="onThreadDragLeave('${tid}',event)"
+       ondrop="onThreadDrop('${tid}',event)"
        ondragend="onThreadDragEnd(event)">
     <div class="thread-body">
       <div class="thread-name-row">
@@ -265,11 +269,11 @@ function renderThreadItem(t) {
       ${tagPills}
     </div>
     <div class="thread-ctrl">
-      <button class="thread-ctrl-btn thread-pin-btn${t.pinned?' is-pinned':''}" onclick="togglePin('${t.id}',event)" title="${t.pinned?'Unpin':'Pin'}">&#128204;</button>
-      <button class="thread-ctrl-btn thread-folder-btn" onclick="openFolderPicker('${t.id}',event)" title="Move to folder">&#128193;</button>
-      <button class="thread-ctrl-btn thread-tag-btn" onclick="openTagEditor('${t.id}',event)" title="Tags">&#127991;</button>
-      <button class="thread-ctrl-btn thread-edit-btn" onclick="startRename('${t.id}',event)" title="Rename">&#9998;</button>
-      <button class="thread-ctrl-btn thread-del-btn" onclick="deleteThread('${t.id}',event)" title="Delete">&times;</button>
+      <button class="thread-ctrl-btn thread-pin-btn${t.pinned?' is-pinned':''}" onclick="togglePin('${tid}',event)" title="${t.pinned?'Unpin':'Pin'}">&#128204;</button>
+      <button class="thread-ctrl-btn thread-folder-btn" onclick="openFolderPicker('${tid}',event)" title="Move to folder">&#128193;</button>
+      <button class="thread-ctrl-btn thread-tag-btn" onclick="openTagEditor('${tid}',event)" title="Tags">&#127991;</button>
+      <button class="thread-ctrl-btn thread-edit-btn" onclick="startRename('${tid}',event)" title="Rename">&#9998;</button>
+      <button class="thread-ctrl-btn thread-del-btn" onclick="deleteThread('${tid}',event)" title="Delete">&times;</button>
     </div>
   </div>`;
 }
@@ -307,15 +311,16 @@ function renderSidebar() {
     const totalInFolder = state.threads.filter(t => t.folderId === folder.id).length;
     if (query && fThreads.length === 0) continue;
     const isOpen = !folder.collapsed || !!query;
-    html += `<div class="folder-section${folder.collapsed&&!query?' folder-collapsed':''}" data-folder-id="${folder.id}">
-      <div class="folder-hdr" onclick="toggleFolderCollapse('${folder.id}')" ondragover="onFolderDragOver('${folder.id}',event)" ondragleave="onFolderDragLeave(event)" ondrop="onFolderDrop('${folder.id}',event)">
+    const fid = escapeJsAttr(folder.id);
+    html += `<div class="folder-section${folder.collapsed&&!query?' folder-collapsed':''}" data-folder-id="${escapeHtml(folder.id)}">
+      <div class="folder-hdr" onclick="toggleFolderCollapse('${fid}')" ondragover="onFolderDragOver('${fid}',event)" ondragleave="onFolderDragLeave(event)" ondrop="onFolderDrop('${fid}',event)">
         <span class="folder-chevron">${isOpen?'&#9660;':'&#9658;'}</span>
         <span class="folder-icon">&#128193;</span>
         <span class="folder-name-text">${escapeHtml(folder.name)}</span>
         <span class="folder-count">${totalInFolder}</span>
         <div class="folder-hdr-btns">
-          <button class="folder-btn" onclick="startFolderRename('${folder.id}',event)" title="Rename">&#9998;</button>
-          <button class="folder-btn folder-del" onclick="deleteFolder('${folder.id}',event)" title="Delete">&times;</button>
+          <button class="folder-btn" onclick="startFolderRename('${fid}',event)" title="Rename">&#9998;</button>
+          <button class="folder-btn folder-del" onclick="deleteFolder('${fid}',event)" title="Delete">&times;</button>
         </div>
       </div>
       ${isOpen ? `<div class="folder-threads">${fThreads.length > 0 ? fThreads.map(renderThreadItem).join('') : '<div class="folder-empty">// empty</div>'}</div>` : ''}

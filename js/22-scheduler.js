@@ -27,20 +27,21 @@ function renderSchedList() {
     return;
   }
   list.innerHTML = state.schedules.map(s => {
+    const sid = escapeJsAttr(s.id);
     const thread = state.threads.find(t => t.id === s.threadId);
     const threadName = thread ? escapeHtml(thread.name) : '(deleted thread)';
     const typeLabel = s.recurring === 'daily' ? 'DAILY' : 'ONCE';
     const searchLabel = s.useSearch ? ' 🔍' : '';
     return `
-      <div class="card-item" onclick="editSchedItem('${s.id}')">
+      <div class="card-item" onclick="editSchedItem('${sid}')">
         <div class="card-info">
-          <div class="card-name">${s.time} — ${typeLabel}${searchLabel}</div>
+          <div class="card-name">${escapeHtml(s.time)} — ${typeLabel}${searchLabel}</div>
           <div class="card-desc">${escapeHtml(s.prompt.slice(0, 60))} → ${threadName}</div>
         </div>
         <div class="card-actions">
-          <button class="msg-action-btn btn-edit" onclick="event.stopPropagation();editSchedItem('${s.id}')">Edit</button>
-          <button class="msg-action-btn" onclick="event.stopPropagation();copySched('${s.id}')" title="Duplicate this schedule">Copy</button>
-          <button class="msg-action-btn btn-delete" onclick="event.stopPropagation();deleteSched('${s.id}')">Del</button>
+          <button class="msg-action-btn btn-edit" onclick="event.stopPropagation();editSchedItem('${sid}')">Edit</button>
+          <button class="msg-action-btn" onclick="event.stopPropagation();copySched('${sid}')" title="Duplicate this schedule">Copy</button>
+          <button class="msg-action-btn btn-delete" onclick="event.stopPropagation();deleteSched('${sid}')">Del</button>
         </div>
       </div>`;
   }).join('');

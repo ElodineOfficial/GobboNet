@@ -88,18 +88,21 @@ function closeCharacters() {
 function renderCardGrid() {
   const grid = document.getElementById('card-grid');
   grid.innerHTML = state.characterCards.map(c => {
+    // Cards can arrive from an imported file or a synced peer, so the id is
+    // not necessarily the generated base-36 string it looks like.
+    const cid = escapeJsAttr(c.id);
     const av = renderAvatar(c.avatar, c.name);
     return `
-    <div class="card-item ${c.id === state.activeCardId ? 'active' : ''}" onclick="activateCard('${c.id}')">
+    <div class="card-item ${c.id === state.activeCardId ? 'active' : ''}" onclick="activateCard('${cid}')">
       <div class="card-avatar">${av}</div>
       <div class="card-info">
         <div class="card-name">${escapeHtml(c.name)}</div>
         <div class="card-desc">${escapeHtml((c.writingStyle || '').slice(0, 60))}</div>
       </div>
       <div class="card-actions">
-        <button class="msg-action-btn btn-edit" onclick="event.stopPropagation();editCard('${c.id}')">Edit</button>
-        <button class="msg-action-btn" onclick="event.stopPropagation();copyCard('${c.id}')" title="Duplicate this character">Copy</button>
-        ${state.characterCards.length > 1 ? `<button class="msg-action-btn btn-delete" onclick="event.stopPropagation();deleteCardById('${c.id}')" title="Delete this character">Del</button>` : ''}
+        <button class="msg-action-btn btn-edit" onclick="event.stopPropagation();editCard('${cid}')">Edit</button>
+        <button class="msg-action-btn" onclick="event.stopPropagation();copyCard('${cid}')" title="Duplicate this character">Copy</button>
+        ${state.characterCards.length > 1 ? `<button class="msg-action-btn btn-delete" onclick="event.stopPropagation();deleteCardById('${cid}')" title="Delete this character">Del</button>` : ''}
       </div>
     </div>`;
   }).join('');

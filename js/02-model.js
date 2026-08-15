@@ -201,7 +201,7 @@ async function loadModelsList() {
 
   if (!IS_SERVED) {
     // Running as file:// — can't fetch. Just show active model name.
-    sel.innerHTML = `<option value="${activeModel.id || 'custom'}">${activeModel.name}</option>`;
+    sel.innerHTML = `<option value="${escapeHtml(activeModel.id || 'custom')}">${escapeHtml(activeModel.name)}</option>`;
     return;
   }
 
@@ -213,7 +213,7 @@ async function loadModelsList() {
     sel.innerHTML = '';
     const models = data.models || [];
     if (models.length === 0) {
-      sel.innerHTML = `<option value="custom">${activeModel.name || 'Unknown'}</option>`;
+      sel.innerHTML = `<option value="custom">${escapeHtml(activeModel.name || 'Unknown')}</option>`;
       return;
     }
 
@@ -239,7 +239,7 @@ async function loadModelsList() {
     if (!_currentModelFile) _currentModelFile = sel.value || null;
   } catch (e) {
     // Fallback — just show what we already know is loaded
-    sel.innerHTML = `<option value="${activeModel.id || 'custom'}">${activeModel.name || 'Model'}</option>`;
+    sel.innerHTML = `<option value="${escapeHtml(activeModel.id || 'custom')}">${escapeHtml(activeModel.name || 'Model')}</option>`;
   }
 }
 
