@@ -236,6 +236,17 @@ function Write-FileAscii {
     [System.IO.File]::WriteAllText($Path, $Content, [System.Text.Encoding]::ASCII)
 }
 
+# Make a value safe to place inside a double-quoted argument of a generated .cmd.
+# A '"' would close the quoting and let & | < > ^ chain a second command; CR/LF
+# would append a whole new line to the script. Model ids, template names and
+# cache-type flags never legitimately contain any of these, so strip rather than
+# escape -- there is no quoting scheme cmd.exe honours consistently here.
+function ConvertTo-CmdArgSafe([string]$s) {
+    if (-not $s) { return '' }
+    $t = $s -replace '[\r\n]', ' '
+    return ($t -replace '[%!^&<>|"]', '').Trim()
+}
+
 # --- Auth helpers ------------------------------------------------------------
 
 # Constant-time string compare so a network attacker can't time-probe the
@@ -1078,8 +1089,8 @@ function Build-LaunchScript {
         '--host',      '127.0.0.1',
         '--ctx-size',  "$CtxSize",
         '--n-gpu-layers', "$GpuLayers",
-        '--cache-type-k', $KvCacheType,
-        '--cache-type-v', $KvCacheType,
+        '--cache-type-k', (ConvertTo-CmdArgSafe $KvCacheType),
+        '--cache-type-v', (ConvertTo-CmdArgSafe $KvCacheType),
         '--parallel',  '1'
     )
     
@@ -1091,9 +1102,13 @@ function Build-LaunchScript {
     # makes llama-server treat the path text itself as a literal template.
     if ($chatTemplateFile -ne '') {
         $sidecarAbs = if ([System.IO.Path]::IsPathRooted($chatTemplateFile)) { $chatTemplateFile } else { Join-Path $Root $chatTemplateFile }
-        $argList += @('--chat-template-file', ('"{0}"' -f $sidecarAbs))
+        $argList += @('--chat-template-file', ('"{0}"' -f (ConvertTo-CmdArgSafe $sidecarAbs)))
     } elseif ($chatTemplate) {
-        $argList += @('--chat-template', $chatTemplate)
+        # Quoted AND scrubbed: this line is written into a .cmd and executed, so
+        # an unquoted value carrying '&' would chain a second command. The values
+        # identify-model.ps1 emits are allowlisted literals, but models-list.json
+        # is a file on disk and this is the last gate before it becomes a command.
+        $argList += @('--chat-template', ('"{0}"' -f (ConvertTo-CmdArgSafe $chatTemplate)))
     }
 
     $argList += @('--reasoning-format', 'auto')
