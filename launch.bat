@@ -1665,15 +1665,41 @@ set "GEMMA_KV_CACHE_TYPE=!KV_CACHE_TYPE!"
 set "GEMMA_LOG_FILE=!LOG_FILE!"
 set "GEMMA_LAUNCH_SCRIPT=!LAUNCH_SCRIPT!"
 set "GEMMA_ACCESS_SECRET=!ACCESS_SECRET!"
-start /min powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%~dp0fileserver.ps1"
+:: Capture the file server's own output. It prints the EXACT bind error --
+:: "[fatal] could not bind http://+:8080/ -- <reason>" -- but -WindowStyle Hidden
+:: sent that to a window nobody can read, which closes on exit. The one line that
+:: distinguishes "URL ACL missing" from "the port is reserved by Hyper-V/WSL" from
+:: anything else was being thrown away, so a user could only report "it failed".
+start /min "" cmd /c "powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0fileserver.ps1" > "%~dp0fileserver.log" 2>&1"
 
 set "FRETRIES=0"
 :fserver_wait
 set /a FRETRIES+=1
 if !FRETRIES! gtr 8 (
-    echo  [*] File server failed to start. Phone access will not work.
-    echo      You may need to run setup-lan.bat as Administrator first.
-    echo      Desktop chat still works normally.
+    echo  [*] File server failed to start.
+    echo.
+    :: The file server SERVES THE CHAT PAGE. If it is down there is no UI at all,
+    :: so the old "Desktop chat still works normally" line was not just unhelpful,
+    :: it sent people looking in the wrong place. The model on :11434 being healthy
+    :: is exactly what makes that message believable and wrong.
+    echo      Chat is NOT available - this server hosts the page itself.
+    echo.
+    if exist "%~dp0fileserver.log" (
+        echo      Reason reported by the file server:
+        for /f "usebackq delims=" %%L in ("%~dp0fileserver.log") do echo        %%L
+        echo.
+        echo      Full log: %~dp0fileserver.log
+    ) else (
+        echo      No log was written - the file server did not start at all.
+    )
+    echo.
+    echo      Common causes:
+    echo        * "Access is denied"  - run setup-lan.bat as Administrator (URL ACL).
+    echo        * "forbidden by its access permissions" - port 8080 sits inside a
+    echo          Windows reserved range (Hyper-V / WSL / Docker Desktop). Check with:
+    echo            netsh interface ipv4 show excludedportrange protocol=tcp
+    echo          netstat shows nothing listening, because nothing is - the range is
+    echo          RESERVED, not in use. Set GEMMA_FILE_PORT to a free port.
     goto :get_lan_ip
 )
 timeout /t 1 /nobreak >nul

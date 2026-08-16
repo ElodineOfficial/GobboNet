@@ -51,7 +51,12 @@ $SearchPort   = [int](Get-EnvOrDefault 'GEMMA_SEARCH_PORT'   '11435')
 # Embedding service (RAG Retriever A). Optional infra: if it's down, the
 # /embed proxy below returns 502 and chat.html degrades to tag-only retrieval.
 $EmbedPort    = [int](Get-EnvOrDefault 'GEMMA_EMBED_PORT'    '11436')
-$ListenPort   = 8080
+# Port is overridable because 8080 is not always available in a way netstat can
+# show: Hyper-V, WSL and Docker Desktop RESERVE port ranges, and a bind inside one
+# fails with "forbidden by its access permissions" while nothing is listening. The
+# launcher passes this through, so a user who hits that can move off 8080 without
+# editing a script.
+$ListenPort   = [int](Get-EnvOrDefault 'GEMMA_FILE_PORT'     '8080')
 $ServerExe    = Get-EnvOrDefault 'GEMMA_SERVER_EXE'     ''
 $ModelDir     = Get-EnvOrDefault 'GEMMA_MODEL_DIR'      (Join-Path $Root 'models')
 $CtxSize      = [int](Get-EnvOrDefault 'GEMMA_CTX_SIZE'      '16384')
@@ -1449,17 +1454,55 @@ function Handle-SwapStatus {
 # Make sure System.Web is available for UrlDecode.
 Add-Type -AssemblyName System.Web -ErrorAction SilentlyContinue
 
+# Bind the LAN prefix if we can, and fall back to loopback if we cannot.
+#
+# `http://+:PORT/` goes through HTTP.sys and needs a URL ACL reservation, so an
+# ordinary (non-elevated) user gets "Access is denied" -- for ANY port, which is
+# why moving off 8080 does not help this case. `http://127.0.0.1:PORT/` needs no
+# reservation at all. Verified on one machine, same user, same moment:
+#     http://127.0.0.1:8797/ -> bound
+#     http://+:8798/         -> Access is denied
+#
+# Before this fallback the whole app died there. That is the wrong outcome,
+# because the file server SERVES THE CHAT PAGE: a user with no URL ACL lost
+# desktop chat entirely, while the model on :11434 stayed healthy -- which makes
+# it look like a front-end bug. Phone access genuinely needs the reservation;
+# desktop chat never did.
 $listener = New-Object System.Net.HttpListener
 $listener.Prefixes.Add("http://+:$ListenPort/")
+$LanBound = $true
 try {
     $listener.Start()
 } catch {
-    Write-Host ("[fatal] could not bind http://+:{0}/ -- {1}" -f $ListenPort, $_.Exception.Message)
-    Write-Host '         Run setup-lan.bat as Administrator to add the URL ACL.'
-    exit 1
+    $wildcardError = $_.Exception.Message
+    $listener = New-Object System.Net.HttpListener
+    $listener.Prefixes.Add("http://127.0.0.1:$ListenPort/")
+    try {
+        $listener.Start()
+        $LanBound = $false
+        Write-Host ("[warn] could not bind http://+:{0}/ -- {1}" -f $ListenPort, $wildcardError)
+        Write-Host  '       Listening on 127.0.0.1 instead: desktop chat WORKS, phone/LAN access does not.'
+        Write-Host  '       To enable phone access, run setup-lan.bat as Administrator (adds the URL ACL).'
+    } catch {
+        Write-Host ("[fatal] could not bind http://+:{0}/ -- {1}" -f $ListenPort, $wildcardError)
+        Write-Host ("[fatal] loopback http://127.0.0.1:{0}/ also failed -- {1}" -f $ListenPort, $_.Exception.Message)
+        Write-Host  '         If that says "forbidden by its access permissions", the port sits inside a'
+        Write-Host  '         Windows reserved range (Hyper-V / WSL / Docker Desktop). netstat shows nothing'
+        Write-Host  '         listening because nothing is -- the range is RESERVED. Check with:'
+        Write-Host  '           netsh interface ipv4 show excludedportrange protocol=tcp'
+        Write-Host  '         then set GEMMA_FILE_PORT to a port outside every listed range.'
+        exit 1
+    }
 }
 
-Write-Host ("[ok] listening on http://+:{0}/" -f $ListenPort)
+# Report the prefix actually bound. Printing the wildcard form after falling back
+# to loopback would tell the user phone access is available when it is not -- the
+# same shape of wrong-but-reassuring status this fallback exists to remove.
+if ($LanBound) {
+    Write-Host ("[ok] listening on http://+:{0}/ (LAN + phone access)" -f $ListenPort)
+} else {
+    Write-Host ("[ok] listening on http://127.0.0.1:{0}/ (this machine only)" -f $ListenPort)
+}
 Write-Host ("[ok] access password required (salted-hash verified; set via launch.bat)")
 Write-Host ("[ok] detached generation jobs enabled (spool: {0})" -f $JobsDir)
 if ($LlmApiKey -eq '') {
