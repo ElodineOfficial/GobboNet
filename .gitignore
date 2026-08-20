@@ -30,6 +30,8 @@ active-model.json
 # The web-UI port, chosen at install time. Per-machine, like the secret.
 .gobbonet-port
 # Generation job spool — holds model reply transcripts
+# (written by fileserver.ps1 only; the Go server keeps job spools in memory,
+# so the ignore is for the PowerShell server and stays needed either way)
 .jobs/
 # hardware-probe.ps1 writes these next to itself; they describe the machine
 # that ran it and mean nothing on any other one.
