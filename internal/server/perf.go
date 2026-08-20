@@ -30,6 +30,14 @@ import (
 // changes it, and /active-model.json has to report the context size that is
 // actually in force — not the one the file said at startup.
 type tuning struct {
+	// writeMu serialises the whole read-modify-write of a POST. Without it two
+	// concurrent saves can interleave between reading the current values and
+	// publishing the new ones, leaving perf.toml and memory describing
+	// different settings — and the file is the one that survives a restart, so
+	// the disagreement outlives the request that caused it. Separate from mu so
+	// a GET is never blocked behind a disk write.
+	writeMu sync.Mutex
+
 	mu      sync.RWMutex
 	current supervisor.Tuning
 	auto    supervisor.Tuning
@@ -123,6 +131,9 @@ func (s *Server) perfPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.tuning.writeMu.Lock()
+	defer s.tuning.writeMu.Unlock()
+
 	if req.Reset {
 		s.perfReset(w, r)
 		return
@@ -173,6 +184,7 @@ func (s *Server) perfPost(w http.ResponseWriter, r *http.Request) {
 }
 
 // perfReset deletes perf.toml rather than writing today's auto values into it.
+// Called with writeMu held.
 // Writing them would freeze the current guess forever: swap to a bigger model,
 // or move the install to a better GPU, and the stale numbers would still be in
 // force with nothing saying they were ever a guess.

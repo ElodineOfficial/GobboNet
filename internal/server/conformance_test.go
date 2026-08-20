@@ -14,6 +14,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -22,6 +23,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/jmccardle/gobbonet/internal/auth"
@@ -1132,5 +1134,35 @@ func TestPreflightAndProxiedResponseAgreeOnCORS(t *testing.T) {
 
 	if a, b := pre.Header().Get("Access-Control-Allow-Origin"), post.Header().Get("Access-Control-Allow-Origin"); a != b {
 		t.Errorf("preflight says Allow-Origin %q but the response says %q", a, b)
+	}
+}
+
+// Two saves landing together must not leave perf.toml and memory describing
+// different settings. The file is the half that survives a restart, so such a
+// disagreement outlives the request that caused it.
+func TestPerfConcurrentSavesStayConsistent(t *testing.T) {
+	srv, cfg := newTestServer(t)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		ctx := 1024 * (i + 1)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			do(t, srv, http.MethodPost, "/perf",
+				strings.NewReader(fmt.Sprintf(`{"ctxSize":%d}`, ctx)))
+		}()
+	}
+	wg.Wait()
+
+	inMemory := decode(t, do(t, srv, http.MethodGet, "/perf", nil))["current"].(map[string]any)
+
+	reloaded := cfg
+	if err := reloaded.ApplyPerf(); err != nil {
+		t.Fatal(err)
+	}
+	if got := int(inMemory["ctxSize"].(float64)); got != reloaded.CtxSize {
+		t.Errorf("perf.toml says ctx_size %d but the running server says %d",
+			reloaded.CtxSize, got)
 	}
 }
