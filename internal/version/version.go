@@ -12,11 +12,13 @@ import (
 	"strings"
 )
 
-// Version is the release identity, e.g. "1.3-go-cba7af9".
+// Version is the release identity: "<VERSION>-go-<short sha>", e.g.
+// "1.5.1-go-afb7e0d". The release half comes from the VERSION file at the repo
+// root, which build-release.sh and installer/build-installer.sh both read.
 //
 // Overridden at build time:
 //
-//	go build -ldflags "-X github.com/jmccardle/gobbonet/internal/version.Version=1.3-go-abc1234"
+//	go build -ldflags "-X github.com/jmccardle/gobbonet/internal/version.Version=1.5.1-go-abc1234"
 //
 // The default says "dev" rather than inventing a number, so an unstamped build
 // can never be mistaken for a distributed one.

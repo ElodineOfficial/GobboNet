@@ -149,6 +149,16 @@ Windows also has internal functions not exposed as endpoints:
 - `Write-ActiveModel()` — updates `active-model.json` on disk
 - `Update-ModelsListActive()` — flips the `active` flag in `models-list.json`
 
+**Added after this inventory was written: `/perf`.** Upstream 1.5.8 gave the
+llama-server launch arguments a settings panel, which GETs `/perf` for
+`{current, auto, overridden, modelMaxCtx}`, POSTs `{ctxSize, gpuLayers,
+kvCacheType}` or `{reset:true}`, and then drives the swap contract above to
+apply the change — rather than adding a second restart path. Neither
+implementation compared in this table has it; the Go server does. See
+**Runtime tuning** in `GO_SERVER.md`, which also explains why the override
+lives in a `perf.toml` beside `config.toml` instead of upstream's
+`.gobbonet-perf.json`.
+
 ---
 
 ### 6. Generation Jobs (Python only)

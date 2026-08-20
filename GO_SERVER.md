@@ -28,9 +28,16 @@ darwin/amd64, and bundles each binary with `web/` into an archive under
 `dist/<version>/` with a `SHA256SUMS`. Static, `-trimpath`, no cgo — a tester
 unpacks it and runs it.
 
-Builds are stamped `1.3-go-<short sha>` at link time and report it from
-`gobbonet version`, the startup banner, and `/health-fileserver` — the last so a
-tester can copy a build identity out of a browser without a terminal.
+Builds are stamped `<VERSION>-go-<short sha>` at link time — the release half
+read from the `VERSION` file at the repo root, the sha from `git rev-parse`, so
+`1.5.1-go-afb7e0d`. `installer/build-installer.sh` reads the same file and
+stamps the same string, which is why the two cannot drift apart again. Every
+build reports it from `gobbonet version`, the startup banner, and
+`/health-fileserver` — the last so a tester can copy a build identity out of a
+browser without a terminal.
+
+To cut a release, edit `VERSION`, commit, and run the build. Nothing else
+carries a version literal.
 
 The script refuses to build from a dirty tree. A stamped sha that does not
 describe the code inside the binary is worse than no stamp: a bug gets reported
@@ -62,6 +69,24 @@ rather than whichever one discovery happens to find.
 The first run writes a fully commented `config.toml`, tells you where, and exits.
 Read it, adjust `llm_url` and `server_exe`, and run again.
 
+The UI is on **9066** and llama.cpp on **11437**. Neither is the number it used
+to be. 8080 is the most contended port on a developer machine — and on Windows
+the dynamic ranges Hyper-V, WSL2 and Docker Desktop reserve can swallow it, so
+the bind fails in a way `netstat` cannot explain. 11434 is Ollama's default,
+which was worse than a collision: the launcher saw *something* answering there,
+concluded llama-server was already up, skipped starting its own, then found
+nothing healthy and restarted. Upstream moved both in 1.5.8 and this follows.
+
+An existing install does not move. `config.toml` is written with explicit values
+on first run, so only a fresh one sees the new defaults.
+
+Unlike the launcher scripts there is no `.gobbonet-port` file and no silent
+clamp to 1024–32767. The port is already a config key the installer writes and
+`config set listen_port` edits; a second file saying the same thing is a second
+thing to disagree. A port outside 1–65535 is an error, not a substitution — the
+reasoning for staying under 32768 is in the generated file's comments, where
+someone choosing a port will actually read it.
+
 ## Config discovery
 
 First hit wins:
@@ -77,6 +102,9 @@ Config and data are deliberately separate: config in `~/.config/gobbonet`, data
 written next to the config file — `model_dir` defaults to `<data_dir>/models`,
 not to a directory beside `config.toml`.
 
+`perf.toml` is the one other file in the config directory, and it is config
+rather than data: see **Runtime tuning** below.
+
 Relative paths inside the config resolve against the config file's own directory,
 so a portable install that keeps everything in one folder behaves the way the
 Windows tree always did. That is what `model_dir = "./models"` opts into.
@@ -84,6 +112,45 @@ Windows tree always did. That is what `model_dir = "./models"` opts into.
 `gobbonet config get` / `set` exist so the launcher scripts never have to parse
 TOML — Go stays the only TOML parser in the tree. `set` edits the file line by
 line, so every comment survives.
+
+## Runtime tuning
+
+`ctx_size`, `gpu_layers` and `kv_cache_type` are llama-server launch arguments,
+and the settings panel can change them without anyone editing a file. It reads
+and writes `/perf`, then posts the model it already has to `/swap-model` to
+apply — deliberately reusing the hot-swap path, so there is one restart
+mechanism with one lock and one status feed rather than two that can race.
+
+The override lives in a **`perf.toml` beside `config.toml`**, not in it.
+`config.toml` is the auto baseline: `installer/gobbonet.nsi` writes `ctx_size`
+and `kv_cache_type` into it from the hardware probe, and off Windows a human
+writes them by hand. Reset deletes `perf.toml` and the baseline is simply there
+again.
+
+Writing into `config.toml` instead would be simpler and wrong. The first save
+destroys the probe's numbers, after which "reset to auto" can only mean the
+compiled-in 16384/99/q8_0 — which is exactly backwards on the machines that
+need reset most. A 6GB card probed down to `ctx_size = 8192` would be reset *up*
+to 16384 and stop loading, by the button labelled "put it back how it was".
+
+Two things follow from that split:
+
+`config get ctx_size` reports `config.toml`, because that is the file `config
+set ctx_size` writes. Only the serve path overlays `perf.toml`. A getter and a
+setter that disagreed about which file they meant would be worse than either
+layer alone.
+
+A `perf.toml` that is unparseable or out of range **stops the server**, naming
+the file and the value. `fileserver.ps1` warns and falls back to its auto
+values; this does not. The file is only ever written by code that validates
+first, so a bad one means a hand edit — and running settings the user did not
+choose, having noticed they did not choose them, is the quiet substitution this
+port keeps removing. Deleting the file is always the way out, and the error says
+so.
+
+Startup reports an override when one is in force. A model that fails to load
+because of a context size set weeks ago is otherwise a mystery with no visible
+cause.
 
 ## Local mode and remote mode
 
@@ -161,6 +228,27 @@ Jobs are held **in memory** — no disk spooling, no cancel flag files. Cancella
 is a `context.Context` that propagates into the upstream request, so a cancel
 frees the llama.cpp slot immediately.
 
+A POST past `job_max_concurrent` (default **1**) **supersedes** rather than
+queues or refuses. It used to answer 429, and both halves of that were wrong.
+llama-server runs one slot, so a cap of four only bought a queue it could not
+serve: press Stop, send again, and the new generation sat behind a request still
+running because llama-server had not noticed the disconnect yet. And a 429 to
+someone who just pressed Send is a refusal, when what they want is plainly the
+new generation and not the old one.
+
+The wait is the part that matters. The oldest live work is cancelled and then
+**waited out** — up to five seconds — before the new request is dispatched.
+Dispatching the moment the context is cancelled would queue the new request
+behind a connection llama.cpp has not finished tearing down, which is precisely
+the stall this removes. The signal is the worker goroutine returning, which
+happens strictly after the upstream response body is closed.
+
+Only enough work is shed to get under the cap, oldest first. At the default of 1
+that is upstream's behaviour exactly; above it, shedding every live worker would
+throw away generations that had room to run. And shedding happens *after* the
+request body is validated, so a malformed request from a buggy client cannot
+kill a generation the user is reading.
+
 Poll responses carry the SSE bytes base64-encoded in `chunk_b64`, and the window
 is a plain byte range with no character alignment — byte-for-byte the framing
 `fileserver.ps1` defined. `js/03-generation.js` reads `chunk_b64` and nothing
@@ -231,9 +319,10 @@ silently stopped firing.
 
 ```
 cmd/gobbonet/          CLI entry point
-internal/config/       TOML config, discovery, mode detection, get/set
+internal/config/       TOML config, discovery, mode detection, get/set,
+                       the perf.toml tuning overlay
 internal/auth/         sessions, Argon2id + legacy migration, rate limit
-internal/server/       routing, auth gate, health endpoint
+internal/server/       routing, auth gate, health endpoint, /perf
 internal/state/        /state and /state/info
 internal/models/       GGUF parsing, classifier, model metadata endpoints
 internal/jobs/         in-memory detached generation

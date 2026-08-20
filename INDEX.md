@@ -1,6 +1,6 @@
 # Gobbonet frontend — module index
 
-> Upstream v1.5 split the single-file frontend into `chat.html` (a 906-line
+> Upstream v1.5 split the single-file frontend into `chat.html` (a 950-line
 > shell) plus `js/01..24` and `css/01..15`. **No build step, no module system:**
 > plain `<script>` tags sharing globals, so load order is load-bearing.
 
@@ -24,23 +24,23 @@ shell below line 1394 stayed in `chat.html`).
 | Module | Was `chat.html` lines | Lines now |
 |---|---|---|
 | `js/01-config.js` | 1394–1558 | 170 |
-| `js/02-model.js` | 1559–2019 | 466 |
-| `js/03-generation.js` | 2020–3134 | 1120 |
-| `js/04-state.js` | 3135–3352 | 227 |
+| `js/02-model.js` | 1559–2019 | 614 |
+| `js/03-generation.js` | 2020–3134 | 1122 |
+| `js/04-state.js` | 3135–3352 | 307 |
 | `js/05-persistence.js` | 3353–4014 | 667 |
 | `js/06-state-sync.js` | 4015–4863 | 854 |
-| `js/07-prompt.js` | 4864–5499 | 706 |
-| `js/08-rag.js` | 5500–6419 | 961 |
+| `js/07-prompt.js` | 4864–5499 | 839 |
+| `js/08-rag.js` | 5500–6419 | 967 |
 | `js/09-threads.js` | 6420–6876 | 462 |
-| `js/10-chat.js` | 6877–7848 | 996 |
+| `js/10-chat.js` | 6877–7848 | 1050 |
 | `js/11-search.js` | 7849–8065 | 222 |
 | `js/12-render.js` | 8066–8534 | 475 |
-| `js/13-dashboard.js` | 8535–9138 | 801 |
-| `js/14-scroll.js` | 9139–9481 | 348 |
-| `js/15-cards.js` | 9482–9803 | 350 |
-| `js/16-card-io.js` | 9804–10515 | 737 |
+| `js/13-dashboard.js` | 8535–9138 | 803 |
+| `js/14-scroll.js` | 9139–9481 | 350 |
+| `js/15-cards.js` | 9482–9803 | 379 |
+| `js/16-card-io.js` | 9804–10515 | 743 |
 | `js/17-personas.js` | 10516–10767 | 257 |
-| `js/18-utils.js` | 10768–11310 | 548 |
+| `js/18-utils.js` | 10768–11310 | 591 |
 | `js/19-extensions.js` | 11311–11554 | 249 |
 | `js/20-macros.js` | 11555–11702 | 153 |
 | `js/21-data.js` | 11703–11915 | 218 |
