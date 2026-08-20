@@ -29,8 +29,7 @@ active-model.json
 .embed-launch.cmd
 # The web-UI port, chosen at install time. Per-machine, like the secret.
 .gobbonet-port
-# Detached-generation spools written by fileserver.ps1. Reply text, same
-# sensitivity class as .gobbonet-state.json above.
+# Generation job spool — holds model reply transcripts
 .jobs/
 # hardware-probe.ps1 writes these next to itself; they describe the machine
 # that ran it and mean nothing on any other one.
