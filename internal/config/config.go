@@ -131,6 +131,16 @@ type Config struct {
 	JobMaxAgeHours   int `toml:"job_max_age_hours"`
 
 	// --- Not from the file -------------------------------------------------
+	// AutoCtxSize, AutoGPULayers and AutoKVCacheType are what config.toml said
+	// before perf.toml was overlaid — the hardware-detected baseline the
+	// settings panel offers to reset to. Only ApplyPerf sets them; without that
+	// call they are zero and the three live values above are the file's.
+	AutoCtxSize     int    `toml:"-"`
+	AutoGPULayers   int    `toml:"-"`
+	AutoKVCacheType string `toml:"-"`
+	// PerfOverridden reports whether a perf.toml was found and applied.
+	PerfOverridden bool `toml:"-"`
+
 	// Path is where this config was loaded from; `config set` writes back here
 	// and set-password persists the new secret here.
 	Path string `toml:"-"`

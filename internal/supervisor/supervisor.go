@@ -54,16 +54,26 @@ const (
 	healthProbeInterval = 500 * time.Millisecond
 )
 
-// Options configures a Supervisor.
-type Options struct {
-	ServerExe   string
-	ModelDir    string
-	LLMURL      string
-	APIKey      string
+// Tuning is the part of the llama-server command line that /perf can change
+// while the server is running. Held apart from Options because Options is
+// fixed at startup and this is not.
+type Tuning struct {
 	CtxSize     int
 	GPULayers   int
 	KVCacheType string
-	LogFile     string
+}
+
+// Options configures a Supervisor.
+type Options struct {
+	ServerExe string
+	ModelDir  string
+	LLMURL    string
+	APIKey    string
+	// Tuning is the starting point. Changing it later goes through SetTuning,
+	// which is what /perf calls; it takes effect on the next llama-server
+	// start, i.e. the swap the client drives immediately afterwards.
+	Tuning  Tuning
+	LogFile string
 
 	// ChatTemplateName / ChatTemplateFile override what the classifier picked.
 	// Only set these when a model's embedded template is known-broken.
@@ -91,8 +101,11 @@ type Supervisor struct {
 	stderr *ringBuffer
 	client *http.Client
 
-	mu  sync.Mutex
-	cmd *exec.Cmd
+	mu sync.Mutex
+	// tuning is opts.Tuning as it stands now. Guarded by mu because /perf
+	// rewrites it from a request goroutine while a swap may be reading it.
+	tuning Tuning
+	cmd    *exec.Cmd
 	// pgid is the process group captured at launch. Kept separately from cmd
 	// because it stays valid after the reaper has Wait()ed the child, which is
 	// precisely when surviving helpers still need killing.
@@ -132,12 +145,30 @@ func New(opts Options) (*Supervisor, error) {
 
 	return &Supervisor{
 		opts:   opts,
+		tuning: opts.Tuning,
 		host:   host,
 		port:   port,
 		stderr: newRingBuffer(stderrRingSize),
 		client: &http.Client{Timeout: 3 * time.Second},
 		status: Status{Phase: PhaseIdle},
 	}, nil
+}
+
+// Tuning returns the launch arguments a restart would use right now.
+func (s *Supervisor) Tuning() Tuning {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.tuning
+}
+
+// SetTuning changes what the NEXT llama-server start will use. It deliberately
+// does not restart anything: applying the change reuses the existing hot-swap
+// path, so there stays exactly one restart mechanism in this codebase, with one
+// lock and one status feed, rather than two that can race each other.
+func (s *Supervisor) SetTuning(t Tuning) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.tuning = t
 }
 
 // CurrentFile is the GGUF basename currently loaded, or "".
@@ -227,14 +258,18 @@ func (s *Supervisor) BuildArgs(rec models.Record, modelPath string) []string {
 		useJinja = false
 	}
 
+	// Read the tuning once, so a /perf write landing mid-assembly cannot put
+	// one model's context size next to another's KV cache type.
+	tune := s.Tuning()
+
 	args := []string{
 		"--model", modelPath,
 		"--port", s.port,
 		"--host", s.host,
-		"--ctx-size", itoaInt(s.opts.CtxSize),
-		"--n-gpu-layers", itoaInt(s.opts.GPULayers),
-		"--cache-type-k", s.opts.KVCacheType,
-		"--cache-type-v", s.opts.KVCacheType,
+		"--ctx-size", itoaInt(tune.CtxSize),
+		"--n-gpu-layers", itoaInt(tune.GPULayers),
+		"--cache-type-k", tune.KVCacheType,
+		"--cache-type-v", tune.KVCacheType,
 		"--parallel", "1",
 	}
 	if useJinja {

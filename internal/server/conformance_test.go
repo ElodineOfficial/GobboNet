@@ -64,6 +64,14 @@ func newTestServer(t *testing.T) (*Server, config.Config) {
 	cfg.EmbedURL = "http://127.0.0.1:1"
 	cfg.RequireAuth = false
 
+	// Mirrors the serve path: it is ApplyPerf that separates the auto baseline
+	// from the live values, and /perf reports both. Without it the baseline
+	// would be zero here and the tests would be checking a state that never
+	// occurs in a real run.
+	if err := cfg.ApplyPerf(); err != nil {
+		t.Fatal(err)
+	}
+
 	srv, err := New(cfg, config.ModeRemote, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -671,6 +679,227 @@ func TestSwapInRemoteMode(t *testing.T) {
 	}
 	if body := decode(t, rec); body["phase"] != "idle" {
 		t.Errorf(`swap-status phase: got %v, want "idle"`, body["phase"])
+	}
+}
+
+// --- Perf ------------------------------------------------------------------
+
+// js/02-model.js reads p.current.ctxSize, p.auto.gpuLayers, p.overridden and
+// p.modelMaxCtx by name. These are upstream's spellings, they are camelCase in
+// a codebase that is otherwise snake_case on the wire, and one shared frontend
+// file drives both this server and fileserver.ps1 — so they are pinned here
+// rather than left to whichever casing felt natural on the day.
+func TestPerfGetContract(t *testing.T) {
+	srv, cfg := newTestServer(t)
+
+	rec := do(t, srv, http.MethodGet, "/perf", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /perf: got %d, want 200", rec.Code)
+	}
+	body := decode(t, rec)
+
+	for _, key := range []string{"current", "auto", "overridden", "modelMaxCtx"} {
+		if _, ok := body[key]; !ok {
+			t.Errorf("GET /perf is missing %q; body: %s", key, rec.Body.String())
+		}
+	}
+
+	for _, key := range []string{"current", "auto"} {
+		obj, ok := body[key].(map[string]any)
+		if !ok {
+			t.Fatalf("%s is not an object: %v", key, body[key])
+		}
+		for _, field := range []string{"ctxSize", "gpuLayers", "kvCacheType"} {
+			if _, ok := obj[field]; !ok {
+				t.Errorf("%s is missing %q; got %v", key, field, obj)
+			}
+		}
+	}
+
+	// With no perf.toml, current and auto are the config file's values and the
+	// panel must be told it is not overriding anything.
+	current := body["current"].(map[string]any)
+	if got := int(current["ctxSize"].(float64)); got != cfg.CtxSize {
+		t.Errorf("current.ctxSize: got %d, want %d", got, cfg.CtxSize)
+	}
+	if body["overridden"] != false {
+		t.Errorf("overridden with no perf.toml: got %v, want false", body["overridden"])
+	}
+}
+
+// A save has to survive a restart, so it lands on disk; and the panel reads the
+// result back immediately, so it must be visible without one.
+func TestPerfSaveRoundTrips(t *testing.T) {
+	srv, cfg := newTestServer(t)
+	perfPath := config.PerfPath(cfg.Path)
+
+	rec := do(t, srv, http.MethodPost, "/perf",
+		strings.NewReader(`{"ctxSize":8192,"gpuLayers":0,"kvCacheType":"f16"}`))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /perf: got %d, want 200; body: %s", rec.Code, rec.Body.String())
+	}
+	if body := decode(t, rec); body["ok"] != true {
+		t.Errorf("POST /perf ok: got %v, want true", body["ok"])
+	}
+
+	if _, err := os.Stat(perfPath); err != nil {
+		t.Fatalf("POST /perf did not write %s: %v", perfPath, err)
+	}
+
+	body := decode(t, do(t, srv, http.MethodGet, "/perf", nil))
+	current := body["current"].(map[string]any)
+	if got := int(current["ctxSize"].(float64)); got != 8192 {
+		t.Errorf("current.ctxSize after save: got %d, want 8192", got)
+	}
+	// gpuLayers 0 means CPU-only. It is a real setting, not an absent field,
+	// which is the whole reason the request type uses pointers.
+	if got := int(current["gpuLayers"].(float64)); got != 0 {
+		t.Errorf("current.gpuLayers after saving 0: got %d, want 0", got)
+	}
+	if current["kvCacheType"] != "f16" {
+		t.Errorf("current.kvCacheType after save: got %v, want f16", current["kvCacheType"])
+	}
+	if body["overridden"] != true {
+		t.Errorf("overridden after save: got %v, want true", body["overridden"])
+	}
+
+	// auto is untouched: config.toml is the baseline and a save must not
+	// rewrite it, or "reset" would have nothing to go back to.
+	auto := body["auto"].(map[string]any)
+	if got := int(auto["ctxSize"].(float64)); got != cfg.AutoCtxSize {
+		t.Errorf("auto.ctxSize after save: got %d, want %d (the baseline must not move)", got, cfg.AutoCtxSize)
+	}
+
+	// A reload of the same config now yields the overridden values.
+	reloaded := cfg
+	if err := reloaded.ApplyPerf(); err != nil {
+		t.Fatalf("reloading with perf.toml present: %v", err)
+	}
+	if reloaded.CtxSize != 8192 || reloaded.GPULayers != 0 || reloaded.KVCacheType != "f16" {
+		t.Errorf("after restart: ctx=%d gpu=%d kv=%s, want 8192/0/f16",
+			reloaded.CtxSize, reloaded.GPULayers, reloaded.KVCacheType)
+	}
+	if !reloaded.PerfOverridden {
+		t.Error("PerfOverridden after restart: got false, want true")
+	}
+}
+
+// Reset deletes the file rather than writing the auto values into it. Writing
+// them would freeze today's guess forever — move to a better GPU and the stale
+// numbers would still be in force with nothing recording that they were a guess.
+func TestPerfResetRemovesTheOverride(t *testing.T) {
+	srv, cfg := newTestServer(t)
+	perfPath := config.PerfPath(cfg.Path)
+
+	if rec := do(t, srv, http.MethodPost, "/perf",
+		strings.NewReader(`{"ctxSize":4096}`)); rec.Code != http.StatusOK {
+		t.Fatalf("POST /perf: got %d, want 200", rec.Code)
+	}
+
+	rec := do(t, srv, http.MethodPost, "/perf", strings.NewReader(`{"reset":true}`))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /perf reset: got %d, want 200; body: %s", rec.Code, rec.Body.String())
+	}
+	body := decode(t, rec)
+	if body["reset"] != true {
+		t.Errorf("reset flag in response: got %v, want true", body["reset"])
+	}
+	// The panel writes j.current straight back into its inputs.
+	current := body["current"].(map[string]any)
+	if got := int(current["ctxSize"].(float64)); got != cfg.AutoCtxSize {
+		t.Errorf("reset current.ctxSize: got %d, want the baseline %d", got, cfg.AutoCtxSize)
+	}
+
+	if _, err := os.Stat(perfPath); !os.IsNotExist(err) {
+		t.Errorf("%s still exists after reset (err=%v)", perfPath, err)
+	}
+	if body := decode(t, do(t, srv, http.MethodGet, "/perf", nil)); body["overridden"] != false {
+		t.Errorf("overridden after reset: got %v, want false", body["overridden"])
+	}
+
+	// Resetting twice is not an error: the caller asked for "no override in
+	// force", and after the first call that is already true.
+	if rec := do(t, srv, http.MethodPost, "/perf", strings.NewReader(`{"reset":true}`)); rec.Code != http.StatusOK {
+		t.Errorf("second reset: got %d, want 200", rec.Code)
+	}
+}
+
+// A rejected value must not be written, and must come back as {"error": ...},
+// which is the envelope _perfStatus renders.
+func TestPerfRejectsOutOfRange(t *testing.T) {
+	srv, cfg := newTestServer(t)
+
+	for _, tc := range []struct{ name, body string }{
+		{"ctxSize below the floor", `{"ctxSize":16}`},
+		{"ctxSize past any model", `{"ctxSize":99999999}`},
+		{"negative gpuLayers", `{"gpuLayers":-1}`},
+		{"gpuLayers past the cap", `{"gpuLayers":1000}`},
+		{"unknown kvCacheType", `{"kvCacheType":"q2_k"}`},
+		{"not JSON at all", `ctxSize=8192`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := do(t, srv, http.MethodPost, "/perf", strings.NewReader(tc.body))
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("got %d, want 400; body: %s", rec.Code, rec.Body.String())
+			}
+			if _, ok := decode(t, rec)["error"]; !ok {
+				t.Errorf("no error field; body: %s", rec.Body.String())
+			}
+		})
+	}
+
+	if _, err := os.Stat(config.PerfPath(cfg.Path)); !os.IsNotExist(err) {
+		t.Errorf("a rejected request wrote perf.toml anyway (err=%v)", err)
+	}
+}
+
+// The panel sends null for an input it did not touch. That means "leave this
+// alone", not "set it to zero" — the distinction the pointer fields exist for.
+func TestPerfPartialUpdateLeavesTheRestAlone(t *testing.T) {
+	srv, _ := newTestServer(t)
+
+	before := decode(t, do(t, srv, http.MethodGet, "/perf", nil))["current"].(map[string]any)
+
+	if rec := do(t, srv, http.MethodPost, "/perf",
+		strings.NewReader(`{"ctxSize":8192,"gpuLayers":null,"kvCacheType":null}`)); rec.Code != http.StatusOK {
+		t.Fatalf("POST /perf: got %d, want 200; body: %s", rec.Code, rec.Body.String())
+	}
+
+	after := decode(t, do(t, srv, http.MethodGet, "/perf", nil))["current"].(map[string]any)
+	if got := int(after["ctxSize"].(float64)); got != 8192 {
+		t.Errorf("ctxSize: got %d, want 8192", got)
+	}
+	if after["gpuLayers"] != before["gpuLayers"] {
+		t.Errorf("gpuLayers moved on a null: %v -> %v", before["gpuLayers"], after["gpuLayers"])
+	}
+	if after["kvCacheType"] != before["kvCacheType"] {
+		t.Errorf("kvCacheType moved on a null: %v -> %v", before["kvCacheType"], after["kvCacheType"])
+	}
+}
+
+// /active-model.json budgets the client's context against defaultCtx. A saved
+// perf change that the UI has applied must move it, or the client keeps packing
+// prompts for a window llama-server is no longer running.
+func TestPerfChangeReachesActiveModel(t *testing.T) {
+	srv, _ := newTestServer(t)
+
+	if rec := do(t, srv, http.MethodPost, "/perf",
+		strings.NewReader(`{"ctxSize":4096}`)); rec.Code != http.StatusOK {
+		t.Fatalf("POST /perf: got %d, want 200", rec.Code)
+	}
+
+	body := decode(t, do(t, srv, http.MethodGet, "/active-model.json", nil))
+	if got := int(body["defaultCtx"].(float64)); got != 4096 {
+		t.Errorf("active-model.json defaultCtx after a /perf save: got %d, want 4096", got)
+	}
+}
+
+func TestPerfRejectsOtherMethods(t *testing.T) {
+	srv, _ := newTestServer(t)
+
+	rec := do(t, srv, http.MethodDelete, "/perf", nil)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("DELETE /perf: got %d, want 405", rec.Code)
 	}
 }
 

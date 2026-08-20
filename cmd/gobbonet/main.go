@@ -170,6 +170,13 @@ func cmdServe(argv []string) error {
 		return err
 	}
 
+	// perf.toml overlays the config file's tuning. Serving is the only command
+	// that cares: `config get ctx_size` must keep reporting the file that
+	// `config set ctx_size` writes.
+	if err := cfg.ApplyPerf(); err != nil {
+		return err
+	}
+
 	fmt.Print(banner)
 	fmt.Printf(" [OK] version: %s\n", version.Full())
 
@@ -197,13 +204,15 @@ func cmdServe(argv []string) error {
 	var sup *supervisor.Supervisor
 	if mode == config.ModeLocal {
 		sup, err = supervisor.New(supervisor.Options{
-			ServerExe:        cfg.ServerExe,
-			ModelDir:         cfg.ModelDir,
-			LLMURL:           cfg.LLMURL,
-			APIKey:           cfg.LLMAPIKey,
-			CtxSize:          cfg.CtxSize,
-			GPULayers:        cfg.GPULayers,
-			KVCacheType:      cfg.KVCacheType,
+			ServerExe: cfg.ServerExe,
+			ModelDir:  cfg.ModelDir,
+			LLMURL:    cfg.LLMURL,
+			APIKey:    cfg.LLMAPIKey,
+			Tuning: supervisor.Tuning{
+				CtxSize:     cfg.CtxSize,
+				GPULayers:   cfg.GPULayers,
+				KVCacheType: cfg.KVCacheType,
+			},
 			LogFile:          cfg.LogFile(),
 			ChatTemplateName: cfg.ChatTemplateName,
 			ChatTemplateFile: cfg.ChatTemplateFile,
@@ -222,6 +231,14 @@ func cmdServe(argv []string) error {
 	fmt.Printf(" [OK] mode: %s\n", mode)
 	fmt.Printf(" [OK] llama.cpp upstream: %s\n", cfg.LLMURL)
 	fmt.Printf(" [OK] config: %s\n", cfg.Path)
+	if cfg.PerfOverridden {
+		// Say it at startup, not only in the settings panel. A model that fails
+		// to load because of a context size someone set weeks ago is otherwise
+		// a mystery with no visible cause.
+		fmt.Printf(" [OK] tuning override: ctx=%d gpu_layers=%d kv=%s (%s; delete it for %d/%d/%s)\n",
+			cfg.CtxSize, cfg.GPULayers, cfg.KVCacheType, config.PerfPath(cfg.Path),
+			cfg.AutoCtxSize, cfg.AutoGPULayers, cfg.AutoKVCacheType)
+	}
 
 	if sup != nil {
 		fmt.Printf(" [..] starting llama-server from %s\n", cfg.ServerExe)

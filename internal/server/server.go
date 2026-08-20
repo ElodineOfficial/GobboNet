@@ -10,6 +10,7 @@
 //	/active-model.json         model identity for the UI
 //	/models-list.json          the header dropdown
 //	/state, /state/*           cross-device state sync
+//	/perf                      llama-server tuning the settings panel edits
 //	/swap-model, /swap-status  model-swap contract
 //	/llm/jobs, /llm/jobs/*     detached generation (OUR routes, not llama.cpp's)
 //	/llm, /llm/*               reverse proxy -> llama.cpp
@@ -50,6 +51,9 @@ type Server struct {
 	info     *models.Info
 	jobs     *jobs.Manager
 	sup      *supervisor.Supervisor
+	// tuning is the live ctx/gpu-layers/kv-cache triple. Held here rather than
+	// read off cfg because /perf changes it while the server runs.
+	tuning *tuning
 
 	llmProxy    *proxy.Proxy
 	searchProxy *proxy.Proxy
@@ -73,6 +77,7 @@ func New(cfg config.Config, mode config.Mode, sup *supervisor.Supervisor) (*Serv
 		limiter:  auth.NewLoginLimiter(),
 		sup:      sup,
 		secret:   cfg.AccessSecret,
+		tuning:   newTuning(cfg),
 	}
 
 	s.info = models.NewInfo(cfg.LLMURL, cfg.LLMAPIKey, cfg.ModelDir, mode == config.ModeLocal)
@@ -184,13 +189,18 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleHealth(w, r)
 
 	case path == "/active-model.json":
-		httpx.WriteJSON(w, r, http.StatusOK, s.info.ActiveModelPayload(s.cfg.CtxSize))
+		// The live context size, not cfg's: a /perf change that has been applied
+		// by a swap must not leave the UI budgeting against the old window.
+		httpx.WriteJSON(w, r, http.StatusOK, s.info.ActiveModelPayload(s.tuning.CtxSize()))
 
 	case path == "/models-list.json":
 		httpx.WriteJSON(w, r, http.StatusOK, s.info.ModelsListPayload())
 
 	case path == "/state" || strings.HasPrefix(path, "/state/"):
 		state.Handle(w, r, s.cfg.StatePath())
+
+	case path == "/perf":
+		s.handlePerf(w, r)
 
 	case path == "/swap-model":
 		supervisor.Handlers{Sup: s.sup}.HandleSwapModel(w, r)
