@@ -35,10 +35,15 @@
 // with cancel-flag files because a runspace cannot share state with the
 // listener; a goroutine can, so cancellation is a context and the spool is a
 // bytes.Buffer. At ~150 tok/s a thirty-minute generation is single-digit
-// megabytes, and four concurrent jobs is tens of megabytes. The visible
-// consequence is that a restart drops jobs entirely (the client sees 404 →
-// 'lost') where PowerShell reports them 'interrupted'; both are terminal and
-// the frontend handles each.
+// megabytes, and finished jobs are held only until the client acks or the
+// retention window expires. The visible consequence is that a restart drops
+// jobs entirely (the client sees 404 → 'lost') where PowerShell reports them
+// 'interrupted'; both are terminal and the frontend handles each.
+//
+// A POST past the concurrency cap SUPERSEDES rather than queues or refuses —
+// see supersede(). The app has always been one generation at a time, and the
+// server now enforces that instead of permitting a backlog llama.cpp cannot
+// serve.
 package jobs
 
 import (
@@ -53,8 +58,10 @@ import (
 	"log"
 	"net/http"
 	"regexp"
+	"sort"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jmccardle/gobbonet/internal/httpx"
@@ -91,6 +98,8 @@ const (
 type Job struct {
 	ID     string
 	Thread string
+	// seq is a monotonic creation order, used to shed the oldest work first.
+	seq uint64
 
 	mu        sync.Mutex
 	buf       bytes.Buffer
@@ -102,6 +111,12 @@ type Job struct {
 	finishedAt time.Time
 
 	cancel context.CancelFunc
+	// done is closed when the worker goroutine returns, which is strictly after
+	// the upstream response body has been closed. That ordering is the whole
+	// value of the channel: a superseding request waits on it to know llama.cpp
+	// has seen the disconnect and freed its slot, rather than dispatching into a
+	// server that is still holding the previous connection.
+	done chan struct{}
 }
 
 func (j *Job) snapshot() (status, errMsg string, size int, startedAt, updatedAt int64) {
@@ -177,6 +192,8 @@ type Manager struct {
 
 	client *http.Client
 
+	nextSeq atomic.Uint64
+
 	mu   sync.Mutex
 	jobs map[string]*Job
 }
@@ -226,17 +243,89 @@ func (m *Manager) sweep() {
 }
 
 func (m *Manager) runningCount() int {
+	return len(m.running())
+}
+
+// running lists the live jobs, oldest first. Ordering matters to supersede,
+// which sheds the longest-running work when it has to choose.
+func (m *Manager) running() []*Job {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	n := 0
+
+	var live []*Job
 	for _, j := range m.jobs {
 		j.mu.Lock()
 		if j.status == StatusRunning {
-			n++
+			live = append(live, j)
 		}
 		j.mu.Unlock()
 	}
-	return n
+	sort.Slice(live, func(a, b int) bool { return live[a].seq < live[b].seq })
+	return live
+}
+
+// supersedeTimeout bounds the wait for a cancelled generation to let go of its
+// upstream socket.
+//
+// Upstream's equivalent is 2.5s, chosen because PowerShell's accept loop is
+// single-threaded and the whole server stalls for the duration. Nothing else is
+// blocked here — only the goroutine serving this one POST — so the bound is
+// picked from what it is actually waiting for: an HTTP connection teardown,
+// which is milliseconds when it works at all. Five seconds is long enough that
+// reaching it means something is genuinely wrong, and short enough that the
+// user still gets an answer either way.
+const supersedeTimeout = 5 * time.Second
+
+// supersede makes room for a new generation by cancelling the oldest live ones,
+// and waits for them to actually let go.
+//
+// This replaces a 429. Both halves of that answer were wrong. llama-server runs
+// one slot, so a cap of four only bought a queue it could not serve: press Stop,
+// send again, and the new request sat behind a generation nobody was reading
+// because llama-server had not noticed the disconnect yet. Do it a few more
+// times and four stacked generations fought over one slot until they drained.
+// And a refusal is not what someone who just pressed Send wants — they plainly
+// want the new generation and not the old one.
+//
+// The wait is the part that matters. Cancelling and dispatching immediately
+// would put the new request in the queue behind a connection llama.cpp has not
+// finished tearing down, which is precisely the stall this removes.
+//
+// Returns false if the wait ran out. The caller dispatches anyway: the contexts
+// are cancelled and those goroutines are dying, and refusing the user's
+// generation on top of a slow teardown helps nobody.
+func (m *Manager) supersede() bool {
+	live := m.running()
+	surplus := len(live) - m.maxConcurrent + 1
+	if surplus <= 0 {
+		return true
+	}
+	if surplus > len(live) {
+		surplus = len(live)
+	}
+	shed := live[:surplus]
+
+	for _, j := range shed {
+		j.mu.Lock()
+		cancel := j.cancel
+		j.mu.Unlock()
+		if cancel != nil {
+			cancel()
+		}
+		log.Printf("[jobs] superseding %s -- a new generation was requested", j.ID)
+	}
+
+	deadline := time.After(supersedeTimeout)
+	for _, j := range shed {
+		select {
+		case <-j.done:
+		case <-deadline:
+			log.Printf("[jobs] %s did not release its upstream connection within %s; dispatching anyway",
+				j.ID, supersedeTimeout)
+			return false
+		}
+	}
+	return true
 }
 
 func (m *Manager) get(id string) (*Job, bool) {
@@ -257,6 +346,10 @@ func newJobID() (string, error) {
 // --- Worker ----------------------------------------------------------------
 
 func (m *Manager) run(ctx context.Context, job *Job, body []byte) {
+	// Registered first, so it runs last — after the deferred resp.Body.Close()
+	// below. Whoever is waiting on done needs the socket gone, not merely the
+	// context cancelled.
+	defer close(job.done)
 	defer func() {
 		job.mu.Lock()
 		cancel := job.cancel
@@ -376,14 +469,6 @@ func (m *Manager) handleCreate(w http.ResponseWriter, r *http.Request) {
 
 	m.sweep()
 
-	// Concurrency cap. A single-slot llama.cpp queues extras anyway; this just
-	// stops a misbehaving client from stacking workers.
-	if live := m.runningCount(); live >= m.maxConcurrent {
-		httpx.Error(w, r, http.StatusTooManyRequests,
-			fmt.Sprintf("too many generations in flight (%d); try again shortly", live))
-		return
-	}
-
 	body, err := io.ReadAll(io.LimitReader(r.Body, 64<<20))
 	if err != nil {
 		httpx.ErrorDetail(w, r, http.StatusBadRequest, "could not read body", err.Error())
@@ -393,6 +478,11 @@ func (m *Manager) handleCreate(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, r, http.StatusBadRequest, "body is not valid JSON")
 		return
 	}
+
+	// After the body is known good, not before: a malformed request must not be
+	// able to kill a generation the user is actually reading. Upstream sheds
+	// first and parses second, which makes a client bug destructive.
+	m.supersede()
 
 	id, err := newJobID()
 	if err != nil {
@@ -404,11 +494,16 @@ func (m *Manager) handleCreate(w http.ResponseWriter, r *http.Request) {
 	// the request body stays a byte-exact payload.
 	now := time.Now().Unix()
 	job := &Job{
-		ID:        id,
-		Thread:    r.URL.Query().Get("thread"),
+		ID:     id,
+		Thread: r.URL.Query().Get("thread"),
+		// seq, not startedAt, orders jobs for supersede: startedAt is unix
+		// seconds and two generations started in the same second would sort
+		// arbitrarily, which at a cap above 1 could shed the newer one.
+		seq:       m.nextSeq.Add(1),
 		status:    StatusRunning,
 		startedAt: now,
 		updatedAt: now,
+		done:      make(chan struct{}),
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), jobTimeout)

@@ -311,41 +311,170 @@ func TestJobCancelStopsUpstream(t *testing.T) {
 	t.Error("job never reached a terminal status after cancel")
 }
 
-func TestJobConcurrencyCap(t *testing.T) {
-	// The handler must hold the request open to occupy a slot, but it also has
-	// to be releasable on demand: a handler that only waits on the request
-	// context never returns if it has written nothing, and httptest.Close then
-	// blocks forever waiting for it.
+// blockingUpstream is a generation that never finishes on its own, so a job
+// stays running until something cancels it.
+//
+// The handler must be releasable on demand as well as by the request context: a
+// handler that only waits on the context never returns if it has written
+// nothing, and httptest.Close then blocks forever waiting for it.
+func blockingUpstream(t *testing.T) *httptest.Server {
+	t.Helper()
 	release := make(chan struct{})
-
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-r.Context().Done():
 		case <-release:
 		}
 	}))
-	defer upstream.Close()
-	defer close(release) // runs before upstream.Close()
+	t.Cleanup(srv.Close)
+	t.Cleanup(func() { close(release) }) // runs before srv.Close()
+	return srv
+}
 
-	m := NewManager(upstream.URL, "", 2, 48)
-
-	for i := 0; i < 2; i++ {
-		rec := httptest.NewRecorder()
-		m.Handle(rec, httptest.NewRequest(http.MethodPost, "/llm/jobs", strings.NewReader(`{}`)))
-		if rec.Code != http.StatusAccepted {
-			t.Fatalf("job %d: got %d, want 202", i, rec.Code)
-		}
-	}
-	// Give the workers a moment to be counted as running.
-	time.Sleep(50 * time.Millisecond)
-
+func createJob(t *testing.T, m *Manager) (string, int) {
+	t.Helper()
 	rec := httptest.NewRecorder()
 	m.Handle(rec, httptest.NewRequest(http.MethodPost, "/llm/jobs", strings.NewReader(`{}`)))
-	if rec.Code != http.StatusTooManyRequests {
-		t.Errorf("third job past a cap of 2: got %d, want 429", rec.Code)
+	var created struct {
+		ID string `json:"id"`
+	}
+	json.Unmarshal(rec.Body.Bytes(), &created)
+	return created.ID, rec.Code
+}
+
+// Past the cap, a new generation supersedes the running one instead of being
+// refused. A 429 to someone who just pressed Send is a refusal, when what they
+// plainly want is the new generation and not the old one.
+func TestJobSupersedesInsteadOf429(t *testing.T) {
+	upstream := blockingUpstream(t)
+	m := NewManager(upstream.URL, "", 1, 48)
+	defer m.Shutdown()
+
+	firstID, code := createJob(t, m)
+	if code != http.StatusAccepted {
+		t.Fatalf("first job: got %d, want 202", code)
+	}
+	waitForStatus(t, m, firstID, StatusRunning)
+
+	secondID, code := createJob(t, m)
+	if code != http.StatusAccepted {
+		t.Fatalf("second job past a cap of 1: got %d, want 202 (it must supersede, not be refused)", code)
+	}
+	if secondID == "" {
+		t.Fatal("second job got no id")
 	}
 
-	m.Shutdown()
+	// The superseded job is terminal, so the client polling it stops rather
+	// than waiting on bytes that will never come.
+	waitForStatus(t, m, firstID, StatusCancelled)
+
+	// And the new one is genuinely running, not shed along with the old.
+	waitForStatus(t, m, secondID, StatusRunning)
+}
+
+// The wait is the point. Dispatching the moment the context is cancelled would
+// put the new request behind a connection llama.cpp has not finished tearing
+// down — the exact stall this replaces. supersede must not return until the
+// worker has actually let go.
+func TestSupersedeWaitsForTheConnectionToClose(t *testing.T) {
+	upstream := blockingUpstream(t)
+	m := NewManager(upstream.URL, "", 1, 48)
+	defer m.Shutdown()
+
+	firstID, _ := createJob(t, m)
+	waitForStatus(t, m, firstID, StatusRunning)
+
+	first, ok := m.get(firstID)
+	if !ok {
+		t.Fatal("job disappeared")
+	}
+
+	if !m.supersede() {
+		t.Error("supersede timed out against a well-behaved worker")
+	}
+
+	select {
+	case <-first.done:
+	default:
+		t.Error("supersede returned while the worker was still holding its upstream connection")
+	}
+}
+
+// Only enough work is shed to get under the cap, and it is the oldest that
+// goes. At the default cap of 1 this is upstream's behaviour exactly; above it,
+// shedding everything would throw away generations that had room to run.
+func TestSupersedeShedsOldestFirst(t *testing.T) {
+	upstream := blockingUpstream(t)
+	m := NewManager(upstream.URL, "", 2, 48)
+	defer m.Shutdown()
+
+	oldest, _ := createJob(t, m)
+	waitForStatus(t, m, oldest, StatusRunning)
+	newer, _ := createJob(t, m)
+	waitForStatus(t, m, newer, StatusRunning)
+
+	// Both fit under a cap of 2, so neither may have been touched.
+	if status, _, _, _, _ := mustGet(t, m, oldest).snapshot(); status != StatusRunning {
+		t.Fatalf("a job within the cap was shed: %s", status)
+	}
+
+	third, code := createJob(t, m)
+	if code != http.StatusAccepted {
+		t.Fatalf("third job: got %d, want 202", code)
+	}
+
+	waitForStatus(t, m, oldest, StatusCancelled)
+	if status, _, _, _, _ := mustGet(t, m, newer).snapshot(); status != StatusRunning {
+		t.Errorf("the newer job was shed too: got %q, want it left running", status)
+	}
+	waitForStatus(t, m, third, StatusRunning)
+}
+
+// A client bug must not be able to kill a generation the user is reading.
+// Upstream sheds first and parses second, which makes malformed JSON
+// destructive; here the body is validated first.
+func TestBadRequestDoesNotSupersede(t *testing.T) {
+	upstream := blockingUpstream(t)
+	m := NewManager(upstream.URL, "", 1, 48)
+	defer m.Shutdown()
+
+	firstID, _ := createJob(t, m)
+	waitForStatus(t, m, firstID, StatusRunning)
+
+	rec := httptest.NewRecorder()
+	m.Handle(rec, httptest.NewRequest(http.MethodPost, "/llm/jobs", strings.NewReader(`not json`)))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("malformed create: got %d, want 400", rec.Code)
+	}
+
+	// Give a wrongly-placed supersede time to land before checking.
+	time.Sleep(100 * time.Millisecond)
+	if status, _, _, _, _ := mustGet(t, m, firstID).snapshot(); status != StatusRunning {
+		t.Errorf("a rejected request killed the live generation: status is %q", status)
+	}
+}
+
+func mustGet(t *testing.T, m *Manager, id string) *Job {
+	t.Helper()
+	j, ok := m.get(id)
+	if !ok {
+		t.Fatalf("job %s disappeared", id)
+	}
+	return j
+}
+
+func waitForStatus(t *testing.T, m *Manager, id, want string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	var last string
+	for time.Now().Before(deadline) {
+		last, _, _, _, _ = mustGet(t, m, id).snapshot()
+		if last == want {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("job %s: status is %q, waited for %q", id, last, want)
 }
 
 // A job must reach a terminal status when the upstream rejects the request,
