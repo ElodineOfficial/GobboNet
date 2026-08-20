@@ -47,7 +47,7 @@ against a commit that does not contain it and cannot be reproduced.
 The bundled `web/` directory is generated, not committed: `stage-web.sh` copies
 the repo-root frontend (`chat.html` plus `js/` and `css/`) into it and derives
 `favicon.ico` from `gobbonet.ico`. `build-release.sh` runs it for you. Keeping a
-second committed copy of 39 upstream files was how the fork previously drifted
+second committed copy of 40 upstream files was how the fork previously drifted
 without anything reporting it.
 
 ## Run
@@ -192,7 +192,7 @@ means one of:
    (`nvidia-smi`, `/sys/class/drm`, `sysctl` on Darwin). NSIS would then call the
    Go binary, `hardware-probe.ps1` retires, and all three platforms share one
    flow — at the cost of owning hardware-detection edge cases that upstream's
-   probe spent ~1,400 lines learning, on platforms it never targeted.
+   probe spent ~2,000 lines learning, on platforms it never targeted.
 3. **Port only the catalogue.** It is already machine-readable as
    `installer/models.ini`; a `gobbonet setup` CLI could drive the download while
    probing stays behind a platform-specific interface.
