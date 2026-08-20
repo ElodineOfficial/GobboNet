@@ -43,7 +43,7 @@ hardware.ini
 
 # The served web root, assembled from the repo-root frontend by stage-web.sh.
 # Generated, never committed: a committed copy of chat.html + js/ + css/ goes
-# stale the moment upstream touches one of the 39 files, and serves the stale
+# stale the moment upstream touches one of the 40 files, and serves the stale
 # copy without complaining.
 /web/
 

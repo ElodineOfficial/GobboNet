@@ -10,7 +10,7 @@
 # committing a second copy of the frontend under web/, which worked exactly
 # until upstream changed a file: the copy went stale silently, the server kept
 # serving it, and nothing anywhere reported a problem. With the frontend now
-# spread across 39 files instead of one, that failure was a matter of time.
+# spread across 40 files instead of one, that failure was a matter of time.
 #
 # So web/ is generated, never committed. The repo root stays the single source
 # of truth and merges from upstream land in one place.
@@ -67,8 +67,20 @@ for d in $REQUIRED_DIRS; do cp -r "$d" "$TMP/$d"; done
 # a third copy of the same image.
 cp gobbonet.ico "$TMP/favicon.ico"
 
+# fonts/ is optional and deliberately not in the repo: css/01-tokens.css tells
+# the user to drop atkinson-hyperlegible.woff2 there themselves, and sets
+# font-display: swap so the fallback stack renders when it is absent. Absent is
+# a supported state, so this is not a REQUIRED_DIR -- but if the user did drop
+# the file in, it has to reach the web root, or it 404s forever and the only
+# symptom is a font that never applies.
+fonts=""
+if [ -d fonts ]; then
+    cp -r fonts "$TMP/fonts"
+    fonts=" + $(find fonts -maxdepth 1 -type f | wc -l) font(s)"
+fi
+
 rm -rf "$OUT"
 mv "$TMP" "$OUT"
 trap - EXIT
 
-echo "staged $OUT: chat.html + $have_js js + $have_css css + assets"
+echo "staged $OUT: chat.html + $have_js js + $have_css css + assets$fonts"
