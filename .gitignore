@@ -29,3 +29,6 @@ active-model.json
 .embed-launch.cmd
 
 .gobbonet-port
+
+# Generation job spool — holds model reply transcripts
+.jobs/
