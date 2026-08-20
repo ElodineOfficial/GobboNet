@@ -48,18 +48,35 @@ const (
 // Defaults. These are also the values written into a freshly generated
 // config.toml, so the file documents itself.
 const (
-	DefaultLLMURL     = "http://127.0.0.1:11434"
+	// 11437, not 11434: 11434 is Ollama's default port, and llama.cpp sitting on
+	// it meant that on any machine with Ollama installed the launcher found
+	// *something* answering, decided llama-server was already up, skipped
+	// starting its own, then found nothing healthy and restarted — a loop caused
+	// entirely by sharing a well-known port. Upstream moved in 1.5.8; matching
+	// it keeps one llama.cpp serving whichever server is in front of it.
+	DefaultLLMURL     = "http://127.0.0.1:11437"
 	DefaultSearchURL  = "http://127.0.0.1:11435"
 	DefaultEmbedURL   = "http://127.0.0.1:11436"
 	DefaultListenHost = "0.0.0.0"
-	DefaultListenPort = 8080
+	// 9066 ("gobb" on a keypad), not 8080. 8080 is the most contended port on a
+	// developer machine — Tomcat, Jenkins and half of every tutorial want it —
+	// and on Windows the dynamic ranges Hyper-V, WSL2 and Docker Desktop reserve
+	// can swallow it outright, which presents as a bind failure netstat cannot
+	// explain. Existing installs are unaffected: a config.toml written before
+	// this change carries an explicit listen_port and keeps it.
+	DefaultListenPort = 9066
 
 	DefaultCtxSize     = 16384
 	DefaultGPULayers   = 99
 	DefaultKVCacheType = "q8_0"
 
-	DefaultSessionTTLHours  = 12
-	DefaultJobMaxConcurrent = 4
+	DefaultSessionTTLHours = 12
+	// One generation at a time. The app has always worked that way and
+	// llama-server is launched with a single slot, so a cap of 4 only ever
+	// bought a backlog it could not serve — press Stop, send again, and the new
+	// request queued behind a generation nobody was reading. Past the cap the
+	// jobs manager now supersedes rather than refusing; see internal/jobs.
+	DefaultJobMaxConcurrent = 1
 	DefaultJobMaxAgeHours   = 48
 )
 

@@ -31,13 +31,18 @@ const DefaultTOML = `# =========================================================
 
 # --- Upstream llama.cpp server ------------------------------------------
 # Base URL of the llama-server process. This can be:
-#   http://127.0.0.1:11434      - local llama.cpp server
+#   http://127.0.0.1:11437      - local llama.cpp server
 #   http://192.168.1.100:8080   - remote machine on your LAN
+#                                 (8080 is llama.cpp's own default)
 #   https://your-server.com     - remote with TLS
 #
 # The UI and chat state are served by this program. The llama.cpp
 # server handles model inference. They talk over HTTP.
-llm_url = "http://127.0.0.1:11434"
+#
+# 11437 and not 11434 because 11434 is Ollama's port. Sharing it meant
+# the launcher saw Ollama answering, assumed llama-server was already
+# up, and never started its own.
+llm_url = "http://127.0.0.1:11437"
 
 # --- Optional upstream services -----------------------------------------
 # If nothing answers, features degrade gracefully: web search turns off
@@ -55,8 +60,15 @@ llm_api_key = ""
 # --- Listener -----------------------------------------------------------
 # 0.0.0.0   = accept connections on all interfaces (phones on the LAN).
 # 127.0.0.1 = loopback only (no LAN access).
+#
+# 9066 is "gobb" on a phone keypad. It is not 8080 because 8080 is the
+# port every other dev tool also wants, and on Windows the ranges
+# Hyper-V, WSL2 and Docker reserve can swallow it -- which shows up as a
+# bind failure that netstat cannot explain. If you change this, stay
+# under 32768: above that you are in the range Windows hands out to
+# outbound connections, and the two can race for the same number.
 listen_host = "0.0.0.0"
-listen_port = 8080
+listen_port = 9066
 
 # Extra hostnames allowed in the Host header. IP addresses, "localhost"
 # and any *.local name are always accepted, which covers normal LAN use.
@@ -125,7 +137,13 @@ session_ttl_hours = 12
 
 # Maximum concurrent detached-generation workers. Generations are held in
 # memory, not spooled to disk.
-job_max_concurrent = 4
+#
+# One, because llama-server serves one at a time. Sending a new
+# generation while one is running SUPERSEDES it -- the old one is
+# cancelled and waited out before the new one is dispatched -- rather
+# than queueing behind it or being refused. Raise this only if your
+# upstream really does run multiple slots.
+job_max_concurrent = 1
 
 # How long a finished generation stays available for a client to collect.
 job_max_age_hours = 48
