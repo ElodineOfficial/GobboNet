@@ -613,7 +613,8 @@ function ragScrubWeightAnnotations(text, terms) {
 
 async function buildContextMessages(thread, card, opts) {
   opts = opts || {};
-  const tokenLimit = state.settings.tokenLimit;
+  // Per-card, falling back to the model's detected context.
+  const tokenLimit = resolveContextLimit(card);
   const budget = Math.floor(tokenLimit * 0.9);
 
   // Post-compression landing zone, as a fraction of budget. The gap
@@ -760,7 +761,12 @@ async function buildContextMessages(thread, card, opts) {
     if (toArchive.length > 0) {
       // Fold the just-archived chunk into the running summary (with any prior).
       const _loreBefore = summary || '';
-      summary = await summarizeForLore(summary, toArchive);
+      // Pass the card's authored lore too, so the model can see the premise
+      // it must not restate. Only the generated beats come back and get
+      // stored -- authored lore stays the card's, untouched.
+      const _authored = (card && card.loreEnabled && card.startingLore)
+        ? card.startingLore.trim() : '';
+      summary = await summarizeForLore(summary, toArchive, _authored);
       setThreadLore(thread, summary);
 
       // Record what this pass actually did. Without a before/after size you

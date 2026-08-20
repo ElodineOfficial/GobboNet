@@ -76,8 +76,8 @@ function editPersona(id) {
   const freq = (typeof persona.injectionFrequency === 'number') ? persona.injectionFrequency : 5;
   document.getElementById('persona-frequency').value = freq;
   // Color pickers
-  const ptc = persona.textColor || '#00b8ff';
-  const pdc = persona.dialogColor || '#00f3ff';
+  const ptc = persona.textColor   || FALLBACK_PERSONA_TEXT_COLOR;
+  const pdc = persona.dialogColor || FALLBACK_PERSONA_DIALOG_COLOR;
   document.getElementById('persona-textcolor').value = ptc;
   document.getElementById('persona-textcolor-hex').value = ptc;
   document.getElementById('persona-dialogcolor').value = pdc;

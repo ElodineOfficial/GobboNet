@@ -27,6 +27,8 @@ conversations/
 active-model.json
 .llama-launch.cmd
 .embed-launch.cmd
+# The web-UI port, chosen at install time. Per-machine, like the secret.
+.gobbonet-port
 # Detached-generation spools written by fileserver.ps1. Reply text, same
 # sensitivity class as .gobbonet-state.json above.
 .jobs/
@@ -64,3 +66,4 @@ hardware.ini
 /llama-server.log
 /state.json
 /.gobbonet-secret
+/perf.toml

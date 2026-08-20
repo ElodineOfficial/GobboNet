@@ -196,6 +196,27 @@ async function sendMessage(overrideContent) {
 
   applyGenerationOutcome(assistantMsg, outcome, 'diagnostic');
 
+  // Final repaint. Nothing between here and the last streamed token has
+  // touched the DOM, and by now four things have changed underneath it:
+  //
+  //   1. finalizeStreamMessage flushes the last pending bytes into
+  //      .content (03-generation.js), after the last surgical paint.
+  //   2. It may also reparent .reasoning into .content when a thinking
+  //      model never emitted a channel marker.
+  //   3. The card-code 'reply' hook can rewrite the text outright.
+  //   4. Markdown that only resolves once the text is COMPLETE was last
+  //      parsed mid-stream. A closing backtick, fence or quote that had
+  //      not arrived yet leaves the partial parse frozen in the DOM --
+  //      which is why dialogue colouring looked random: a quote whose
+  //      closing mark landed in the final chunk never got coloured, and a
+  //      quote inside a not-yet-closed code span got coloured and stayed
+  //      that way.
+  //
+  // renderStreamingUpdate is the same surgical painter used during the
+  // stream, so this is one cheap re-parse of the finished text, not a
+  // full re-render.
+  try { renderStreamingUpdate(assistantMsg); } catch (e) { console.error('[render] final repaint:', e); }
+
   // Response timer: stamp how long this generation took. The client was
   // attached for the whole turn, so local wall-clock (ms precision) is
   // exact here — server job stamps only matter on the resume path.
@@ -314,15 +335,6 @@ function clearCotWatchdog() {
 function updateCotTimeoutRow() {
   const enabled = document.getElementById('set-cot-timeout-enabled').checked;
   const wrap = document.getElementById('cot-timeout-timer-wrap');
-  if (wrap) {
-    wrap.style.opacity = enabled ? '1' : '0.35';
-    wrap.style.pointerEvents = enabled ? '' : 'none';
-  }
-}
-
-function updateSmartLimitRow() {
-  const enabled = document.getElementById('set-smart-limit-enabled').checked;
-  const wrap = document.getElementById('smart-limit-tokens-wrap');
   if (wrap) {
     wrap.style.opacity = enabled ? '1' : '0.35';
     wrap.style.pointerEvents = enabled ? '' : 'none';
@@ -775,6 +787,27 @@ async function regenerateFromThread(options = {}) {
   finalizeStreamMessage(assistantMsg);
   applyGenerationOutcome(assistantMsg, outcome, 'plain');
 
+  // Final repaint. Nothing between here and the last streamed token has
+  // touched the DOM, and by now four things have changed underneath it:
+  //
+  //   1. finalizeStreamMessage flushes the last pending bytes into
+  //      .content (03-generation.js), after the last surgical paint.
+  //   2. It may also reparent .reasoning into .content when a thinking
+  //      model never emitted a channel marker.
+  //   3. The card-code 'reply' hook can rewrite the text outright.
+  //   4. Markdown that only resolves once the text is COMPLETE was last
+  //      parsed mid-stream. A closing backtick, fence or quote that had
+  //      not arrived yet leaves the partial parse frozen in the DOM --
+  //      which is why dialogue colouring looked random: a quote whose
+  //      closing mark landed in the final chunk never got coloured, and a
+  //      quote inside a not-yet-closed code span got coloured and stayed
+  //      that way.
+  //
+  // renderStreamingUpdate is the same surgical painter used during the
+  // stream, so this is one cheap re-parse of the finished text, not a
+  // full re-render.
+  try { renderStreamingUpdate(assistantMsg); } catch (e) { console.error('[render] final repaint:', e); }
+
   // Response timer (before the variant sync so the slot captures it).
   assistantMsg.genMs = Math.max(0, Date.now() - (assistantMsg.genStartedAt || assistantMsg.timestamp));
   delete assistantMsg.genStartedAt;
@@ -874,6 +907,27 @@ async function finalizeJobIntoThread(thread, jobId, { live = false } = {}) {
   const outcome = await runGenerationStream(thread, msg, null, { resumeJobId: jobId });
   finalizeStreamMessage(msg);
   applyGenerationOutcome(msg, outcome, 'plain');
+
+  // Final repaint. Nothing between here and the last streamed token has
+  // touched the DOM, and by now four things have changed underneath it:
+  //
+  //   1. finalizeStreamMessage flushes the last pending bytes into
+  //      .content (03-generation.js), after the last surgical paint.
+  //   2. It may also reparent .reasoning into .content when a thinking
+  //      model never emitted a channel marker.
+  //   3. The card-code 'reply' hook can rewrite the text outright.
+  //   4. Markdown that only resolves once the text is COMPLETE was last
+  //      parsed mid-stream. A closing backtick, fence or quote that had
+  //      not arrived yet leaves the partial parse frozen in the DOM --
+  //      which is why dialogue colouring looked random: a quote whose
+  //      closing mark landed in the final chunk never got coloured, and a
+  //      quote inside a not-yet-closed code span got coloured and stayed
+  //      that way.
+  //
+  // renderStreamingUpdate is the same surgical painter used during the
+  // stream, so this is one cheap re-parse of the finished text, not a
+  // full re-render.
+  try { renderStreamingUpdate(msg); } catch (e) { console.error('[render] final repaint:', e); }
 
   // Response timer. The server's own stamps are the honest answer here:
   // for a background replay the reply finished at some point while the tab

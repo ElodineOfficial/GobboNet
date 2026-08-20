@@ -157,10 +157,10 @@ function renderMessages() {
   const cardName = card.name || 'Assistant';
 
   // Resolve text/dialog colors
-  const userTextColor = persona.textColor || '';
-  const userDialogColor = persona.dialogColor || '';
-  const aiTextColor = card.textColor || '';
-  const aiDialogColor = card.dialogColor || '';
+  const userTextColor   = persona.textColor   || FALLBACK_PERSONA_TEXT_COLOR;
+  const userDialogColor = persona.dialogColor || FALLBACK_PERSONA_DIALOG_COLOR;
+  const aiTextColor     = card.textColor      || FALLBACK_CARD_TEXT_COLOR;
+  const aiDialogColor   = card.dialogColor    || FALLBACK_CARD_DIALOG_COLOR;
 
   // ── Branch origin banner ────────────────────────────────────────
   let branchBannerHtml = '';
@@ -464,14 +464,6 @@ function renderMessages() {
   }
 }
 
-function renderReminderIndicator() {
-  const container = document.getElementById('messages');
-  const div = document.createElement('div');
-  div.className = 'message message-system-inject';
-  div.innerHTML = '&#9888; Reminder prompt injected';
-  container.appendChild(div);
-}
-
 function renderSearchIndicator(status) {
   const container = document.getElementById('messages');
   // Remove previous search indicator if any
@@ -533,9 +525,11 @@ function openLoreInspector() {
   // --- current summary -------------------------------------------------
   html += '<div class="lore-section-label">Current summary</div>';
   if (lore) {
-    html += '<div class="lore-meta">' + lore.length + ' chars &middot; ~'
-          + _loreTokens(lore) + ' tokens &middot; ' + log.length
-          + ' compression' + (log.length === 1 ? '' : 's') + ' recorded</div>';
+    const beatCount = lore.split('\n').filter(l => l.trim()).length;
+    html += '<div class="lore-meta">' + beatCount + ' beat' + (beatCount === 1 ? '' : 's')
+          + ' &middot; ' + lore.length + ' chars &middot; ~' + _loreTokens(lore)
+          + ' tokens &middot; ' + log.length + ' pass'
+          + (log.length === 1 ? '' : 'es') + ' recorded</div>';
     html += '<pre class="lore-summary-text">' + escapeHtml(lore) + '</pre>';
   } else {
     html += '<div class="lore-empty">No summary yet. Compression starts once the '
@@ -589,13 +583,21 @@ function openLoreInspector() {
       html += '</div>';
     }
 
-    // Only editorialise when there is enough history to mean something.
-    if (log.length >= 3) {
-      const grew = log.slice(-3).filter(e => (e.after - e.before) > 0).length;
-      if (grew === 3) {
-        html += '<div class="lore-warn">Grew on each of the last three passes. '
-              + 'A summary that only ever gets longer is appending instead of '
-              + 'rewriting, which is what makes fixed details repeat.</div>';
+    // The old warning here fired when the log grew three passes running,
+    // back when compression rewrote the whole summary and growth meant it
+    // was appending instead. Appending is now the design, so that warning
+    // flagged correct behaviour as a fault. The useful signal changed with
+    // it: what matters is the SIZE of each addition. A beat is one
+    // sentence, so a pass adding a paragraph means the model is ignoring
+    // the length rule and the log will bloat one entry at a time.
+    const adds = log.map(e => e.after - e.before).filter(n => n > 0);
+    if (adds.length >= 3) {
+      const avg = Math.round(adds.reduce((a, b) => a + b, 0) / adds.length);
+      if (avg > 220) {
+        html += '<div class="lore-warn">Beats are averaging ' + avg + ' characters. '
+              + 'They should be one sentence, nearer 60-100. The model is not '
+              + 'holding to the length rule, and the log will fill with prose '
+              + 'rather than plot.</div>';
       }
     }
   }
@@ -721,7 +723,7 @@ function updateContextInfo() {
   const loreTokens = authoredLoreTokens + summaryTokens;
 
   const projected = systemTokens + personalityTokens + liveTokens + loreTokens;
-  const budget    = Math.floor(state.settings.tokenLimit * 0.9);
+  const budget    = Math.floor(resolveContextLimit(card) * 0.9);
   // Mirror RESPONSE_RESERVE_FACTOR from buildContextMessages — keep these
   // in sync. Showing % against `effectiveBudget` makes the readout track
   // the actual compression trigger; otherwise users see compression fire

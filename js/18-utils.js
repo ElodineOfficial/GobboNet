@@ -166,6 +166,44 @@ function buildSearchEntry(title, content, url) {
   return `<div class="search-entry"><div class="search-entry-title">${safeTitle}</div><div class="search-entry-content">${safeContent}</div></div>`;
 }
 
+/* Quote styles a model might use for speech.
+ *
+ * Three things this has to survive, all of which broke earlier versions:
+ *
+ * 1. ESCAPING ASYMMETRY. escapeHtml() turns " into &quot; and leaves every
+ *    other quote character as a literal, so the straight case must match
+ *    the entity and the rest must match the raw character.
+ *
+ * 2. MIXED DELIMITERS. A model will open with " and close with ” in the
+ *    same breath, or drift from straight to curly halfway down a message.
+ *    Requiring a matching pair made colouring look random. The double-quote
+ *    family below therefore accepts any opener paired with any closer,
+ *    which also gets German „...“ for free -- there, “ is the CLOSING mark.
+ *
+ * 3. RUNAWAY MATCHES. [\s\S]+? crosses newlines, so one unpaired quote
+ *    could pair with another five lines later and colour the narration in
+ *    between. The inner text is bounded to 400 characters and forbidden
+ *    from crossing a blank line, so a stray quote fails to match instead of
+ *    painting half the message.
+ *
+ * Single curly quotes are deliberately absent: ’ is far more often an
+ * apostrophe than a closing quote, and treating it as a delimiter would
+ * mis-colour more text than it fixed.
+ */
+const DIALOG_INNER = '(?:(?!\\n\\n)[\\s\\S]){1,400}?';
+const DIALOG_QUOTE_RE = new RegExp(
+  // CJK corner brackets - unambiguous, so matched as strict pairs.
+  '\\u300c' + DIALOG_INNER + '\\u300d' + '|' +   // 「...」
+  '\\u300e' + DIALOG_INNER + '\\u300f' + '|' +   // 『...』
+  // Guillemets, both widths.
+  '\\u00ab' + DIALOG_INNER + '\\u00bb' + '|' +   // «...»
+  '\\u2039' + DIALOG_INNER + '\\u203a' + '|' +   // ‹...›
+  // Double-quote family: any opener, any closer. Covers "...", “...”,
+  // German „...“, and every mixed combination a model produces.
+  '(?:&quot;|[\\u201c\\u201e\\u201f])' + DIALOG_INNER + '(?:&quot;|[\\u201d\\u201c\\u201f])',
+  'g'
+);
+
 function parseMarkdown(text, dialogColor) {
   if (!text) return '';
   let html = escapeHtml(text);
@@ -222,9 +260,14 @@ function parseMarkdown(text, dialogColor) {
       // not a literal " — otherwise this never fires and speech loses its
       // dialog color. Lazy [\s\S]+? pairs each opening &quot; with the
       // next one and tolerates other entities (&amp;, &#39;, …) inside.
-      return text.replace(/&quot;([\s\S]+?)&quot;/g, (_, inner) => {
-        return `<span class="dialog-text" style="color:${dialogColor};">&quot;${inner}&quot;</span>`;
-      });
+      // Wrap the whole match, delimiters included. Earlier drafts rebuilt
+      // the string from the captured inner text, which meant working out
+      // which delimiter had matched and slicing it back off the front --
+      // fiddly, and wrong the moment the inner text happens to repeat the
+      // opening character. The match already contains exactly what should
+      // be wrapped, so wrap it and keep the model's own punctuation.
+      return text.replace(DIALOG_QUOTE_RE, (m) =>
+        `<span class="dialog-text" style="color:${dialogColor};">${m}</span>`);
     });
   }
 

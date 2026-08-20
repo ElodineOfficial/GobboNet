@@ -11,7 +11,7 @@
    but this stamp still shows the old date, you're on a cached
    copy — hard-refresh (Ctrl+Shift+R) to bust it.
 ================================================================ */
-const CHAT_HTML_BUILD = '2026-05-16-nemo-strict-template-fix';
+const CHAT_HTML_BUILD = '1.5.8-strict-health-monitor';
 console.log(`%c[chat.html build] ${CHAT_HTML_BUILD}`, 'color:#0a0;font-weight:bold');
 
 /* ================================================================
