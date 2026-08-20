@@ -95,7 +95,9 @@ The very first time, it asks you to **choose a password**. Type one (at least 6 
 
 This password protects your chat. Anyone else on your home Wi-Fi could otherwise open it, so the password keeps it private. You'll only type it again when you connect from your phone.
 
-> Your password is stored in a scrambled form that can't be reversed, and it never leaves your computer. If you forget it, you can set a new one (see Troubleshooting).
+> Your password is stored in a scrambled form that can't be reversed. If you forget it, you can set a new one (see Troubleshooting).
+>
+> One thing worth knowing: when you sign in **from your phone**, the password travels across your home network in plain text, because that connection isn't encrypted. The sign-in page says the same thing. It's fine on a home network you trust — just avoid it on shared or public Wi-Fi, and don't reuse a password that matters elsewhere.
 
 ### It will offer to download the AI engine
 
@@ -171,7 +173,7 @@ Gobbonet is more than a plain chatbox. Here are the parts you'll actually use, i
 - **Characters.** It comes with a few built-in personalities (a terse coder, a wordy lore-keeper, a riddle-speaking oracle). You can switch between them or make your own — give it a name, a description, and a style, and the AI will play that role. You can also **bring in character cards you already have, and send yours back out** (the common `.png` cards used by other AI chat apps), so your existing collection works here too. Most cards carry over cleanly, though a few may need small tweaks after importing.
 - **lorebooks.** A character can carry a lorebook — lore, world details, backstory, notes, whatever you want it to know. Rather than cramming all of that into every single message, GobboNet works out which bits are actually relevant to what you're talking about right now and quietly slips those in. It means a character can "know" far more than would ever fit in one conversation.
 - **Threads.** Each conversation is saved separately in the sidebar, like chat history. You can rename them, pin favorites, and sort them into folders.
-- **Web search (optional).** There's a search button that lets the AI look things up online. This is the *one* feature that needs the internet and a free key — see below. Everything else is fully offline.
+- **Web search (optional).** There's a search button that lets the AI look things up online. It needs the internet and a free key — see below. When search is on, the message you typed is what gets sent as the search query, so keep that in mind for anything private. Everything else runs offline — the only other thing that can reach out is a custom extension you point at a URL (see Customization).
 - **Switching models.** If you've downloaded more than one model, you can switch between them from a dropdown at the top — no need to restart.
 - **Saving files.** If you ask the AI to write something like code or a document, it can give you a **Save** button to download it.
 - **Settings.** A gear/settings area lets you tweak things, change the look, and manage your data.
@@ -363,14 +365,14 @@ Everything GobboNet can do, grouped so it's easy to scan.
 
 **Web search (optional)**
 - Search the web — let the AI look things up online (needs a free Ollama key).
-- Privacy protection — identifying metadata and telemetry are stripped from your searches.
+- Privacy protection — searches go out without browser identifying headers (no user agent, no cookies). The search text itself is sent as you typed it, along with your Ollama key.
 
 **Saving & getting things out**
 - Save AI output as a `.txt` or `.json` file. (Other file types are intentionally left out for now to keep things simple and safe.)
 - Export, import, or purge all your data — back up everything to a file, restore it later, or wipe it completely.
 
 **Customization (advanced)**
-- Internal "mod" controls — add your own custom JavaScript extensions and override the stylesheet to change how the app looks and works.
+- Internal "mod" controls — add your own custom JavaScript extensions and override the stylesheet to change how the app looks and works. If you load one from a URL, that URL can point anywhere on the internet and the code runs with full access to the page — so only use sources you trust.
 
 **Scheduling**
 - Scheduled tasks — set prompts to send themselves at specific times.
