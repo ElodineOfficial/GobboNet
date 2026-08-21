@@ -204,9 +204,12 @@ function updateStorybookReadout() {
 
 
 function renderAvatar(avatarStr, name) {
-  if (avatarStr && (avatarStr.startsWith('http') || avatarStr.startsWith('data:') || avatarStr.startsWith('file:'))) {
-    return `<img src="${escapeHtml(avatarStr)}" alt="">`;
-  }
+  // Every avatar in the app funnels through here, including the per-message
+  // render loop in 13-dashboard.js -- so this is the one place the remote-image
+  // policy has to hold. safeImageUrl returns '' for anything not permitted,
+  // and '' falls through to the initial rather than rendering an empty src.
+  const src = safeImageUrl(avatarStr);
+  if (src) return `<img src="${escapeHtml(src)}" alt="">`;
   // Fallback: first letter of name
   const initial = (name || '?').charAt(0).toUpperCase();
   return initial;
@@ -215,8 +218,13 @@ function renderAvatar(avatarStr, name) {
 function previewAvatar(inputId, previewId) {
   const url = document.getElementById(inputId).value.trim();
   const preview = document.getElementById(previewId);
-  if (url && (url.startsWith('http') || url.startsWith('data:') || url.startsWith('file:'))) {
-    preview.innerHTML = `<img src="${escapeHtml(url)}" alt="">`;
+  const src = safeImageUrl(url);
+  if (src) {
+    preview.innerHTML = `<img src="${escapeHtml(src)}" alt="">`;
+  } else if (isSuppressedRemoteImage(url)) {
+    // Distinguish "blocked by your setting" from "not a picture" -- otherwise a
+    // user pastes a perfectly good URL, sees '--', and assumes it is broken.
+    preview.textContent = 'remote image \u2014 off in Settings';
   } else {
     preview.innerHTML = '--';
   }
@@ -229,7 +237,12 @@ function handleAvatarFile(fileInput, textInputId, previewId) {
   reader.onload = function(e) {
     const dataUrl = e.target.result;
     document.getElementById(textInputId).value = dataUrl;
-    document.getElementById(previewId).innerHTML = `<img src="${dataUrl}" alt="">`;
+    // Locally chosen, but route it through the same gate and escape it: one
+    // path for every image, no exceptions to remember. This was the only
+    // avatar sink with no escaping at all.
+    const src = safeImageUrl(dataUrl);
+    document.getElementById(previewId).innerHTML =
+      src ? `<img src="${escapeHtml(src)}" alt="">` : '--';
   };
   reader.readAsDataURL(file);
 }

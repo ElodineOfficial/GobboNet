@@ -21,6 +21,7 @@ function openSettings() {
   // Smart response limit
   const aScale = state.settings.avatarScale || 1;
   document.getElementById('set-avatar-scale').value = aScale;
+  document.getElementById('set-allow-remote-images').checked = !!state.settings.allowRemoteImages;
   document.getElementById('avatar-scale-val').textContent = Math.round(aScale * 100) + '%';
   document.getElementById('settings-modal').classList.add('open');
 }
@@ -37,9 +38,11 @@ function saveSettings() {
   state.settings.cotTimeoutEnabled = document.getElementById('set-cot-timeout-enabled').checked;
   state.settings.cotTimeoutMinutes = parseInt(document.getElementById('set-cot-timeout-minutes').value) || 2;
   state.settings.avatarScale = parseFloat(document.getElementById('set-avatar-scale').value) || 1;
+  state.settings.allowRemoteImages = document.getElementById('set-allow-remote-images').checked;
   saveState();
   closeSettings();
   renderMessages();
+  applyActiveCardBackground();   // background obeys the same gate -- repaint it
   updateContextInfo();
   updatePrivacyBadge();
 }
@@ -87,16 +90,16 @@ function renderCardGrid() {
   grid.innerHTML = state.characterCards.map(c => {
     const av = renderAvatar(c.avatar, c.name);
     return `
-    <div class="card-item ${c.id === state.activeCardId ? 'active' : ''}" onclick="activateCard('${c.id}')">
+    <div class="card-item ${c.id === state.activeCardId ? 'active' : ''}" onclick="activateCard('${escapeJsAttr(c.id)}')">
       <div class="card-avatar">${av}</div>
       <div class="card-info">
         <div class="card-name">${escapeHtml(c.name)}</div>
         <div class="card-desc">${escapeHtml((c.writingStyle || '').slice(0, 60))}</div>
       </div>
       <div class="card-actions">
-        <button class="msg-action-btn btn-edit" onclick="event.stopPropagation();editCard('${c.id}')">Edit</button>
-        <button class="msg-action-btn" onclick="event.stopPropagation();copyCard('${c.id}')" title="Duplicate this character">Copy</button>
-        ${state.characterCards.length > 1 ? `<button class="msg-action-btn btn-delete" onclick="event.stopPropagation();deleteCardById('${c.id}')" title="Delete this character">Del</button>` : ''}
+        <button class="msg-action-btn btn-edit" onclick="event.stopPropagation();editCard('${escapeJsAttr(c.id)}')">Edit</button>
+        <button class="msg-action-btn" onclick="event.stopPropagation();copyCard('${escapeJsAttr(c.id)}')" title="Duplicate this character">Copy</button>
+        ${state.characterCards.length > 1 ? `<button class="msg-action-btn btn-delete" onclick="event.stopPropagation();deleteCardById('${escapeJsAttr(c.id)}')" title="Delete this character">Del</button>` : ''}
       </div>
     </div>`;
   }).join('');

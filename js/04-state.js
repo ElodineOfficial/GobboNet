@@ -144,6 +144,12 @@ const DEFAULT_SETTINGS = {
   smartLimitEnabled: false,   // cap AI reply length (rough token estimate, sentence-end cut)
   smartLimitTokens: 300,      // max estimated tokens per reply when the cap is on
   avatarScale: 1,             // avatar size multiplier (CONFIG slider; 1 = default)
+  // Remote (http/https) images in cards -- avatars, backgrounds, thumbnails.
+  // Off by default: a card from an import or a synced peer can point <img src>
+  // at any host, and that beacons this machine's IP on render. data:/blob:
+  // images are unaffected and always work.
+  allowRemoteImages: false,
+  remoteImageNoticeSeen: false,   // one-time notice bookkeeping; see 24-boot.js
   // ---- RAG retrieval knobs (Stage 1) ----
   // Full snapshot of these rides into every telemetry record's `config`
   // block so any turn is reproducible. Tune one knob at a time; the shadow

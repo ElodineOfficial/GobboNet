@@ -127,6 +127,15 @@
   <div class="modal">
     <h2>CONFIG</h2>
 
+    <div class="form-group" style="margin-top:12px; padding:12px; border:1px solid var(--green-dim); border-radius:var(--radius); background:rgba(0,255,65,0.03);">
+      <label>&#127760; Remote Images In Cards</label>
+      <div class="form-hint" style="margin-top:2px;margin-bottom:10px;">Character avatars and backgrounds can point at a web address instead of holding the picture themselves. Loading one contacts that server, which tells it your IP address &mdash; the only thing in GobboNet that reaches outside your machine without you asking. Off by default. Pictures pasted or uploaded directly are unaffected and always work.</div>
+      <label class="code-enable-row">
+        <input type="checkbox" id="set-allow-remote-images">
+        <span>Allow remote images</span>
+      </label>
+    </div>
+
     <div class="form-group" style="margin-top:12px; padding:12px; border:1px solid rgba(255,149,0,0.22); border-radius:var(--radius); background:rgba(255,149,0,0.03);">
       <label>&#9889; Performance &mdash; llama.cpp tuning</label>
       <div class="form-hint" style="margin-top:2px;margin-bottom:12px;">

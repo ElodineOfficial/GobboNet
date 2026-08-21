@@ -28,13 +28,20 @@ machine can reach it regardless.
 |---|---|---|
 | 9066 | `+` (all interfaces) after `setup-lan.bat`, else `127.0.0.1` | the chat UI |
 | 11437 | `127.0.0.1` | llama-server |
-| 11435 | `127.0.0.1` | search proxy |
 | 11436 | `127.0.0.1` | embedding server |
 
 llama-server moved off 11434 because that is Ollama's default port and the
-two collided on any machine with Ollama installed. All four ports are
-overridable: `GEMMA_LISTEN_PORT`, `GEMMA_LLM_PORT`, `GEMMA_SEARCH_PORT`,
-`GEMMA_EMBED_PORT`.
+two collided on any machine with Ollama installed. The remaining ports are
+overridable: `GEMMA_LISTEN_PORT`, `GEMMA_LLM_PORT`, `GEMMA_EMBED_PORT`.
+
+Web search used to run as a fourth process on its own port. It is now served
+by the file server itself, so there is one fewer listener, one fewer port,
+and one fewer thing to reason about. `GEMMA_SEARCH_PORT` is ignored.
+
+Only the web UI port is opened to the LAN. llama-server and the embedding
+server bind `127.0.0.1` and are reached through the file server's proxy,
+which is behind the password -- so `setup-lan.bat` now creates a firewall
+rule only for the web UI and deletes the older rules for the others.
 
 `setup-lan.bat` scopes its firewall rules to `remoteip=LocalSubnet`, so the
 wider internet cannot reach any of it. Only the machines on your own network
@@ -75,9 +82,49 @@ Two places, and both matter if you are handling anything sensitive:
 
 Uninstalling removes the state file and the job spool. **It cannot reach
 into a browser profile** — clear that yourself from site settings, for each
-address you used. See `PURGE.md` for the full procedure.
+address you used. `PURGE.md` has the full procedure.
+
+In the app, **Data → PURGE ALL** clears this browser's copy: threads,
+characters, personas, macros, and the cached embeddings and retrieval
+telemetry derived from them. It reports anything it could not clear rather
+than claiming success.
+
+One residue is genuinely unreachable, and it is worth stating rather than
+implying: a phone or tablet that connected to the chat keeps a full copy in
+its own browser storage, and nothing on this PC can reach it. There is no
+push channel, and at uninstall time the server is being shut down. Clear
+each device while you still have it.
 
 ---
+
+## Remote images are opt-in
+
+A character card can hold its picture inline, or hold a web address pointing
+at one. The second kind is fetched by your browser when a message renders,
+which tells that server your IP address — no click required, and a card can
+arrive from an import or a synced peer.
+
+From 1.5.9 those are **off by default** and gated behind Settings → *Allow
+remote images*. Inline pictures (`data:`) and locally created ones (`blob:`)
+always work and never touch the network. `file:` URLs are dropped entirely;
+a page served over http cannot load them, so they never worked here.
+
+One rule covers avatars, card backgrounds and attachment thumbnails alike.
+
+## The render path
+
+Values that reach the page — character ids, thread names, macro triggers,
+filenames from model output, colours from a card — are treated as untrusted
+regardless of where they came from, because any of them can arrive from an
+imported card, a synced peer, or the model itself.
+
+Worth knowing if you are reading the code: HTML-escaping alone is **not**
+sufficient inside an inline event handler. The HTML parser decodes character
+references in an attribute value before the JavaScript is compiled, so an
+escaped `&#39;` becomes a real quote again and closes the string. Values
+going into handlers are escaped for the JavaScript layer first and the HTML
+layer second. Colours are allowlisted rather than escaped, because escaping
+is the wrong tool for a CSS context.
 
 ## What this does not protect against
 

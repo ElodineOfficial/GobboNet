@@ -364,6 +364,34 @@ function Write-FileAscii {
     [System.IO.File]::WriteAllText($Path, $Content, [System.Text.Encoding]::ASCII)
 }
 
+# Make a short identifier safe to place inside a double-quoted argument of a
+# generated .cmd. A '"' closes the quoting and lets & | < > ^ chain a second
+# command; CR/LF appends a whole new line to the script. Model ids, template
+# names and cache-type flags never legitimately contain any of these, so strip
+# rather than escape -- there is no quoting scheme cmd.exe honours consistently.
+function ConvertTo-CmdArgSafe([string]$s) {
+    if (-not $s) { return '' }
+    $t = $s -replace '[\r\n]', ' '
+    return ($t -replace '[%!^&<>|"]', '').Trim()
+}
+
+# Same job, for a FILESYSTEM PATH, and deliberately gentler.
+#
+# ConvertTo-CmdArgSafe above would strip & % ^ ! -- and all four are LEGAL in
+# Windows paths. Running a path through it silently corrupts any install under
+# a folder like "Models & Templates", or a username containing '!', and the
+# failure surfaces as llama-server refusing a template file that plainly exists.
+#
+# Inside a double-quoted argument the shell metacharacters & | < > are already
+# inert, and the generated .cmd does not enable delayed expansion, so a bare '!'
+# is literal there too. That leaves exactly two characters that can break out of
+# the quoting: '"' and CR/LF. Both are ILLEGAL in Windows filenames, so removing
+# them costs nothing legitimate and closes the hole completely.
+function ConvertTo-CmdPathSafe([string]$s) {
+    if (-not $s) { return '' }
+    return (($s -replace '[\r\n]', ' ') -replace '"', '').Trim()
+}
+
 # --- Auth helpers ------------------------------------------------------------
 
 # Constant-time string compare so a network attacker can't time-probe the
@@ -1282,8 +1310,8 @@ function Build-LaunchScript {
         '--host',      '127.0.0.1',
         '--ctx-size',  "$CtxSize",
         '--n-gpu-layers', "$GpuLayers",
-        '--cache-type-k', $KvCacheType,
-        '--cache-type-v', $KvCacheType,
+        '--cache-type-k', (ConvertTo-CmdArgSafe $KvCacheType),
+        '--cache-type-v', (ConvertTo-CmdArgSafe $KvCacheType),
         '--parallel',  '1'
     )
     
@@ -1295,9 +1323,15 @@ function Build-LaunchScript {
     # makes llama-server treat the path text itself as a literal template.
     if ($chatTemplateFile -ne '') {
         $sidecarAbs = if ([System.IO.Path]::IsPathRooted($chatTemplateFile)) { $chatTemplateFile } else { Join-Path $Root $chatTemplateFile }
-        $argList += @('--chat-template-file', ('"{0}"' -f $sidecarAbs))
+        # Path-safe, not arg-safe: see ConvertTo-CmdPathSafe. Stripping '&' from
+        # a real install path is a bug, not a hardening.
+        $argList += @('--chat-template-file', ('"{0}"' -f (ConvertTo-CmdPathSafe $sidecarAbs)))
     } elseif ($chatTemplate) {
-        $argList += @('--chat-template', $chatTemplate)
+        # Quoted AND scrubbed: this line is written into a .cmd and executed, so
+        # an unquoted value carrying '&' would chain a second command. The values
+        # identify-model.ps1 emits are allowlisted literals, but models-list.json
+        # is a file on disk and this is the last gate before it becomes a command.
+        $argList += @('--chat-template', ('"{0}"' -f (ConvertTo-CmdArgSafe $chatTemplate)))
     }
 
     $argList += @('--reasoning-format', 'auto')
@@ -1471,6 +1505,59 @@ function Update-ModelsListActive {
 # Handle POST /swap-model. Kicks off the swap, returns 202 immediately.
 # The actual readiness check happens lazily in /swap-status when the
 # client polls.
+function Handle-Search {
+    param($Request, $Response, [string]$SubPath)
+
+    # Web search, served directly instead of through a second process.
+    #
+    # This used to be a separate PowerShell started from launch.bat with
+    # -EncodedCommand and a 4,656-character base64 blob: a hidden-window
+    # process, execution policy bypassed, opening a listener and relaying
+    # authenticated traffic to an external host. That is indistinguishable in
+    # shape from a command-and-control relay, and antivirus weights encoded
+    # PowerShell heavily and largely regardless of payload, because ordinary
+    # software almost never does it.
+    #
+    # Nothing about the behaviour changes here. The same request goes to the
+    # same place with the same header. What goes away is a process, a port, a
+    # retry loop, a failure mode, and the single strongest malware signal in
+    # the project. launch.bat already carries comments (see :llama_download and
+    # the embed download) explaining why this pattern was removed elsewhere;
+    # the search path had kept a worse version of it.
+
+    if ($SubPath -eq '/health' -or $SubPath -eq '') {
+        # Same body the standalone proxy returned, because :http_alive in
+        # launch.bat matches on "status" and the client checks this before
+        # every search.
+        Write-Json $Response 200 @{ status = 'ok' }
+        return
+    }
+
+    $reader = New-Object System.IO.StreamReader($Request.InputStream, [System.Text.Encoding]::UTF8)
+    $body = $reader.ReadToEnd(); $reader.Close()
+
+    $target = 'https://ollama.com/api' + $SubPath
+    $headers = @{ 'Content-Type' = 'application/json' }
+
+    # The client sends its own Authorization for the search API. That header is
+    # the user's search credential and has nothing to do with this server's
+    # session cookie, so it is forwarded verbatim -- collapsing the two hops
+    # must not silently drop it, or search fails with an upstream 401 that
+    # looks like a proxy bug.
+    $auth = $Request.Headers['Authorization']
+    if ($auth) { $headers['Authorization'] = $auth }
+
+    try {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        $wr = Invoke-WebRequest -Uri $target -Method POST -Body $body `
+                                -Headers $headers -UseBasicParsing -TimeoutSec 30
+        Write-Text $Response 200 'application/json' $wr.Content
+    } catch {
+        $msg = $_.Exception.Message -replace '"','' -replace "`r",'' -replace "`n",' '
+        Write-Json $Response 502 @{ error = ('search: ' + $msg) }
+    }
+}
+
 function Handle-Perf {
     param($Request, $Response)
 
@@ -1934,7 +2021,8 @@ while ($listener.IsListening) {
             Invoke-Proxy -Request $request -Response $response -Prefix '/llm' -UpstreamPort $LlmPort -InjectLlmKey $true
         }
         elseif ($path -eq '/search' -or $path -like '/search/*') {
-            Invoke-Proxy -Request $request -Response $response -Prefix '/search' -UpstreamPort $SearchPort
+            # Direct, no second process. See Handle-Search.
+            Handle-Search -Request $request -Response $response -SubPath ($path.Substring(7))
         }
         elseif ($path -eq '/embed' -or $path -like '/embed/*') {
             # RAG embedding upstream (llama-server --embeddings on loopback).

@@ -15,6 +15,23 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# Make a value safe to interpolate into a `set "NAME=value"` line of a generated
+# .cmd. launch.bat runs under `setlocal enabledelayedexpansion`, so a literal '!'
+# is eaten and can unbalance the parse; '"' terminates the set early; & | < > ^
+# chain or redirect a new command; and CR/LF starts an entirely new line. None of
+# those belong in a model id, family, template name or hash, so drop them rather
+# than trying to quote around them. Mirrors ConvertTo-EnvSafe in hardware-probe.ps1.
+#
+# Everything this touches originates in a GGUF key-value block -- raw UTF-8 out
+# of a file the user downloaded -- and ends up in a .cmd that launch.bat CALLs.
+# That is arbitrary command execution as the user, before the chat ever opens.
+function ConvertTo-BatchSafe([string]$s) {
+    if (-not $s) { return '' }
+    $t = $s -replace '[\r\n]', ' '
+    $t = $t -replace '[%!^&<>|"]', ''
+    return $t.Trim()
+}
+
 $GGUF_TYPE_STRING = 8
 $GGUF_TYPE_ARRAY  = 9
 $GGUF_FIXED = @{ 0 = 1; 1 = 1; 2 = 2; 3 = 2; 4 = 4; 5 = 4; 6 = 4; 7 = 1; 10 = 8; 11 = 8; 12 = 8 }
@@ -300,7 +317,15 @@ function Get-ModelInfo {
     }
 
     $t = [string]$meta.chat_template
-    $arch = ([string]$meta.architecture).ToLower()
+    # general.architecture is attacker-controlled: raw UTF-8 lifted out of the
+    # GGUF key-value block, and it flows into $rec.family / $rec.id below, which
+    # -Emit batch writes into a .cmd that launch.bat CALLs. A value carrying a
+    # quote, an ampersand or a newline would break out of the `set "MODEL_ID=..."`
+    # line and run as the user. Real architecture strings are short lowercase
+    # identifiers ('llama', 'qwen3moe', 'gemma3'), so clamp to that shape here --
+    # one choke point, before any consumer sees it.
+    $arch = ([string]$meta.architecture).ToLower() -replace '[^a-z0-9._-]', ''
+    if ($arch.Length -gt 64) { $arch = $arch.Substring(0, 64) }
     $ctx = [int64]$meta.context_length
     if ($ctx -gt 0) { $rec.maxCtx = [int][math]::Min($ctx, [int64]262144) }
 
@@ -459,17 +484,22 @@ if (-not $GgufPath) { throw 'identify-model.ps1: provide -GgufPath or -ModelsDir
 $info = Get-ModelInfo -Path $GgufPath
 
 if ($Emit -eq 'batch') {
-    $dn = ($info.name -replace '[%!^&<>|"]', '')
+    # Every value below is interpolated into a `set "NAME=value"` line in a .cmd
+    # that launch.bat executes with CALL, so each one is a command-injection sink.
+    # $arch is already clamped at the source, but sanitizing again here means a
+    # future field that forgets to do so cannot reopen the hole. Strip the batch
+    # metacharacters (delayed expansion eats a bare '!', and '"' ends the set),
+    # then drop CR/LF so no value can append a line of its own.
     $setLines = @(
-        ('set "MODEL_ID=' + $info.id + '"'),
-        ('set "MODEL_DISPLAY=' + $dn + '"'),
-        ('set "MODEL_FAMILY=' + $info.family + '"'),
-        ('set "MODEL_MAX_CTX=' + $info.maxCtx + '"'),
-        ('set "MODEL_THINK_FMT=' + $info.thinkingFormat + '"'),
+        ('set "MODEL_ID=' + (ConvertTo-BatchSafe $info.id) + '"'),
+        ('set "MODEL_DISPLAY=' + (ConvertTo-BatchSafe $info.name) + '"'),
+        ('set "MODEL_FAMILY=' + (ConvertTo-BatchSafe $info.family) + '"'),
+        ('set "MODEL_MAX_CTX=' + [int]$info.maxCtx + '"'),
+        ('set "MODEL_THINK_FMT=' + (ConvertTo-BatchSafe $info.thinkingFormat) + '"'),
         ('set "MODEL_USE_JINJA=' + ([int]$info.useJinja) + '"'),
-        ('set "MODEL_CHAT_TEMPLATE=' + $info.chatTemplate + '"'),
-        ('set "MODEL_CHAT_TEMPLATE_FILE=' + $info.chatTemplateFile + '"'),
-        ('set "MODEL_TEMPLATE_HASH=' + $info.templateHash + '"')
+        ('set "MODEL_CHAT_TEMPLATE=' + (ConvertTo-BatchSafe $info.chatTemplate) + '"'),
+        ('set "MODEL_CHAT_TEMPLATE_FILE=' + (ConvertTo-BatchSafe $info.chatTemplateFile) + '"'),
+        ('set "MODEL_TEMPLATE_HASH=' + (ConvertTo-BatchSafe $info.templateHash) + '"')
     )
     if ($OutFile) {
         $body = ($setLines -join "`r`n") + "`r`n"

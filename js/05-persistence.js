@@ -79,6 +79,94 @@ function idbBulkPutThreads(threads) {
   });
 }
 function idbClearThreads() { return new Promise((res, rej) => { const r = idbTx('threads','readwrite').clear(); r.onsuccess=()=>res(); r.onerror=()=>rej(r.error); }); }
+
+/* Clear one object store completely. idbClearThreads above is the same
+   operation hard-coded to 'threads'; this generalises it so the purge path can
+   reach the local-only stores too. */
+function idbClearStore(store) {
+  return new Promise((res, rej) => {
+    const r = idbTx(store, 'readwrite').clear();
+    r.onsuccess = () => res();
+    r.onerror = () => rej(r.error);
+  });
+}
+
+/**
+ * Destroy every local trace of the user's data.
+ *
+ * This exists because saving an empty state does NOT delete anything.
+ * writeFullToIdb hands state.threads to idbBulkPutThreads, which iterates the
+ * array calling put() -- so an empty array iterates zero times, writes nothing,
+ * and clears nothing. Every previously stored thread stays in the object store,
+ * and the load path reads that store wholesale. PURGE ALL therefore reported
+ * success while leaving the entire history on disk, and the threads could
+ * reappear on the next reload.
+ *
+ * The clear-then-write pattern already existed correctly in the server-restore
+ * path (06-state-sync.js). The save path never got it, because in normal use a
+ * bulk put over a shrinking-but-nonempty set is close enough to right that the
+ * gap stays invisible. Purge is the one caller where the set goes to zero, and
+ * the one where being wrong matters most.
+ *
+ * Two stores are cleared here that no sync path touches:
+ *   vectors   -- cached embeddings of lore and documents. Derived from user
+ *                content and still descriptive of it.
+ *   telemetry -- per-turn retrieval records carrying thread ids, model ids and
+ *                timestamps. Enough to reconstruct conversation shape without
+ *                any message text.
+ *
+ * Best-effort per store on purpose: one failure must not abandon the rest. A
+ * partial purge should still clear everything it can reach, and say what it
+ * could not.
+ */
+async function wipeLocalStorageAll() {
+  const failed = [];
+
+  if (STORAGE_BACKEND === 'idb' && _idb) {
+    for (const store of ['threads', 'vectors', 'telemetry']) {
+      try {
+        await idbClearStore(store);
+      } catch (e) {
+        failed.push(store);
+        console.warn('[purge] could not clear', store, e && e.message);
+      }
+    }
+    // Re-seed meta from the (already emptied) live state so the next boot finds
+    // a valid record instead of falling through to the localStorage migration
+    // branch and reading a key this function is about to delete.
+    try {
+      await idbPut('meta', metaPartOf(buildStateBlob()), 'app');
+    } catch (e) {
+      failed.push('meta');
+      console.warn('[purge] could not reseed meta', e && e.message);
+    }
+  }
+
+  // SYNC_META_KEY holds lastKnownMtime. Leaving a stale value behind is what
+  // makes a "restore from server" prompt appear immediately after a factory
+  // reset -- the comparison comes up against a mtime that predates nothing.
+  // Built inside a try because SYNC_META_KEY is declared in 06-state-sync.js,
+  // which loads after this file. At call time it always resolves -- but if that
+  // file ever failed to parse, a ReferenceError while building the array would
+  // escape the per-key catch below and abandon the whole wipe. For a function
+  // whose entire contract is "best effort", that is the wrong failure. The
+  // literals are the same values, kept only as a floor.
+  let keys;
+  try {
+    keys = [STORAGE_KEY, LEGACY_STORAGE_KEY, SYNC_META_KEY];
+  } catch (e) {
+    keys = ['gobbonet_chat_state', 'gemma4_chat_state', 'gobbonet_sync_meta'];
+  }
+  for (const k of keys) {
+    try { localStorage.removeItem(k); } catch (e) { failed.push(k); }
+  }
+
+  try {
+    if (window.__gobboTelemetry) window.__gobboTelemetry.length = 0;
+  } catch (e) {}
+
+  return failed;
+}
 // Generic helpers used by the RAG stores ('vectors', 'telemetry'). Best-effort
 // callers wrap these in try/catch, so a missing store or closed db just no-ops.
 function idbDelete(store, key) { return new Promise((res, rej) => { const r = idbTx(store,'readwrite').delete(key); r.onsuccess=()=>res(); r.onerror=()=>rej(r.error); }); }

@@ -48,7 +48,7 @@ function renderLandingPage() {
     const desc = (c.personality || c.writingStyle || '').slice(0, 72);
     return `
       <div class="landing-char-card ${isActive ? 'landing-char-active' : ''}"
-           onclick="activateCard('${c.id}')" title="Set as active character">
+           onclick="activateCard('${escapeJsAttr(c.id)}')" title="Set as active character">
         <div class="landing-char-avatar">${avatarHtml}</div>
         <div class="landing-char-info">
           <div class="landing-char-name">${escapeHtml(c.name)}</div>
@@ -157,10 +157,15 @@ function renderMessages() {
   const cardName = card.name || 'Assistant';
 
   // Resolve text/dialog colors
-  const userTextColor   = persona.textColor   || FALLBACK_PERSONA_TEXT_COLOR;
-  const userDialogColor = persona.dialogColor || FALLBACK_PERSONA_DIALOG_COLOR;
-  const aiTextColor     = card.textColor      || FALLBACK_CARD_TEXT_COLOR;
-  const aiDialogColor   = card.dialogColor    || FALLBACK_CARD_DIALOG_COLOR;
+  // Cards and personas can arrive from an imported file or a synced peer, and
+  // these four values land directly in style="color:..." attributes below.
+  // Allowlist the shapes a colour picker produces; anything else falls back to
+  // the 1.5.8 defaults rather than to empty, so a hostile value degrades to the
+  // correct colour instead of to no colour.
+  const userTextColor   = safeCssColor(persona.textColor,   FALLBACK_PERSONA_TEXT_COLOR);
+  const userDialogColor = safeCssColor(persona.dialogColor, FALLBACK_PERSONA_DIALOG_COLOR);
+  const aiTextColor     = safeCssColor(card.textColor,      FALLBACK_CARD_TEXT_COLOR);
+  const aiDialogColor   = safeCssColor(card.dialogColor,    FALLBACK_CARD_DIALOG_COLOR);
 
   // ── Branch origin banner ────────────────────────────────────────
   let branchBannerHtml = '';
@@ -178,9 +183,9 @@ function renderMessages() {
       const nextSib = siblings[myIdx + 1];
       sibNavHtml = `
         <div class="branch-sibling-nav">
-          <button class="branch-nav-btn" ${!prevSib ? 'disabled' : ''} onclick="switchToBranch('${prevSib ? prevSib.id : ''}')" title="Previous branch">◀</button>
+          <button class="branch-nav-btn" ${!prevSib ? 'disabled' : ''} onclick="switchToBranch('${escapeJsAttr(prevSib ? prevSib.id : '')}')" title="Previous branch">◀</button>
           <span class="branch-nav-label">Branch ${myIdx + 1} / ${totalSibs}</span>
-          <button class="branch-nav-btn" ${!nextSib ? 'disabled' : ''} onclick="switchToBranch('${nextSib ? nextSib.id : ''}')" title="Next branch">▶</button>
+          <button class="branch-nav-btn" ${!nextSib ? 'disabled' : ''} onclick="switchToBranch('${escapeJsAttr(nextSib ? nextSib.id : '')}')" title="Next branch">▶</button>
         </div>`;
     }
 
@@ -189,7 +194,7 @@ function renderMessages() {
         <span class="branch-origin-icon">⑂</span>
         <span class="branch-origin-label">
           Branched from
-          <button class="branch-origin-link" onclick="switchToBranch('${escapeHtml(thread.forkSource.threadId)}')">${sourceName}</button>
+          <button class="branch-origin-link" onclick="switchToBranch('${escapeJsAttr(thread.forkSource.threadId)}')">${sourceName}</button>
           at message ${forkAt + 1}
         </span>
         ${sibNavHtml}
@@ -367,7 +372,7 @@ function renderMessages() {
     if (Array.isArray(m.attachments) && m.attachments.length) {
       attachmentsHtml = '<div class="msg-attachments">' + m.attachments.map(a => {
         if (a.kind === 'image' && a.dataUrl) {
-          return `<span class="msg-attach-chip" title="${escapeHtml(a.name)} — image, not sent to model"><img class="msg-attach-thumb" src="${a.dataUrl}" alt="${escapeHtml(a.name)}"><span>${escapeHtml(a.name)}</span></span>`;
+          return `<span class="msg-attach-chip" title="${escapeHtml(a.name)} — image, not sent to model"><img class="msg-attach-thumb" src="${escapeHtml(safeDataUrl(a.dataUrl))}" alt="${escapeHtml(a.name)}"><span>${escapeHtml(a.name)}</span></span>`;
         }
         const icon = a.kind === 'text' ? '📄' : (a.kind === 'image' ? '🖼️' : '⚠️');
         const note = a.kind === 'text' ? (a.truncated ? ' (truncated)' : '') : (a.kind === 'image' ? ' (not sent)' : ' (not sent)');
@@ -416,7 +421,7 @@ function renderMessages() {
     const forksHere = getForksAt(thread.id, i + 1);
     if (forksHere.length === 0) return prefix + rowHtml;
     const forkBtns = forksHere.map(ft =>
-      `<button class="branch-fork-btn" onclick="switchToBranch('${ft.id}')" title="${escapeHtml(ft.name)}">⑂ ${escapeHtml(ft.name.replace(/^⑂\s*/, '').slice(0, 28))}</button>`
+      `<button class="branch-fork-btn" onclick="switchToBranch('${escapeJsAttr(ft.id)}')" title="${escapeHtml(ft.name)}">⑂ ${escapeHtml(ft.name.replace(/^⑂\s*/, '').slice(0, 28))}</button>`
     ).join('');
     return prefix + rowHtml + `
       <div class="branch-fork-line">
