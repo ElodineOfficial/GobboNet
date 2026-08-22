@@ -22,6 +22,11 @@ So here is the question, and it is not rhetorical. If a piece of software is sha
 
 We are going to answer that. But first we are going to concede the premise completely, because the interesting part only shows up after you stop arguing with it.
 
+If you are simply looking for a workaround, here it is:
+```
+Windows Security > Virus & threat protection > Manage settings > Exclusions > Add an exclusion > Folder > then pick your GobboNet directory > if the download specifically is giving you trouble do these steps for your download folder
+```
+
 ---
 
 ## // doc.002 — yes. it is malware-shaped.
