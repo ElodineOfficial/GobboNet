@@ -20,8 +20,6 @@ Read the suffix. `.B!ml` means the verdict came from a machine-learning model �
 
 So here is the question, and it is not rhetorical. If a piece of software is shaped like malware — if it genuinely, structurally resembles the thing — then why *not* treat it as malware? What exactly is the shape missing?
 
-We are going to answer that. But first we are going to concede the premise completely, because the interesting part only shows up after you stop arguing with it.
-
 If you are simply looking for a workaround, here it is:
 ```
 Windows Security > Virus & threat protection > Manage settings > Exclusions > Add an exclusion > Folder > then pick your GobboNet directory > if the download specifically is giving you trouble do these steps for your download folder
@@ -47,7 +45,7 @@ GobboNet is malware-shaped. Not "technically, if you squint." Actually. Here is 
 
 Nine capabilities. Download-and-execute, listener, firewall modification, hardware recon, credential handling, native interop, outbound beacon, process termination, crypto. If you handed that capability list to a malware analyst with the names stripped off, they would not blink. They would start writing the report.
 
-The classifier is not hallucinating. The shape is really there. Full stop. **Hold that thought — it is the entire point.** The model is not wrong about what it sees. It is wrong about what seeing it *means*.
+The classifier is not hallucinating. The shape is really there but because it makes things easier on new users, less confusing, and allocates logs to specified places for easy access.
 
 ---
 
