@@ -2017,6 +2017,47 @@ while ($listener.IsListening) {
             # LLAMA_URL-relative addressing (and the session cookie) working.
             Handle-Jobs -Request $request -Response $response
         }
+        elseif ($path -eq '/llm/health') {
+            # The client asks /llm/health and expects llama-server's
+            # {"status":"ok"}. Proxied straight through, that 404s against any
+            # OTHER OpenAI-compatible server -- Ollama, vLLM, LM Studio, a
+            # gateway -- none of which serve /health. The UI then reports
+            # "OFFLINE -- run launch.bat" while a perfectly good backend is
+            # sitting there answering /v1/chat/completions, which is the only
+            # endpoint this app actually generates with.
+            #
+            # So: ask /health, and if it is not there ask /v1/models -- the one
+            # endpoint every OpenAI-compatible server does serve. Either answer
+            # means the same thing to the caller (something is up and can
+            # generate), so it is reported in the shape the client already
+            # understands rather than making the client learn a second one.
+            #
+            # llama-server is unaffected: /health answers on the first probe and
+            # the second is never sent.
+            $ok = $false
+            foreach ($probe in @('/health', '/v1/models')) {
+                try {
+                    $u = ('http://127.0.0.1:{0}{1}' -f $LlmPort, $probe)
+                    $hr = [System.Net.HttpWebRequest]::Create($u)
+                    $hr.Method = 'GET'
+                    $hr.Timeout = 4000
+                    $hr.ReadWriteTimeout = 4000
+                    if ($LlmApiKey -ne '') {
+                        $hr.Headers.Add('Authorization', ('Bearer {0}' -f $LlmApiKey))
+                    }
+                    $hresp = $hr.GetResponse()
+                    $code  = [int]$hresp.StatusCode
+                    $hresp.Close()
+                    if ($code -ge 200 -and $code -lt 300) { $ok = $true; break }
+                } catch {
+                    # Try the next probe; a 404 here is the normal case for a
+                    # server that simply does not implement /health.
+                }
+            }
+            if ($ok) { Write-Json $Response 200 @{ status = 'ok' } }
+            else     { Write-Json $Response 503 @{ status = 'unavailable' } }
+        }
+
         elseif ($path -eq '/llm' -or $path -like '/llm/*') {
             Invoke-Proxy -Request $request -Response $response -Prefix '/llm' -UpstreamPort $LlmPort -InjectLlmKey $true
         }
