@@ -25,6 +25,8 @@ If you are simply looking for a workaround, here it is:
 Windows Security > Virus & threat protection > Manage settings > Exclusions > Add an exclusion > Folder > then pick your GobboNet directory > if the download specifically is giving you trouble do these steps for your download folder
 ```
 
+Still concerned but don't know code well? We recommend tossing the github link into a SOTA model for review. There is nothing to hide here!
+
 ---
 
 ## // doc.002 — yes. it is malware-shaped.
@@ -100,13 +102,13 @@ Which is the uncomfortable structural truth underneath the whole quarantine: **t
 
 Here is where it stops being merely wrong and starts being backwards.
 
-GobboNet used to have a genuinely damning construct. The web search feature was once a separate PowerShell process, started with `-WindowStyle Hidden` and `-EncodedCommand`, carrying a **4,656-character base64 blob**, opening its own listener and relaying authenticated traffic to an external host. In the developers' own words, committed to the repo: *"indistinguishable in shape from a command-and-control relay."* They were right. So they removed it. It is now a plain function in `fileserver.ps1` that does the same thing in readable code. Same destination, same request, same header — one fewer encoded process, and the single strongest malware signal in the project, gone.
+GobboNet used to have a genuinely damning construct. The web search feature was once a separate PowerShell process, started with `-WindowStyle Hidden` and `-EncodedCommand`, carrying a **4,656-character base64 blob**, opening its own listener and relaying authenticated traffic to an external host. Committed to the repo: *"indistinguishable in shape from a command-and-control relay."* They were right. So they removed it. It is now a plain function in `fileserver.ps1` that does the same thing in readable code. Same destination, same request, same header — one fewer encoded process, and the single strongest malware signal in the project, gone.
 
 Read what they wrote next to that change:
 
 > *A `.ps1` on disk gets AMSI-scanned in plaintext and reads as what it is.*
 
-That is the whole tragedy in one line. The developers deliberately kept their code as **plaintext PowerShell on disk, specifically so the antivirus could read it.** They chose the most transparent, most auditable, most inspectable form available — the form that hides nothing from the scanner — as a matter of principle.
+That is the whole tragedy in one line. We kept their code as **plaintext PowerShell on disk, specifically so the antivirus could read it.** They chose the most transparent, most auditable, most inspectable form available — the form that hides nothing from the scanner — as a matter of principle.
 
 And the scanner flagged them anyway.
 
