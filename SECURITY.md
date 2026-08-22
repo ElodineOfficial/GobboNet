@@ -51,7 +51,7 @@ The classifier is not hallucinating. The shape is really there but because it ma
 
 ## // doc.003 — detection accounting
 
-For the record, and in the same spirit as [the compliance accounting we keep for other bad laws](https://goblincorps.com/ageless-linux), here is the shape we present, weighted roughly the way an ML engine weights it. The complete scan — every file, every line — ships in the repo alongside this document.
+For the record, here is the shape we present, weighted roughly the way an ML engine weights it. The complete scan — every file, every line — ships in the repo alongside this document.
 
 | The construct | Where it lives | The benign job it does | The shape it shares |
 |---|---|---|---|
