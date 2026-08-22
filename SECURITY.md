@@ -108,13 +108,13 @@ Here is what we wrote next to that change:
 
 > *A `.ps1` on disk gets AMSI-scanned in plaintext and reads as what it is.*
 
-We kept the code as **plaintext PowerShell on disk, specifically so the antivirus could read it.** They chose the most transparent, most auditable, most inspectable form available — the form that hides nothing from the scanner — as a matter of principle.
+We kept the code as **plaintext PowerShell on disk, specifically so the antivirus could read it.** We chose the most transparent, most auditable, most inspectable form available — the form that hides nothing from the scanner — as a matter of principle.
 
 And the scanner flagged them anyway.
 
 Now watch what the incentive structure actually rewards. Real malware authors know exactly what trips `.B!ml`. They know encoded PowerShell is weighted heavily. So they encode nothing the scanner reads and everything it doesn't — they pack, they obfuscate, they sign with stolen certs, they sleep past the sandbox, they stage the payload in three innocuous-looking pieces. They make the shape go away, because making the shape go away is their entire profession. The malware evades. Reliably. That is the baseline assumption of the entire industry — signature and shape detection is understood to be the floor, not the ceiling, precisely because the adversary adapts.
 
-The independent developer who wrote a clear comment explaining their firewall rule does not do any of that. They have nothing to hide, so they hides nothing, so the shape is fully exposed, and we get caught. The obfuscator walks. The honest one gets quarantined. The heuristic is a tax, and the thing it taxes is transparency. It falls hardest on exactly the property — legibility — that makes software auditable, forkable, trustworthy, and *safe*. It rewards the one behavior — hiding your shape — that is the actual reliable signature of malicious intent.
+The independent developer who wrote a clear comment explaining their firewall rule does not do any of that. They have nothing to hide, so they hide nothing, so the shape is fully exposed, and we get caught. The obfuscator walks. The honest one gets quarantined. The heuristic is a tax, and the thing it taxes is transparency. It falls hardest on exactly the property — legibility — that makes software auditable, forkable, trustworthy, and *safe*. It rewards the one behavior — hiding your shape — that is the actual reliable signature of malicious intent.
 
 Follow that to its conclusion and it is genuinely perverse: the rational response to a shape classifier, *for a benign developer*, is to start obfuscating your benign code so it stops looking like the malware it isn't. To make your software less readable in order to make it less suspicious. To hide from the scanner the way the malware does, so the scanner stops confusing you for malware. A safety system that makes "become less auditable" the winning move has inverted its own purpose.
 
