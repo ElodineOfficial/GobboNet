@@ -38,10 +38,11 @@ async function loadActiveModel() {
     // Update About modal stack line
     const aboutModelLine = document.getElementById('about-model-line');
     if (aboutModelLine) aboutModelLine.textContent = activeModel.name;
-    // If user hasn't customised the token limit yet, suggest the model default
-    const tokInput = document.getElementById('set-tokens');
-    if (tokInput && (!state.settings.tokenLimit || state.settings.tokenLimit === 24576)) {
-      tokInput.value = activeModel.defaultCtx;
+    // Keep the inherited default in step with the loaded model. The settings
+    // input this used to write into is gone -- context limit lives on the
+    // card now -- but state.settings.tokenLimit is still what a card set to
+    // Auto resolves against, so it has to track the model.
+    if (!state.settings.tokenLimit || state.settings.tokenLimit === 24576) {
       state.settings.tokenLimit = activeModel.defaultCtx;
       saveState();
     }
@@ -53,14 +54,13 @@ async function loadActiveModel() {
 function updateModelHint(modelDef) {
   const hint = document.getElementById('model-hint');
   if (hint && modelDef) hint.textContent = modelDef.hint;
-  const ctxHint = document.getElementById('ctx-hint');
-  if (ctxHint && modelDef) {
-    const maxK = Math.round(modelDef.maxCtx / 1024);
-    ctxHint.textContent = `Input context budget — 90% reserved for system prompt, lore, and history. Max for ${modelDef.name}: ${maxK}K tokens. Actual capacity depends on VRAM and KV cache quantization.`;
-  }
-  // Update token input max
-  const tokInput = document.getElementById('set-tokens');
-  if (tokInput && modelDef) tokInput.max = modelDef.maxCtx;
+  // ctx-hint and set-tokens both lived in the settings modal and moved to
+  // the character card. The card editor draws its own hint from
+  // resolveContextLimit (updateCardCtxHint), which reports the resolved
+  // number rather than a static maximum -- more useful, and it cannot drift
+  // from what the context builder actually uses.
+  const cardCtx = document.getElementById('card-context-limit');
+  if (cardCtx && modelDef) cardCtx.max = modelDef.maxCtx;
 }
 
 /* ================================================================
@@ -278,7 +278,7 @@ async function onHeaderModelChange(sel) {
 
   // file:// has no fileserver. Tell the user and revert.
   if (!IS_SERVED) {
-    showModelSwitchToast('Hot-swap needs the file server. Open via http://...:8080', 'warn');
+    showModelSwitchToast('Hot-swap needs the file server. Open the chat from launch.bat, not by double-clicking chat.html.', 'warn');
     if (_currentModelFile) sel.value = _currentModelFile;
     return;
   }
@@ -464,3 +464,151 @@ function extractTokenFromLine(rawLine) {
   }
 }
 
+
+/* ================================================================
+   PERFORMANCE TUNING
+
+   Context size, GPU layers and KV cache type are llama-server launch
+   arguments, so changing one means restarting llama-server. Rather than
+   building a second restart path, this saves to /perf and then drives the
+   EXISTING hot-swap by re-selecting the model already loaded. One lock,
+   one status feed, one thing to debug.
+================================================================ */
+
+function _perfStatus(msg, kind) {
+  const el = document.getElementById('perf-status');
+  if (!el) return;
+  el.textContent = msg || '';
+  el.style.color = kind === 'error' ? 'var(--red, #ff6b6b)'
+                 : kind === 'ok'    ? 'var(--green-neon, #00ff73)'
+                 : 'rgba(255,255,255,0.45)';
+}
+
+/** Populate the panel. Called when settings opens. */
+async function loadPerfSettings() {
+  const ctx = document.getElementById('perf-ctx');
+  const gpu = document.getElementById('perf-gpu');
+  const kv  = document.getElementById('perf-kv');
+  if (!ctx || !gpu || !kv) return;
+
+  if (!IS_SERVED) {
+    ctx.disabled = gpu.disabled = kv.disabled = true;
+    _perfStatus('Opened without the file server, so these cannot be read or changed. Start from launch.bat.', 'error');
+    return;
+  }
+
+  try {
+    const r = await fetch('/perf', { cache: 'no-store' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const p = await r.json();
+    ctx.value = p.current.ctxSize;
+    gpu.value = p.current.gpuLayers;
+    kv.value  = p.current.kvCacheType;
+
+    // Cap the input at what the model can actually take, so a number the
+    // server would reject cannot be typed in the first place.
+    if (p.modelMaxCtx > 0) ctx.max = p.modelMaxCtx;
+
+    const a = p.auto;
+    _perfStatus(p.overridden
+      ? 'Custom settings in use. Auto would pick ' + a.ctxSize + ' ctx, ' +
+        a.gpuLayers + ' layers, ' + a.kvCacheType + '.'
+      : 'Using automatic settings for your hardware.');
+  } catch (e) {
+    _perfStatus('Could not read current settings: ' + e.message, 'error');
+  }
+}
+
+/** Save, and optionally restart the model so it takes effect now. */
+async function savePerfSettings(applyNow) {
+  if (!IS_SERVED) return;
+  const body = {
+    ctxSize:     parseInt(document.getElementById('perf-ctx').value, 10),
+    gpuLayers:   parseInt(document.getElementById('perf-gpu').value, 10),
+    kvCacheType: document.getElementById('perf-kv').value
+  };
+
+  _perfStatus('Saving...');
+  try {
+    const r = await fetch('/perf', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    const j = await r.json();
+    if (!r.ok) { _perfStatus(j.error || ('HTTP ' + r.status), 'error'); return; }
+
+    if (!applyNow) {
+      _perfStatus('Saved. Takes effect the next time the model starts.', 'ok');
+      return;
+    }
+    await _restartModelForPerf();
+  } catch (e) {
+    _perfStatus('Save failed: ' + e.message, 'error');
+  }
+}
+
+/** Put everything back to the hardware-detected values. */
+async function resetPerfSettings() {
+  if (!IS_SERVED) return;
+  _perfStatus('Resetting...');
+  try {
+    const r = await fetch('/perf', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reset: true })
+    });
+    const j = await r.json();
+    if (!r.ok) { _perfStatus(j.error || ('HTTP ' + r.status), 'error'); return; }
+    document.getElementById('perf-ctx').value = j.current.ctxSize;
+    document.getElementById('perf-gpu').value = j.current.gpuLayers;
+    document.getElementById('perf-kv').value  = j.current.kvCacheType;
+    _perfStatus('Back to automatic. Restart the model to apply.', 'ok');
+  } catch (e) {
+    _perfStatus('Reset failed: ' + e.message, 'error');
+  }
+}
+
+/** Reload the current model through the normal swap pipeline. */
+async function _restartModelForPerf() {
+  if (!_currentModelFile) {
+    _perfStatus('Saved, but the current model is unknown -- restart launch.bat to apply.', 'error');
+    return;
+  }
+  if (_swapInFlight) { _perfStatus('A model swap is already running.', 'error'); return; }
+
+  _swapInFlight = true;
+  _perfStatus('Restarting the model with the new settings. This takes as long as loading it did.');
+  try {
+    const r = await fetch('/swap-model', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ file: _currentModelFile })
+    });
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}));
+      _perfStatus(j.message || ('Restart failed: HTTP ' + r.status), 'error');
+      _swapInFlight = false;
+      return;
+    }
+    // Same status feed the header swap watches, so a failure here reports
+    // identically to a failed model change. Waiting for the real outcome
+    // matters more than usual: a context size that does not fit VRAM fails
+    // at load, and "Saved!" followed by a dead model would be the worst
+    // possible feedback for a panel whose entire job is letting people
+    // push settings past what is safe.
+    const st = await pollSwapStatus(180000);
+    if (st && st.phase === 'ready') {
+      _perfStatus('Model restarted with the new settings.', 'ok');
+      if (typeof loadActiveModel === 'function') { try { await loadActiveModel(); } catch (e) {} }
+    } else {
+      const why = (st && st.message) ? st.message : 'the model did not come back';
+      _perfStatus('Restart failed: ' + why +
+                  ' -- try a smaller context, fewer GPU layers, or a smaller KV cache type.', 'error');
+    }
+  } catch (e) {
+    _perfStatus('Restart failed: ' + e.message, 'error');
+  } finally {
+    _swapInFlight = false;
+  }
+}

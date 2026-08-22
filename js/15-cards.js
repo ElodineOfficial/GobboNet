@@ -7,20 +7,21 @@
    SETTINGS
 ================================================================ */
 function openSettings() {
+  // Pulls live values from the server; safe if the endpoint is absent.
+  try { loadPerfSettings(); } catch (e) { console.error('[perf]', e); }
   // Model dropdown is in the header — loadModelsList() handles it on startup
-  document.getElementById('set-frequency').value = state.settings.reminderFrequency;
-  document.getElementById('set-tokens').value = state.settings.tokenLimit;
+  // Reminder frequency, context limit and the smart reply cap have moved to
+  // the character card. state.settings.tokenLimit survives as the inherited
+  // default that cards set to Auto resolve against.
   document.getElementById('set-apikey').value = state.settings.apiKey || '';
   // COT timeout
   document.getElementById('set-cot-timeout-enabled').checked = !!state.settings.cotTimeoutEnabled;
   document.getElementById('set-cot-timeout-minutes').value = state.settings.cotTimeoutMinutes || 2;
   updateCotTimeoutRow();
   // Smart response limit
-  document.getElementById('set-smart-limit-enabled').checked = !!state.settings.smartLimitEnabled;
-  document.getElementById('set-smart-limit-tokens').value = state.settings.smartLimitTokens || 300;
-  updateSmartLimitRow();
   const aScale = state.settings.avatarScale || 1;
   document.getElementById('set-avatar-scale').value = aScale;
+  document.getElementById('set-allow-remote-images').checked = !!state.settings.allowRemoteImages;
   document.getElementById('avatar-scale-val').textContent = Math.round(aScale * 100) + '%';
   document.getElementById('settings-modal').classList.add('open');
 }
@@ -32,17 +33,16 @@ function closeSettings() {
 
 function saveSettings() {
   // Model selection is now in the header dropdown — no longer saved in settings
-  state.settings.reminderFrequency = parseInt(document.getElementById('set-frequency').value) || 3;
-  state.settings.tokenLimit = parseInt(document.getElementById('set-tokens').value) || 24576;
+
   state.settings.apiKey = document.getElementById('set-apikey').value.trim();
   state.settings.cotTimeoutEnabled = document.getElementById('set-cot-timeout-enabled').checked;
   state.settings.cotTimeoutMinutes = parseInt(document.getElementById('set-cot-timeout-minutes').value) || 2;
-  state.settings.smartLimitEnabled = document.getElementById('set-smart-limit-enabled').checked;
-  state.settings.smartLimitTokens = Math.min(8192, Math.max(25, parseInt(document.getElementById('set-smart-limit-tokens').value) || 300));
   state.settings.avatarScale = parseFloat(document.getElementById('set-avatar-scale').value) || 1;
+  state.settings.allowRemoteImages = document.getElementById('set-allow-remote-images').checked;
   saveState();
   closeSettings();
   renderMessages();
+  applyActiveCardBackground();   // background obeys the same gate -- repaint it
   updateContextInfo();
   updatePrivacyBadge();
 }
@@ -90,16 +90,16 @@ function renderCardGrid() {
   grid.innerHTML = state.characterCards.map(c => {
     const av = renderAvatar(c.avatar, c.name);
     return `
-    <div class="card-item ${c.id === state.activeCardId ? 'active' : ''}" onclick="activateCard('${c.id}')">
+    <div class="card-item ${c.id === state.activeCardId ? 'active' : ''}" onclick="activateCard('${escapeJsAttr(c.id)}')">
       <div class="card-avatar">${av}</div>
       <div class="card-info">
         <div class="card-name">${escapeHtml(c.name)}</div>
         <div class="card-desc">${escapeHtml((c.writingStyle || '').slice(0, 60))}</div>
       </div>
       <div class="card-actions">
-        <button class="msg-action-btn btn-edit" onclick="event.stopPropagation();editCard('${c.id}')">Edit</button>
-        <button class="msg-action-btn" onclick="event.stopPropagation();copyCard('${c.id}')" title="Duplicate this character">Copy</button>
-        ${state.characterCards.length > 1 ? `<button class="msg-action-btn btn-delete" onclick="event.stopPropagation();deleteCardById('${c.id}')" title="Delete this character">Del</button>` : ''}
+        <button class="msg-action-btn btn-edit" onclick="event.stopPropagation();editCard('${escapeJsAttr(c.id)}')">Edit</button>
+        <button class="msg-action-btn" onclick="event.stopPropagation();copyCard('${escapeJsAttr(c.id)}')" title="Duplicate this character">Copy</button>
+        ${state.characterCards.length > 1 ? `<button class="msg-action-btn btn-delete" onclick="event.stopPropagation();deleteCardById('${escapeJsAttr(c.id)}')" title="Delete this character">Del</button>` : ''}
       </div>
     </div>`;
   }).join('');
@@ -131,8 +131,8 @@ function createCard() {
     altGreetingsEnabled: false,
     altGreetings: '',
     background: '#000000',
-    textColor: '',
-    dialogColor: '',
+    textColor: FALLBACK_CARD_TEXT_COLOR,
+    dialogColor: FALLBACK_CARD_DIALOG_COLOR,
     temperature: 0.7,
     minP: 0.05,
     topK: 40,
@@ -149,7 +149,10 @@ function createCard() {
     carouselMode: 'random',
     carouselIndex: 0,
     customCode: '',
-    customCodeEnabled: false
+    customCodeEnabled: false,
+    contextLimit: 0,
+    smartLimitEnabled: false,
+    smartLimitTokens: 300
   };
   state.characterCards.push(card);
   saveState();
@@ -180,8 +183,10 @@ function editCard(id) {
   updateAltGreetingsCounter();
   document.getElementById('card-bg').value = card.background || '';
   // Populate card text color pickers
-  const ctc = card.textColor || '#e0f8ff';
-  const cdc = card.dialogColor || '#d900ff';
+  // Same constants the renderer uses -- if these ever diverge again, the
+  // swatch goes back to promising a colour the chat will not show.
+  const ctc = card.textColor   || FALLBACK_CARD_TEXT_COLOR;
+  const cdc = card.dialogColor || FALLBACK_CARD_DIALOG_COLOR;
   document.getElementById('card-textcolor').value = ctc;
   document.getElementById('card-textcolor-hex').value = ctc;
   document.getElementById('card-dialogcolor').value = cdc;
@@ -234,6 +239,10 @@ function editCard(id) {
   document.getElementById('card-editor').style.display = '';
   document.getElementById('char-close-row').style.display = 'none';
   document.getElementById('card-delete-btn').style.display = state.characterCards.length > 1 ? '' : 'none';
+  document.getElementById('card-context-limit').value = card.contextLimit || 0;
+  document.getElementById('card-smart-limit-tokens').value = card.smartLimitTokens || 300;
+  document.getElementById('card-smart-limit-enabled').checked = !!card.smartLimitEnabled;
+  updateCardCtxHint();
   document.getElementById('card-custom-code').value = card.customCode || '';
   document.getElementById('card-code-enabled').checked = !!card.customCodeEnabled;
   updateCardCodeStatus();
@@ -244,6 +253,10 @@ function editCard(id) {
 function saveCard() {
   const card = state.characterCards.find(c => c.id === editingCardId);
   if (!card) return;
+  card.contextLimit = Math.max(0, parseInt(document.getElementById('card-context-limit').value, 10) || 0);
+  card.smartLimitTokens = Math.min(8192, Math.max(25,
+    parseInt(document.getElementById('card-smart-limit-tokens').value, 10) || 300));
+  card.smartLimitEnabled = document.getElementById('card-smart-limit-enabled').checked;
   card.customCode = document.getElementById('card-custom-code').value;
   card.customCodeEnabled = document.getElementById('card-code-enabled').checked;
   card.name = document.getElementById('card-name').value.trim() || 'Unnamed';
@@ -348,3 +361,22 @@ function deleteCardById(id) {
   renderCardGrid();
 }
 
+
+/* Tell the user what "auto" actually means on this machine. Without it the
+   0 placeholder is a number with no consequence attached to it. */
+function updateCardCtxHint() {
+  const el = document.getElementById('card-ctx-hint');
+  if (!el) return;
+  const card = state.characterCards.find(c => c.id === editingCardId);
+  const resolved = resolveContextLimit(card);
+  const raw = parseInt(card && card.contextLimit, 10) || 0;
+  const ceiling = (typeof activeModel !== 'undefined' && activeModel && activeModel.maxCtx) || 0;
+  let msg = raw
+    ? 'Using ' + resolved.toLocaleString() + ' tokens'
+    : 'Auto \u2014 currently ' + resolved.toLocaleString() + ' tokens from the loaded model';
+  if (raw && ceiling && raw > ceiling) {
+    msg += ' (clamped from ' + raw.toLocaleString() + ' \u2014 the model tops out at '
+         + ceiling.toLocaleString() + ')';
+  }
+  el.textContent = msg + '. 90% is the input budget; the rest is reply headroom.';
+}

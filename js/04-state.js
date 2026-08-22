@@ -9,6 +9,32 @@
 // Storage key — 'gobbonet_chat_state' going forward; migrate from old key if needed.
 const STORAGE_KEY = 'gobbonet_chat_state';
 const LEGACY_STORAGE_KEY = 'gemma4_chat_state';
+/* Fallback colours used when a card or persona has no colour set.
+ *
+ * These MUST match the values the colour pickers show (15-cards.js:183-184,
+ * 17-personas.js:79-80). The pickers have always defaulted a blank field to
+ * a colour, but saveCard/savePersona read the PICKER, not the record -- so
+ * opening an editor, seeing magenta in the swatch and closing without
+ * pressing Save left the record empty while the swatch had promised a
+ * colour.
+ *
+ * That mattered most for dialogColor, because the renderer read
+ * `card.dialogColor || ''` and parseMarkdown skips the entire dialogue pass
+ * on a falsy colour. Every user-created card, every imported card and every
+ * persona therefore had dialogue colouring silently switched off, while the
+ * bundled characters -- the only records in the app with the field
+ * populated -- worked fine. It read as an intermittent parser bug and
+ * survived several rewrites of the quote pattern.
+ *
+ * They are applied at RENDER time, not just as creation defaults, because
+ * that also repairs the cards already sitting in people's browsers. Fixing
+ * only the defaults would help nobody who already had a card.
+ */
+const FALLBACK_CARD_TEXT_COLOR      = '#e0f8ff';
+const FALLBACK_CARD_DIALOG_COLOR    = '#d900ff';
+const FALLBACK_PERSONA_TEXT_COLOR   = '#00b8ff';
+const FALLBACK_PERSONA_DIALOG_COLOR = '#00f3ff';
+
 const DEFAULT_CARD = {
   id: 'default',
   name: 'Assistant',
@@ -36,8 +62,8 @@ const DEFAULT_CARD = {
   altGreetingsEnabled: false,
   altGreetings: '',
   background: '',
-  textColor: '',
-  dialogColor: '',
+  textColor: FALLBACK_CARD_TEXT_COLOR,
+  dialogColor: FALLBACK_CARD_DIALOG_COLOR,
   temperature: 0.7,
   minP: 0.05,
   topK: 40,
@@ -52,11 +78,65 @@ const DEFAULT_CARD = {
   // import -- see applyImportedCardCode in 23-card-code.js.
   customCode: '',
   customCodeEnabled: false,
+  // Per-card overrides. 0 / false means "inherit" -- see resolveContextLimit
+  // and resolveSmartLimit below. Zero is a safe sentinel here in a way the
+  // empty string was not for colours: it is genuinely not a valid limit, so
+  // `card.contextLimit || fallback` cannot silently disable anything.
+  contextLimit: 0,
+  smartLimitEnabled: false,
+  smartLimitTokens: 300,
   logitBiasStrength: -20
 };
+/* Per-card context and reply limits.
+ *
+ * These were global settings, which meant one number had to serve a code
+ * assistant answering in three lines and a DM writing scene prose. Cards
+ * own them now; the globals below survive only as the inherited default
+ * and the target for the model auto-detect in 02-model.js.
+ *
+ * Resolution happens at READ time, not as a stored default, so every card
+ * already in someone's browser inherits sensible values instead of needing
+ * a migration -- the same lesson as the dialogColor bug.
+ */
+
+/** Input context budget in tokens for a card. 0 on the card means auto. */
+function resolveContextLimit(card) {
+  const model = (typeof activeModel !== 'undefined' && activeModel) ? activeModel : null;
+
+  let n = parseInt(card && card.contextLimit, 10) || 0;
+  if (!n) {
+    // Auto: what the model reports, else whatever the old global held.
+    n = (model && model.defaultCtx) || (state.settings && state.settings.tokenLimit) || 24576;
+  }
+
+  // Clamp to what the model can actually take. A card carried over from a
+  // 128K machine would otherwise ask a 4K model for 128K of context and the
+  // server would silently truncate somewhere we cannot see.
+  const ceiling = (model && model.maxCtx) || 0;
+  if (ceiling && n > ceiling) n = ceiling;
+
+  return Math.max(2048, n);
+}
+
+/** {enabled, tokens} for the reply-length cap. */
+function resolveSmartLimit(card) {
+  const s = state.settings || {};
+  const enabled = (card && typeof card.smartLimitEnabled === 'boolean')
+    ? card.smartLimitEnabled
+    : !!s.smartLimitEnabled;
+  const raw = (card && parseInt(card.smartLimitTokens, 10))
+    || parseInt(s.smartLimitTokens, 10) || 300;
+  return { enabled: enabled, tokens: Math.min(8192, Math.max(25, raw)) };
+}
+
 const DEFAULT_SETTINGS = {
   modelName: 'auto',
-  reminderFrequency: 3,
+  // reminderFrequency removed: the periodic personality reminder it drove
+  // was replaced by a persistent personality block (08-rag.js), so the
+  // setting had been read and written by the settings modal while being
+  // consumed by nothing at all.
+  // Inherited default for cards set to Auto, and the target 02-model.js
+  // writes the detected model context into. No longer a UI field.
   tokenLimit: 24576,
   apiKey: '',
   cotTimeoutEnabled: false,
@@ -64,6 +144,12 @@ const DEFAULT_SETTINGS = {
   smartLimitEnabled: false,   // cap AI reply length (rough token estimate, sentence-end cut)
   smartLimitTokens: 300,      // max estimated tokens per reply when the cap is on
   avatarScale: 1,             // avatar size multiplier (CONFIG slider; 1 = default)
+  // Remote (http/https) images in cards -- avatars, backgrounds, thumbnails.
+  // Off by default: a card from an import or a synced peer can point <img src>
+  // at any host, and that beacons this machine's IP on render. data:/blob:
+  // images are unaffected and always work.
+  allowRemoteImages: false,
+  remoteImageNoticeSeen: false,   // one-time notice bookkeeping; see 24-boot.js
   // ---- RAG retrieval knobs (Stage 1) ----
   // Full snapshot of these rides into every telemetry record's `config`
   // block so any turn is reproducible. Tune one knob at a time; the shadow
@@ -148,8 +234,8 @@ const DEFAULT_PERSONA = {
   avatar: '',
   description: '',
   injectionFrequency: 5,
-  textColor: '',
-  dialogColor: ''
+  textColor: FALLBACK_PERSONA_TEXT_COLOR,
+  dialogColor: FALLBACK_PERSONA_DIALOG_COLOR
 };
 
 // Built-in macro names — users cannot define macros that shadow these.

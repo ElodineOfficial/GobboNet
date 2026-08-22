@@ -340,11 +340,35 @@ async function restoreFromServer(opts) {
       return false;
     }
     if (!resp.ok) throw new Error('HTTP ' + resp.status);
-    const text = await resp.text();
+    // let, not const: the neutralize step below rewrites this before the
+    // localStorage path consumes it.
+    let text = await resp.text();
     const mtimeHeader = resp.headers.get('X-State-Mtime');
     // Sanity-check: must parse and have at least the threads array
     const parsed = JSON.parse(text);
     if (!parsed || typeof parsed !== 'object') throw new Error('malformed backup');
+
+    // /state is a single shared document every paired device can overwrite, so
+    // this blob is not necessarily something this user wrote. Clear the flags
+    // that would make boot execute code out of it; the code itself is kept so
+    // it can be read and switched on here. See neutralizeUntrustedCode.
+    //
+    // The typeof guard is deliberate: 23-card-code.js loads after this file,
+    // and a load-order change should not turn into a hard failure on the
+    // restore path.
+    const neutralized = (typeof neutralizeUntrustedCode === 'function')
+      ? neutralizeUntrustedCode(parsed)
+      : { cards: 0, extensions: false };
+    if (neutralized.cards || neutralized.extensions) {
+      text = JSON.stringify(parsed);   // localStorage path writes the raw text
+      if (!opts.silent) {
+        alert('The server backup contained custom code set to run automatically' +
+              (neutralized.cards ? ' (' + neutralized.cards + ' character card(s))' : '') +
+              (neutralized.extensions ? ' and an extensions list' : '') +
+              '.\n\nIt was restored but left switched OFF. Review it in the ' +
+              'character editor or the extensions panel before enabling it.');
+      }
+    }
 
     // Loop stopper: a backup with no threads must NEVER trigger a reload. The
     // boot check treats "local has no threads" as a reason to restore, so

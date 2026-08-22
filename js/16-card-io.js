@@ -373,6 +373,12 @@ function _cardDataToInternal(data, spec, imageDataUrl) {
       importedAt: Date.now()
     }
   };
+  // Imported cards carry no colour fields at all -- the V1/V2/V3 spec has
+  // no concept of them -- so without this they arrive with textColor and
+  // dialogColor undefined and their dialogue never colours.
+  if (!card.textColor)   card.textColor   = FALLBACK_CARD_TEXT_COLOR;
+  if (!card.dialogColor) card.dialogColor = FALLBACK_CARD_DIALOG_COLOR;
+
   // Custom code may ride along in the V3 `extensions` bag. Carry it across
   // so the card is not silently lopped, but NEVER honour an enabled flag
   // from a file -- a downloaded character must not run its author's

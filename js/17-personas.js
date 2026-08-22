@@ -31,16 +31,16 @@ function renderPersonaGrid() {
       ? `${escapeHtml(desc.slice(0, 50))}${desc.length > 50 ? '\u2026' : ''} \u00b7 ${freqLabel}`
       : freqLabel;
     return `
-    <div class="card-item ${p.id === state.activePersonaId ? 'active' : ''}" onclick="activatePersona('${p.id}')">
+    <div class="card-item ${p.id === state.activePersonaId ? 'active' : ''}" onclick="activatePersona('${escapeJsAttr(p.id)}')">
       <div class="card-avatar">${av}</div>
       <div class="card-info">
         <div class="card-name">${escapeHtml(p.name || 'Unnamed')}</div>
         <div class="card-desc">${subline}</div>
       </div>
       <div class="card-actions">
-        <button class="msg-action-btn btn-edit" onclick="event.stopPropagation();editPersona('${p.id}')">Edit</button>
-        <button class="msg-action-btn" onclick="event.stopPropagation();copyPersona('${p.id}')" title="Duplicate this persona">Copy</button>
-        ${state.personaCards.length > 1 ? `<button class="msg-action-btn btn-delete" onclick="event.stopPropagation();deletePersonaById('${p.id}')" title="Delete this persona">Del</button>` : ''}
+        <button class="msg-action-btn btn-edit" onclick="event.stopPropagation();editPersona('${escapeJsAttr(p.id)}')">Edit</button>
+        <button class="msg-action-btn" onclick="event.stopPropagation();copyPersona('${escapeJsAttr(p.id)}')" title="Duplicate this persona">Copy</button>
+        ${state.personaCards.length > 1 ? `<button class="msg-action-btn btn-delete" onclick="event.stopPropagation();deletePersonaById('${escapeJsAttr(p.id)}')" title="Delete this persona">Del</button>` : ''}
       </div>
     </div>`;
   }).join('');
@@ -76,8 +76,8 @@ function editPersona(id) {
   const freq = (typeof persona.injectionFrequency === 'number') ? persona.injectionFrequency : 5;
   document.getElementById('persona-frequency').value = freq;
   // Color pickers
-  const ptc = persona.textColor || '#00b8ff';
-  const pdc = persona.dialogColor || '#00f3ff';
+  const ptc = persona.textColor   || FALLBACK_PERSONA_TEXT_COLOR;
+  const pdc = persona.dialogColor || FALLBACK_PERSONA_DIALOG_COLOR;
   document.getElementById('persona-textcolor').value = ptc;
   document.getElementById('persona-textcolor-hex').value = ptc;
   document.getElementById('persona-dialogcolor').value = pdc;
@@ -243,8 +243,14 @@ function applyActiveCardBackground() {
   const card = getActiveCard();
   const msgArea = document.getElementById('messages');
   if (!msgArea) return;
-  if (card.background && (card.background.startsWith('http') || card.background.startsWith('data:') || card.background.startsWith('file:'))) {
-    msgArea.style.backgroundImage = `url('${card.background}')`;
+  // Same gate as avatars and thumbnails. safeImageUrl drops file: and
+  // suppresses http(s) unless the user opted in.
+  const bg = safeImageUrl(card.background);
+  if (bg) {
+    // Escape the CSS string delimiters too: a permitted URL can still carry a
+    // quote, which would close the url() and steer the request elsewhere.
+    const cssSafe = bg.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    msgArea.style.backgroundImage = `url('${cssSafe}')`;
     msgArea.style.backgroundSize = 'cover';
     msgArea.style.backgroundPosition = 'center';
     msgArea.style.backgroundRepeat = 'no-repeat';

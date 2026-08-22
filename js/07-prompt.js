@@ -204,9 +204,12 @@ function updateStorybookReadout() {
 
 
 function renderAvatar(avatarStr, name) {
-  if (avatarStr && (avatarStr.startsWith('http') || avatarStr.startsWith('data:') || avatarStr.startsWith('file:'))) {
-    return `<img src="${escapeHtml(avatarStr)}" alt="">`;
-  }
+  // Every avatar in the app funnels through here, including the per-message
+  // render loop in 13-dashboard.js -- so this is the one place the remote-image
+  // policy has to hold. safeImageUrl returns '' for anything not permitted,
+  // and '' falls through to the initial rather than rendering an empty src.
+  const src = safeImageUrl(avatarStr);
+  if (src) return `<img src="${escapeHtml(src)}" alt="">`;
   // Fallback: first letter of name
   const initial = (name || '?').charAt(0).toUpperCase();
   return initial;
@@ -215,8 +218,13 @@ function renderAvatar(avatarStr, name) {
 function previewAvatar(inputId, previewId) {
   const url = document.getElementById(inputId).value.trim();
   const preview = document.getElementById(previewId);
-  if (url && (url.startsWith('http') || url.startsWith('data:') || url.startsWith('file:'))) {
-    preview.innerHTML = `<img src="${escapeHtml(url)}" alt="">`;
+  const src = safeImageUrl(url);
+  if (src) {
+    preview.innerHTML = `<img src="${escapeHtml(src)}" alt="">`;
+  } else if (isSuppressedRemoteImage(url)) {
+    // Distinguish "blocked by your setting" from "not a picture" -- otherwise a
+    // user pastes a perfectly good URL, sees '--', and assumes it is broken.
+    preview.textContent = 'remote image \u2014 off in Settings';
   } else {
     preview.innerHTML = '--';
   }
@@ -229,7 +237,12 @@ function handleAvatarFile(fileInput, textInputId, previewId) {
   reader.onload = function(e) {
     const dataUrl = e.target.result;
     document.getElementById(textInputId).value = dataUrl;
-    document.getElementById(previewId).innerHTML = `<img src="${dataUrl}" alt="">`;
+    // Locally chosen, but route it through the same gate and escape it: one
+    // path for every image, no exceptions to remember. This was the only
+    // avatar sink with no escaping at all.
+    const src = safeImageUrl(dataUrl);
+    document.getElementById(previewId).innerHTML =
+      src ? `<img src="${escapeHtml(src)}" alt="">` : '--';
   };
   reader.readAsDataURL(file);
 }
@@ -277,6 +290,13 @@ function setThreadLore(thread, lore) {
 // supposed to free up in the first place.
 const LORE_MAX_CHARS = 2400;
 
+/* Hard ceiling on a single compression pass. Compression is awaited by
+   buildContextMessages, which sendMessage awaits, so this is also the
+   longest the app can appear frozen before the user's turn goes through.
+   Generous enough that a slow local model finishes normally; short enough
+   that a stuck one is an inconvenience rather than a lockup. */
+const LORE_TIMEOUT_MS = 45000;
+
 /* Why the last compression pass produced what it did.
    summarizeForLore has three ways to give up -- a bad HTTP response, an
    empty parse, or a thrown error -- and all three returned the previous
@@ -286,7 +306,62 @@ const LORE_MAX_CHARS = 2400;
    so each one now records why. Read it in the lore inspector. */
 let _loreLastOutcome = null;
 
-async function summarizeForLore(existingLore, messagesToSummarize) {
+/**
+ * Reduce a model reply to one clean beat.
+ *
+ * Small models add labels, bullets, quotes and preamble no matter how
+ * plainly the prompt forbids them, and when the reasoning-recovery path
+ * fires we may be handed a whole chain-of-thought with the answer at the
+ * end. Every one of those has to be stripped here, because whatever comes
+ * out is appended permanently and read as fact by every later pass.
+ */
+function _cleanLoreBeat(text) {
+  let t = (text || '').trim();
+  if (!t) return '';
+
+  const lines = t.split('\n').map(l => l.trim()).filter(Boolean);
+  if (lines.length > 1) {
+    // Two different multi-line shapes need opposite handling.
+    //
+    // A numbered or bulleted list means the model ignored "one beat" and
+    // wrote several. Take the FIRST: it is the primary event, and taking
+    // the last would quietly discard the most important one.
+    //
+    // Anything else is most likely a recovered chain-of-thought with the
+    // answer at the end, so take the LAST.
+    const isItem = (l) => /^([-*\u2022]|\d+[.)])\s/.test(l);
+    const listish = lines.filter(isItem).length >= 2;
+    t = listish ? lines.find(isItem) : lines[lines.length - 1];
+  }
+
+  t = t
+    .replace(/^[-*\u2022\s]+/, '')                        // bullet
+    .replace(/^\d+\s*[.)]\s*/, '')                        // "3. " / "3) " list number
+    .replace(/^(beat|summary|note|entry|output)\s*[:\-]\s*/i, '')  // label
+    .replace(/^\[|\]$/g, '')                              // wrapping brackets
+    .replace(/^["'\u201c\u2018]|["'\u201d\u2019]$/g, '') // wrapping quotes
+    .trim();
+
+  // Two sentences maximum. A model that ignores the word limit gets
+  // trimmed rather than allowed to bloat the log one entry at a time.
+  const sentences = t.match(/[^.!?]+[.!?]+/g);
+  if (sentences && sentences.length > 2) {
+    // Each captured sentence carries the leading space of the one before it,
+    // so trim before joining or the result gets a double space in the middle.
+    t = sentences.slice(0, 2).map(x => x.trim()).join(' ').trim();
+  }
+
+  // Deliberately NO hard character truncation here. Cutting at a fixed
+  // offset severs a word and stores the fragment permanently, which is the
+  // one thing a lorebook must never do. Two-sentence selection above is a
+  // choice between whole sentences; this would have been a guillotine.
+  // Runaway length is handled at the log level by the LORE_MAX_CHARS
+  // middle-drop, and flagged in the inspector when beats average too long.
+
+  return t;
+}
+
+async function summarizeForLore(existingLore, messagesToSummarize, authoredLore) {
   _loreLastOutcome = null;
   // Instructions go in a SYSTEM message, not the user turn — most modern
   // chat templates weight system content more reliably for format
@@ -307,36 +382,63 @@ async function summarizeForLore(existingLore, messagesToSummarize) {
   // model treated the existing summary as immutable and bolted a new
   // sentence on the end. Nothing ever authorised it to delete, merge or
   // shorten what was already there, so the summary could only accrete.
-  const sys = 'You maintain a running summary of a long conversation. You will be '
-    + 'given the current summary and the new messages since it was written. '
-    + 'Rewrite the summary so it covers all of it.\n\n'
+  const sys = 'You are keeping a running list of plot beats for a story. You will be '
+    + 'given the beats recorded so far and the newest stretch of conversation. '
+    + 'Write ONE new beat covering only what happened in the new messages.\n\n'
     + 'RULES:\n'
-    + '1. REWRITE, never append. You may delete, merge, shorten or reorder '
-    + 'anything already in the summary. Facts that no longer matter should be '
-    + 'dropped, not carried forward.\n'
-    + '2. State each standing fact EXACTLY ONCE. The location, the people and '
-    + 'their relationships live in their own fields. Never restate them in '
-    + 'EVENTS. If it has not changed, it does not get mentioned again.\n'
-    + '3. Keep concrete, load-bearing detail over atmosphere: injuries, items '
-    + 'carried, promises made, debts owed, decisions still open, names. Drop '
-    + 'small talk, scene-setting prose and anything already resolved.\n'
-    + '4. Under 180 words total. Shorter is better.\n'
-    + '5. No preamble, no chain-of-thought, no bullet characters, no commentary. '
-    + 'Output the fields and nothing else.\n\n'
-    + 'Output these fields, one per line, omitting any that do not apply:\n'
-    + 'SETTING: where things stand, plus world facts that persist.\n'
-    + 'CHARACTERS: who is present or matters, one short clause each.\n'
-    + 'OPEN: unresolved threads - injuries, inventory, debts, promises, pending decisions.\n'
-    + 'EVENTS: what happened, oldest to newest, essentials only.';
+    + '1. One sentence. Two at the absolute most. Under twenty words.\n'
+    + '2. Only what is NEW. If it is already in the recorded beats, do not write '
+    + 'it again - not the setting, not who anyone is, not anything unchanged. '
+    + 'Assume the reader has the earlier beats in front of them.\n'
+    + '3. Concrete: names, places, actions, decisions, reversals. Not mood, not '
+    + 'scenery, not how anyone felt.\n'
+    + '4. Plain past tense. No preamble, no bullet, no quotes, no labels. Output '
+    + 'the sentence and nothing else.\n'
+    + '5. If nothing of consequence happened, reply with exactly: SKIP\n\n'
+    + 'This is the shape:\n'
+    + 'Lucia was turned into a vampire by Vasch.\n'
+    + 'Lucia escaped Vasch\'s mansion.\n'
+    + 'Vasch began hunting Lucia and lost her trail.\n'
+    + 'A resistance group took Lucia in.\n\n'
+    + 'Each of those covers many exchanges, and none repeats the one before it.';
+
+  // The chain starts at the card's authored starting lore, not at the first
+  // generated beat. It was never shown to the summariser, so the model had
+  // no way to know the premise was already written down and would record it
+  // again as beat one. Both go under the same do-not-repeat heading -- from
+  // the model's point of view they serve the same purpose.
+  //
+  // Only generated beats are returned and stored. Authored lore stays the
+  // card's, untouched, and is injected into context separately.
+  const authored = (authoredLore || '').trim();
+  const recorded = [authored, (existingLore || '').trim()].filter(Boolean).join('\n');
 
   let body = '';
-  if (existingLore) {
-    body += '=== CURRENT SUMMARY (rewrite this, do not append to it) ===\n' + existingLore + '\n\n';
-    body += '=== NEW MESSAGES SINCE IT WAS WRITTEN ===\n';
+  if (recorded) {
+    body += '=== ALREADY WRITTEN DOWN - DO NOT REPEAT ANY OF THIS ===\n' + recorded + '\n\n';
+    body += '=== NEW MESSAGES ===\n';
   } else {
-    body += '=== CONVERSATION TO SUMMARIZE ===\n';
+    body += '=== THE STORY SO FAR ===\n';
   }
-  for (const m of messagesToSummarize) {
+  // Bound the input. The archive step can hand over a very large block --
+  // on a 4K-context model the first pass frees a lot at once -- and a big
+  // prompt on a small model is both slow and the condition under which it
+  // is most likely to lose the plot and start looping.
+  //
+  // The most recent messages are the ones the new beat is about, so when
+  // there are too many, keep the tail. An older message that misses this
+  // window was almost certainly covered by the beat written last pass.
+  const MAX_MSGS_PER_PASS = 24;
+  const MAX_CHARS_PER_PASS = 12000;
+  let feed = messagesToSummarize;
+  if (feed.length > MAX_MSGS_PER_PASS) feed = feed.slice(-MAX_MSGS_PER_PASS);
+  let feedChars = feed.reduce((a, m) => a + ((m.content || '').length), 0);
+  while (feed.length > 2 && feedChars > MAX_CHARS_PER_PASS) {
+    feedChars -= (feed[0].content || '').length;
+    feed = feed.slice(1);
+  }
+
+  for (const m of feed) {
     const role = m.role === 'user' ? 'User' : 'Assistant';
     const text = m.content || '';  // intentionally NOT m.reasoning
     if (!text) continue;
@@ -354,16 +456,30 @@ async function summarizeForLore(existingLore, messagesToSummarize) {
     }
     body += '\n';
   }
-  body += '=== END ===\nRewrite the complete summary now, covering both sections. Output the fields only.';
+  body += '=== END ===\nWrite the one new beat now. One sentence. Nothing else.';
 
   // Visible indicator so the user can see compression is happening rather
   // than the UI appearing frozen. Cleared on completion / error / abort.
   renderLoreIndicator('compressing older messages into lore...');
 
+  // Lore compression must never hold the conversation hostage.
+  //
+  // This runs inside buildContextMessages, which sendMessage awaits before
+  // it can post anything, so a summariser that hangs does not degrade
+  // gracefully -- it eats the user's turn and delivers no reply at all.
+  // There was nothing bounding the wait, so a single stuck request stopped
+  // the whole app.
+  //
+  // On abort we keep the previous lore and carry on. Losing one beat is a
+  // rounding error; losing the message someone just typed is not.
+  const _loreAbort = new AbortController();
+  const _loreTimer = setTimeout(() => _loreAbort.abort(), LORE_TIMEOUT_MS);
+
   try {
     const resp = await privacyFetch(LLAMA_URL + '/v1/chat/completions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      signal: _loreAbort.signal,
       body: JSON.stringify({
         model: 'local',
         messages: [
@@ -373,19 +489,22 @@ async function summarizeForLore(existingLore, messagesToSummarize) {
         // Stream so we don't block the UI for ~30s with zero feedback.
         // The tokens are dropped on the floor — we just want progress.
         stream: true,
-        // max_tokens covers REASONING plus content, not content alone. On a
-        // card with thinkingFormat 'deepseek' (deepseek-r1, Qwen3.6, GLM-Z1)
-        // the chain-of-thought is generated, counted, and only then thrown
-        // away by the parser below — so a tight cap does not prevent the
-        // model burning budget on CoT, it just guarantees the summary gets
-        // truncated mid-sentence when it does. That truncated text then
-        // became the next pass's input.
+        // Generous, but finite. 700 was cutting beats mid-word because
+        // max_tokens covers REASONING plus content and llama-server runs
+        // with --reasoning-format auto -- a model that thinks first spent
+        // the budget thinking. Removing the cap entirely fixed that and
+        // introduced something worse: with temperature 0.3 and no repeat
+        // penalty, a model that falls into a loop has nothing to stop it
+        // and generates until the context is full.
         //
-        // 700 leaves room for a moderate CoT and the ~240 tokens a 180-word
-        // fielded summary needs. Brevity is enforced by the prompt, not by
-        // starving the generation. If CoT still eats everything, content
-        // comes back empty and the guard below keeps the previous lore.
-        max_tokens: 700,
+        // 2048 cannot cut a two-sentence beat. The longest chain-of-thought
+        // observed here was about 640 tokens, leaving well over a thousand
+        // for a forty-token sentence. It only ever bites on a runaway.
+        max_tokens: 2048,
+        // Mild repeat penalty. The chat path gets one from the card's
+        // sampler settings; this request was sending temperature alone,
+        // which is the classic degenerate-loop recipe.
+        repeat_penalty: 1.1,
         // Low temperature: we want stable, repeatable summaries.
         temperature: 0.3
       })
@@ -453,16 +572,10 @@ async function summarizeForLore(existingLore, messagesToSummarize) {
       }
     }
 
-    // Drop anything before the first field label. If the model did think
-    // out loud before answering, that preamble is now sitting in front of
-    // the summary -- and preamble is exactly the kind of text that makes
-    // the next pass restate things.
-    if (summary) {
-      const fieldStart = summary.match(/^[ \t]*(SETTING|CHARACTERS|OPEN|EVENTS)[ \t]*:/mi);
-      if (fieldStart && fieldStart.index > 0) {
-        summary = summary.slice(fieldStart.index).trim();
-      }
-    }
+    // Reduce whatever came back to one clean beat. Deliberately aggressive:
+    // a bad line here is appended permanently, and every later pass reads it
+    // as established fact.
+    summary = _cleanLoreBeat(summary);
 
     if (!summary) {
       // The interesting case. If .reasoning has text but .content does not,
@@ -480,28 +593,61 @@ async function summarizeForLore(existingLore, messagesToSummarize) {
       return existingLore || '';
     }
 
-    // Cap lore length. Without this, lore grows indefinitely as new
-    // batches get folded in, gradually eating the context budget that
-    // should belong to recent messages.
-    //
-    // This keeps the HEAD, not the tail. That is a change, and it is
-    // required by the fielded format: SETTING / CHARACTERS / OPEN are
-    // emitted first and hold the durable state, so tail-truncation
-    // decapitated exactly the fields worth keeping and left a fragment of
-    // EVENTS. Losing the end of EVENTS is the cheap loss — the most recent
-    // turns are still present verbatim in the live (non-archived) window.
-    // Cut on a line boundary so a field is never left half-written.
-    if (summary.length > LORE_MAX_CHARS) {
-      const head = summary.slice(0, LORE_MAX_CHARS);
-      const cut = head.lastIndexOf('\n');
-      summary = (cut > 200 ? head.slice(0, cut) : head).trim();
+    // SKIP is the model correctly reporting that nothing worth recording
+    // happened. Not a failure, and nothing to append.
+    if (/^skip\b/i.test(summary)) {
+      _loreLastOutcome = 'nothing worth recording this pass (SKIP)';
+      return existingLore || '';
     }
+
+    // APPEND, never rewrite. This is the design change.
+    //
+    // Asking a small local model to rewrite an entire summary every pass
+    // produced two failures at once: standing facts got restated on every
+    // rewrite (the location, six times over), and the text drifted as each
+    // pass re-interpreted the last. A beat log has neither problem. Old
+    // lines are never touched so they cannot drift, and each new line
+    // covers only new ground because that is all that was asked for.
+    const prior = (existingLore || '').trim();
+    let combined = prior ? (prior + '\n- ' + summary) : ('- ' + summary);
+
+    // Cap. Beats are short, so 2400 chars holds 20-25 of them, which is a
+    // lot of story. When it does overflow, drop from the MIDDLE and keep
+    // the first two: the opening beats are the premise everything later
+    // rests on ("Lucia was turned into a vampire by Vasch" explains every
+    // line after it), while the middle is the most safely forgotten.
+    if (combined.length > LORE_MAX_CHARS) {
+      const lines = combined.split('\n').filter(function (l) { return l.trim(); });
+      const head = lines.slice(0, 2);
+      const tail = [];
+      let budget = LORE_MAX_CHARS - head.join('\n').length - 24;
+      for (let k = lines.length - 1; k >= 2 && budget > 0; k--) {
+        budget -= lines[k].length + 1;
+        if (budget > 0) tail.unshift(lines[k]);
+      }
+      combined = head.concat(['- [...]']).concat(tail).join('\n');
+    }
+    summary = combined;
     return summary;
   } catch (e) {
-    _loreLastOutcome = 'threw: ' + (e && e.message ? e.message : String(e));
-    console.error('Lore summarization failed:', e);
+    // An abort is a timeout, not a crash, and saying so matters: it points
+    // at a stuck or looping model rather than a bug in the request.
+    if (e && e.name === 'AbortError') {
+      _loreLastOutcome = 'timed out after ' + Math.round(LORE_TIMEOUT_MS / 1000)
+                       + 's and was cancelled so the turn could continue';
+      console.warn('[lore] compression timed out; keeping previous lore.');
+    } else {
+      _loreLastOutcome = 'threw: ' + (e && e.message ? e.message : String(e));
+      console.error('Lore summarization failed:', e);
+    }
     renderLoreIndicator('');
     return existingLore || '';
+  } finally {
+    // Six return paths leave this function. A finally is the only way to be
+    // sure the timer dies on all of them -- a leaked one fires minutes
+    // later and aborts a controller nobody is listening to, or worse, keeps
+    // the page awake for no reason.
+    clearTimeout(_loreTimer);
   }
 }
 

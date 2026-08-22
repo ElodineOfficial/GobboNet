@@ -48,7 +48,7 @@ function renderLandingPage() {
     const desc = (c.personality || c.writingStyle || '').slice(0, 72);
     return `
       <div class="landing-char-card ${isActive ? 'landing-char-active' : ''}"
-           onclick="activateCard('${c.id}')" title="Set as active character">
+           onclick="activateCard('${escapeJsAttr(c.id)}')" title="Set as active character">
         <div class="landing-char-avatar">${avatarHtml}</div>
         <div class="landing-char-info">
           <div class="landing-char-name">${escapeHtml(c.name)}</div>
@@ -157,10 +157,15 @@ function renderMessages() {
   const cardName = card.name || 'Assistant';
 
   // Resolve text/dialog colors
-  const userTextColor = persona.textColor || '';
-  const userDialogColor = persona.dialogColor || '';
-  const aiTextColor = card.textColor || '';
-  const aiDialogColor = card.dialogColor || '';
+  // Cards and personas can arrive from an imported file or a synced peer, and
+  // these four values land directly in style="color:..." attributes below.
+  // Allowlist the shapes a colour picker produces; anything else falls back to
+  // the 1.5.8 defaults rather than to empty, so a hostile value degrades to the
+  // correct colour instead of to no colour.
+  const userTextColor   = safeCssColor(persona.textColor,   FALLBACK_PERSONA_TEXT_COLOR);
+  const userDialogColor = safeCssColor(persona.dialogColor, FALLBACK_PERSONA_DIALOG_COLOR);
+  const aiTextColor     = safeCssColor(card.textColor,      FALLBACK_CARD_TEXT_COLOR);
+  const aiDialogColor   = safeCssColor(card.dialogColor,    FALLBACK_CARD_DIALOG_COLOR);
 
   // ── Branch origin banner ────────────────────────────────────────
   let branchBannerHtml = '';
@@ -178,9 +183,9 @@ function renderMessages() {
       const nextSib = siblings[myIdx + 1];
       sibNavHtml = `
         <div class="branch-sibling-nav">
-          <button class="branch-nav-btn" ${!prevSib ? 'disabled' : ''} onclick="switchToBranch('${prevSib ? prevSib.id : ''}')" title="Previous branch">◀</button>
+          <button class="branch-nav-btn" ${!prevSib ? 'disabled' : ''} onclick="switchToBranch('${escapeJsAttr(prevSib ? prevSib.id : '')}')" title="Previous branch">◀</button>
           <span class="branch-nav-label">Branch ${myIdx + 1} / ${totalSibs}</span>
-          <button class="branch-nav-btn" ${!nextSib ? 'disabled' : ''} onclick="switchToBranch('${nextSib ? nextSib.id : ''}')" title="Next branch">▶</button>
+          <button class="branch-nav-btn" ${!nextSib ? 'disabled' : ''} onclick="switchToBranch('${escapeJsAttr(nextSib ? nextSib.id : '')}')" title="Next branch">▶</button>
         </div>`;
     }
 
@@ -189,7 +194,7 @@ function renderMessages() {
         <span class="branch-origin-icon">⑂</span>
         <span class="branch-origin-label">
           Branched from
-          <button class="branch-origin-link" onclick="switchToBranch('${escapeHtml(thread.forkSource.threadId)}')">${sourceName}</button>
+          <button class="branch-origin-link" onclick="switchToBranch('${escapeJsAttr(thread.forkSource.threadId)}')">${sourceName}</button>
           at message ${forkAt + 1}
         </span>
         ${sibNavHtml}
@@ -367,7 +372,7 @@ function renderMessages() {
     if (Array.isArray(m.attachments) && m.attachments.length) {
       attachmentsHtml = '<div class="msg-attachments">' + m.attachments.map(a => {
         if (a.kind === 'image' && a.dataUrl) {
-          return `<span class="msg-attach-chip" title="${escapeHtml(a.name)} — image, not sent to model"><img class="msg-attach-thumb" src="${a.dataUrl}" alt="${escapeHtml(a.name)}"><span>${escapeHtml(a.name)}</span></span>`;
+          return `<span class="msg-attach-chip" title="${escapeHtml(a.name)} — image, not sent to model"><img class="msg-attach-thumb" src="${escapeHtml(safeDataUrl(a.dataUrl))}" alt="${escapeHtml(a.name)}"><span>${escapeHtml(a.name)}</span></span>`;
         }
         const icon = a.kind === 'text' ? '📄' : (a.kind === 'image' ? '🖼️' : '⚠️');
         const note = a.kind === 'text' ? (a.truncated ? ' (truncated)' : '') : (a.kind === 'image' ? ' (not sent)' : ' (not sent)');
@@ -416,7 +421,7 @@ function renderMessages() {
     const forksHere = getForksAt(thread.id, i + 1);
     if (forksHere.length === 0) return prefix + rowHtml;
     const forkBtns = forksHere.map(ft =>
-      `<button class="branch-fork-btn" onclick="switchToBranch('${ft.id}')" title="${escapeHtml(ft.name)}">⑂ ${escapeHtml(ft.name.replace(/^⑂\s*/, '').slice(0, 28))}</button>`
+      `<button class="branch-fork-btn" onclick="switchToBranch('${escapeJsAttr(ft.id)}')" title="${escapeHtml(ft.name)}">⑂ ${escapeHtml(ft.name.replace(/^⑂\s*/, '').slice(0, 28))}</button>`
     ).join('');
     return prefix + rowHtml + `
       <div class="branch-fork-line">
@@ -462,14 +467,6 @@ function renderMessages() {
     if (lastAssistant) container.insertBefore(banner, lastAssistant);
     else container.appendChild(banner);
   }
-}
-
-function renderReminderIndicator() {
-  const container = document.getElementById('messages');
-  const div = document.createElement('div');
-  div.className = 'message message-system-inject';
-  div.innerHTML = '&#9888; Reminder prompt injected';
-  container.appendChild(div);
 }
 
 function renderSearchIndicator(status) {
@@ -533,9 +530,11 @@ function openLoreInspector() {
   // --- current summary -------------------------------------------------
   html += '<div class="lore-section-label">Current summary</div>';
   if (lore) {
-    html += '<div class="lore-meta">' + lore.length + ' chars &middot; ~'
-          + _loreTokens(lore) + ' tokens &middot; ' + log.length
-          + ' compression' + (log.length === 1 ? '' : 's') + ' recorded</div>';
+    const beatCount = lore.split('\n').filter(l => l.trim()).length;
+    html += '<div class="lore-meta">' + beatCount + ' beat' + (beatCount === 1 ? '' : 's')
+          + ' &middot; ' + lore.length + ' chars &middot; ~' + _loreTokens(lore)
+          + ' tokens &middot; ' + log.length + ' pass'
+          + (log.length === 1 ? '' : 'es') + ' recorded</div>';
     html += '<pre class="lore-summary-text">' + escapeHtml(lore) + '</pre>';
   } else {
     html += '<div class="lore-empty">No summary yet. Compression starts once the '
@@ -589,13 +588,21 @@ function openLoreInspector() {
       html += '</div>';
     }
 
-    // Only editorialise when there is enough history to mean something.
-    if (log.length >= 3) {
-      const grew = log.slice(-3).filter(e => (e.after - e.before) > 0).length;
-      if (grew === 3) {
-        html += '<div class="lore-warn">Grew on each of the last three passes. '
-              + 'A summary that only ever gets longer is appending instead of '
-              + 'rewriting, which is what makes fixed details repeat.</div>';
+    // The old warning here fired when the log grew three passes running,
+    // back when compression rewrote the whole summary and growth meant it
+    // was appending instead. Appending is now the design, so that warning
+    // flagged correct behaviour as a fault. The useful signal changed with
+    // it: what matters is the SIZE of each addition. A beat is one
+    // sentence, so a pass adding a paragraph means the model is ignoring
+    // the length rule and the log will bloat one entry at a time.
+    const adds = log.map(e => e.after - e.before).filter(n => n > 0);
+    if (adds.length >= 3) {
+      const avg = Math.round(adds.reduce((a, b) => a + b, 0) / adds.length);
+      if (avg > 220) {
+        html += '<div class="lore-warn">Beats are averaging ' + avg + ' characters. '
+              + 'They should be one sentence, nearer 60-100. The model is not '
+              + 'holding to the length rule, and the log will fill with prose '
+              + 'rather than plot.</div>';
       }
     }
   }
@@ -721,7 +728,7 @@ function updateContextInfo() {
   const loreTokens = authoredLoreTokens + summaryTokens;
 
   const projected = systemTokens + personalityTokens + liveTokens + loreTokens;
-  const budget    = Math.floor(state.settings.tokenLimit * 0.9);
+  const budget    = Math.floor(resolveContextLimit(card) * 0.9);
   // Mirror RESPONSE_RESERVE_FACTOR from buildContextMessages — keep these
   // in sync. Showing % against `effectiveBudget` makes the readout track
   // the actual compression trigger; otherwise users see compression fire

@@ -232,16 +232,16 @@ function renderExtEntryList(kind) {
     <div class="ext-entry ${isStyle ? '' : 'ext-entry-script'}" data-ext-entry="${escapeHtml(e.id)}">
       <div class="ext-entry-head">
         <input type="text" class="ext-entry-name" placeholder="${isStyle ? 'Stylesheet' : 'Script'} ${i + 1} name (optional)" value="${escapeHtml(e.name || '')}">
-        <button class="btn btn-sm btn-danger" onclick="removeExtEntry('${kind}','${escapeHtml(e.id)}')">Remove</button>
+        <button class="btn btn-sm btn-danger" onclick="removeExtEntry('${escapeJsAttr(kind)}','${escapeJsAttr(e.id)}')">Remove</button>
       </div>
       <input type="text" class="ext-entry-url" placeholder="${urlPh}" value="${escapeHtml(e.url || '')}">
       <textarea class="ext-code-area ext-entry-raw" rows="${rows}" placeholder="${rawPh}">${escapeHtml(e.raw || '')}</textarea>
       <div style="display:flex;gap:8px;margin-top:6px;align-items:center;">
         <label class="avatar-file-btn" style="margin:0;">
           ${fileLabel}
-          <input type="file" accept="${accept}" style="display:none" onchange="handleExtFileEntry(this,'${kind}','${escapeHtml(e.id)}')">
+          <input type="file" accept="${accept}" style="display:none" onchange="handleExtFileEntry(this,'${escapeJsAttr(kind)}','${escapeJsAttr(e.id)}')">
         </label>
-        <button class="btn btn-sm" onclick="updateExtEntry('${kind}','${escapeHtml(e.id)}','raw','');renderExtEntries()">Clear inline</button>
+        <button class="btn btn-sm" onclick="updateExtEntry('${escapeJsAttr(kind)}','${escapeJsAttr(e.id)}','raw','');renderExtEntries()">Clear inline</button>
       </div>
     </div>
   `).join('');

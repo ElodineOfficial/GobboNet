@@ -275,7 +275,7 @@ function getActiveThread() {
 
 function startRename(id, event) {
   event.stopPropagation();
-  const el = document.querySelector(`[data-thread-id="${id}"] .thread-name`);
+  const el = document.querySelector(`[data-thread-id=${CSS.escape(id)}] .thread-name`);
   const thread = state.threads.find(t => t.id === id);
   if (!el || !thread) return;
   const input = document.createElement('input');

@@ -11,7 +11,7 @@
    but this stamp still shows the old date, you're on a cached
    copy — hard-refresh (Ctrl+Shift+R) to bust it.
 ================================================================ */
-const CHAT_HTML_BUILD = '2026-05-16-nemo-strict-template-fix';
+const CHAT_HTML_BUILD = '1.6.0-no-encoded-payload';
 console.log(`%c[chat.html build] ${CHAT_HTML_BUILD}`, 'color:#0a0;font-weight:bold');
 
 /* ================================================================
@@ -160,6 +160,85 @@ const MODEL_REGISTRY = {
     name: 'Command R 35B (08-2024)', family: 'cohere',
     maxCtx: 131072, defaultCtx: 16384, thinkingFormat: 'none',
     hint: 'Cohere Command R 35B (08-2024 refresh of v01). Heavy chat model; Q4_K_S needs ~20 GB VRAM at modest context.'
+  },
+  // ---------------------------------------------------------------------
+  // Family-level ids.
+  //
+  // identify-model.ps1 emits these after reading the GGUF, and they are what
+  // the app actually looks up -- the specific ids above (gemma4-26b,
+  // qwen3-30b, llama31-8b ...) are only reachable by hand-editing
+  // active-model.json. Without these keys every downloaded model missed the
+  // registry and fell back to a generic entry, so the curated hint below the
+  // model picker was never the one written for it.
+  //
+  // Values here are conservative: maxCtx/defaultCtx/thinkingFormat from
+  // active-model.json win anyway, because identify-model.ps1 read them out of
+  // the file itself. What these add is the hint text.
+  // ---------------------------------------------------------------------
+  'gemma4': {
+    name: 'Gemma 4', family: 'gemma',
+    maxCtx: 262144, defaultCtx: 16384, thinkingFormat: 'gemma',
+    hint: 'Gemma 4 (E4B and 26B-A4B MoE). Up to 256K context; actual capacity depends on KV cache quantization and VRAM.'
+  },
+  'gemma3': {
+    name: 'Gemma 3', family: 'gemma',
+    maxCtx: 131072, defaultCtx: 32768, thinkingFormat: 'none',
+    hint: 'Gemma 3 supports up to 128K tokens. Non-thinking instruct model.'
+  },
+  'qwen': {
+    name: 'Qwen', family: 'qwen',
+    maxCtx: 131072, defaultCtx: 16384, thinkingFormat: 'deepseek',
+    hint: 'Qwen3 line (including 3.5, 3.6 MoE, and DeepSeek-R1 Qwen distills). Emits chain-of-thought between <think> tags.'
+  },
+  'mistral': {
+    name: 'Mistral', family: 'mistral',
+    maxCtx: 131072, defaultCtx: 16384, thinkingFormat: 'none',
+    hint: 'Mistral instruct family. Context varies by release -- v0.3 is 32K, Nemo and Small are 128K.'
+  },
+  'llama': {
+    name: 'Llama', family: 'llama',
+    maxCtx: 131072, defaultCtx: 32768, thinkingFormat: 'none',
+    hint: 'Meta Llama instruct family. Up to 128K context depending on release.'
+  },
+  'deepseek': {
+    name: 'DeepSeek', family: 'deepseek',
+    maxCtx: 131072, defaultCtx: 32768, thinkingFormat: 'deepseek',
+    hint: 'DeepSeek reasoning family. Shows chain-of-thought between <think> tags by default.'
+  },
+  'deepseek-r1': {
+    name: 'DeepSeek-R1', family: 'deepseek',
+    maxCtx: 131072, defaultCtx: 32768, thinkingFormat: 'deepseek',
+    hint: 'DeepSeek-R1 reasoning model. Shows chain-of-thought between <think> tags by default.'
+  },
+  'gpt-oss': {
+    name: 'gpt-oss', family: 'gpt-oss',
+    maxCtx: 131072, defaultCtx: 16384, thinkingFormat: 'harmony',
+    hint: 'OpenAI gpt-oss uses the Harmony channel format (<|channel|>analysis ... <|channel|>final).'
+  },
+  'command-r': {
+    name: 'Command R', family: 'cohere',
+    maxCtx: 131072, defaultCtx: 16384, thinkingFormat: 'none',
+    hint: 'Cohere Command R family. 128K context, strong multilingual instruction following; no chain-of-thought.'
+  },
+  'granite': {
+    name: 'IBM Granite', family: 'granite',
+    maxCtx: 131072, defaultCtx: 16384, thinkingFormat: 'deepseek',
+    hint: 'IBM Granite. Reasoning variants emit <think> blocks when thinking is enabled.'
+  },
+  'phi': {
+    name: 'Microsoft Phi', family: 'phi',
+    maxCtx: 131072, defaultCtx: 16384, thinkingFormat: 'none',
+    hint: 'Microsoft Phi family. Small, instruction-tuned; context varies by release.'
+  },
+  'moonshot': {
+    name: 'Moonshot / Kimi', family: 'moonshot',
+    maxCtx: 131072, defaultCtx: 16384, thinkingFormat: 'none',
+    hint: 'Moonshot AI (Kimi) models. Uses <|im_user|> / <|im_middle|> markers.'
+  },
+  'tulu': {
+    name: 'Tulu', family: 'tulu',
+    maxCtx: 131072, defaultCtx: 16384, thinkingFormat: 'none',
+    hint: 'AI2 Tulu instruct family.'
   },
   'custom': {
     name: 'Custom GGUF', family: 'custom',

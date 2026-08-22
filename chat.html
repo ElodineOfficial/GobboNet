@@ -127,6 +127,56 @@
   <div class="modal">
     <h2>CONFIG</h2>
 
+    <div class="form-group" style="margin-top:12px; padding:12px; border:1px solid var(--green-dim); border-radius:var(--radius); background:rgba(0,255,65,0.03);">
+      <label>&#127760; Remote Images In Cards</label>
+      <div class="form-hint" style="margin-top:2px;margin-bottom:10px;">Character avatars and backgrounds can point at a web address instead of holding the picture themselves. Loading one contacts that server, which tells it your IP address &mdash; the only thing in GobboNet that reaches outside your machine without you asking. Off by default. Pictures pasted or uploaded directly are unaffected and always work.</div>
+      <label class="code-enable-row">
+        <input type="checkbox" id="set-allow-remote-images">
+        <span>Allow remote images</span>
+      </label>
+    </div>
+
+    <div class="form-group" style="margin-top:12px; padding:12px; border:1px solid rgba(255,149,0,0.22); border-radius:var(--radius); background:rgba(255,149,0,0.03);">
+      <label>&#9889; Performance &mdash; llama.cpp tuning</label>
+      <div class="form-hint" style="margin-top:2px;margin-bottom:12px;">
+        These are picked automatically from your GPU and the model you loaded, and for most people the automatic
+        choice is the right one. They are here because the automatic choice cannot know that you also game on this
+        machine, or that you would rather trade context length for speed.
+        <strong>Changing these restarts the model.</strong>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label for="perf-ctx">Context size (tokens)</label>
+          <input type="number" id="perf-ctx" min="512" max="1048576" step="512">
+          <div class="form-hint">How much the model can hold at once. Bigger costs VRAM, quadratically at the top end.</div>
+        </div>
+        <div class="form-group">
+          <label for="perf-gpu">GPU layers</label>
+          <input type="number" id="perf-gpu" min="0" max="999" step="1">
+          <div class="form-hint">99 means all of them. Lower pushes work onto the CPU: slower, but frees VRAM. 0 is CPU only.</div>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label for="perf-kv">KV cache type</label>
+        <select id="perf-kv">
+          <option value="f16">f16 &mdash; best quality, most VRAM</option>
+          <option value="q8_0">q8_0 &mdash; balanced (usual default)</option>
+          <option value="q4_0">q4_0 &mdash; least VRAM, some quality loss</option>
+        </select>
+        <div class="form-hint">Quantising the cache roughly halves its VRAM cost per step down. Longest lever for fitting a big context.</div>
+      </div>
+
+      <div class="carousel-counter" id="perf-status" style="min-height:16px;"></div>
+
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px;">
+        <button class="btn btn-sm" onclick="savePerfSettings(false)">SAVE FOR NEXT START</button>
+        <button class="btn btn-sm btn-fill" onclick="savePerfSettings(true)">SAVE &amp; RESTART MODEL</button>
+        <button class="btn btn-sm" onclick="resetPerfSettings()">RESET TO AUTO</button>
+      </div>
+    </div>
+
     <div class="form-group" style="margin-top:4px; padding:10px 12px; border:1px dashed rgba(0,243,255,0.15); border-radius:var(--radius); background:rgba(0,243,255,0.02);">
       <div class="form-hint" style="margin:0;">
         Your name, avatar, and text colors moved to <strong>Personas</strong> &mdash;
@@ -160,17 +210,6 @@
       <div class="form-hint">Free key from ollama.com/settings/keys. Search proxy on :11435 is started by launch.bat. Note: the search proxy is the ONLY network traffic — llama.cpp itself is fully offline.</div>
     </div>
 
-    <div class="form-row">
-      <div class="form-group">
-        <label for="set-frequency">Reminder every N msgs</label>
-        <input type="number" id="set-frequency" min="1" max="50" value="3">
-      </div>
-      <div class="form-group">
-        <label for="set-tokens">Context limit (tokens)</label>
-        <input type="number" id="set-tokens" min="2048" max="256000" value="24576">
-        <div class="form-hint" id="ctx-hint">Input context budget — 90% reserved for system prompt, lore, and conversation history. The remaining server context (CTX_SIZE minus this) is for the model's response. Context limit depends on your loaded model and VRAM.</div>
-      </div>
-    </div>
 
     <div class="form-group" style="margin-top:12px; padding:12px; border:1px solid rgba(255,165,0,0.25); border-radius:var(--radius); background:rgba(255,165,0,0.03);">
       <label style="color:var(--amber,#ffaa00);">&#9201; Infinite Runtime Bug Fix</label>
@@ -187,23 +226,6 @@
         </div>
       </div>
     </div>
-
-    <div class="form-group" style="margin-top:12px; padding:12px; border:1px solid rgba(217,0,255,0.25); border-radius:var(--radius); background:rgba(217,0,255,0.03);">
-      <label style="color:var(--magenta);">&#9986; Smart Response Limit</label>
-      <div class="form-hint" style="margin-top:2px;margin-bottom:10px;">Stops the AI from producing too much text. Counts a rough token estimate (&asymp;&frac34; word per token) as the reply streams and, once the cap is reached, cuts off neatly at the end of the sentence. Chain-of-thought reasoning doesn't count &mdash; only the visible reply. Each capped reply gets a &#9986; marker in its header.</div>
-      <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
-        <label style="display:flex;align-items:center;gap:7px;cursor:pointer;font-size:13px;color:rgba(255,255,255,0.75);">
-          <input type="checkbox" id="set-smart-limit-enabled" style="accent-color:var(--magenta);width:15px;height:15px;cursor:pointer;" onchange="updateSmartLimitRow()">
-          Enable smart limit
-        </label>
-        <div id="smart-limit-tokens-wrap" style="display:flex;align-items:center;gap:8px;opacity:0.35;pointer-events:none;transition:opacity 0.15s;">
-          <span style="font-size:12px;color:rgba(255,255,255,0.5);">Max reply:</span>
-          <input type="number" id="set-smart-limit-tokens" min="25" max="8192" step="25" value="300" style="width:74px;text-align:center;font-size:13px;">
-          <span style="font-size:12px;color:rgba(255,255,255,0.5);">tokens (est.)</span>
-        </div>
-      </div>
-    </div>
-
     <div class="form-group" style="margin-top:12px; padding:12px; border:1px solid var(--green-dim); border-radius:var(--radius); background:rgba(0,255,65,0.03);">
       <label style="color:var(--green-neon);">&#128274; Privacy Status</label>
       <div class="form-hint" style="color:var(--green-dim);">
@@ -272,6 +294,41 @@
       </div>
 
       <div class="form-group">
+        <label>Chat Background</label>
+        <div class="avatar-picker">
+          <div class="avatar-preview" id="card-bg-preview" style="width:80px;height:48px;">--</div>
+          <div class="avatar-picker-controls">
+            <input type="text" id="card-bg" placeholder="Image URL for chat background..." oninput="previewBg()">
+            <label class="avatar-file-btn">
+              Browse file...
+              <input type="file" accept="image/*" style="display:none" onchange="handleBgFile(this)">
+            </label>
+          </div>
+        </div>
+        <div class="form-hint">Optional. Leave empty for default black background.</div>
+      </div>
+
+      <div class="form-group">
+        <label>Character Text Colors</label>
+        <div class="form-hint" style="margin-top:0;margin-bottom:8px;">Customize how this character's messages appear. Dialog = text inside "quotes".</div>
+        <div class="color-row">
+          <div class="color-swatch-wrap">
+            <label class="color-label">Text</label>
+            <input type="color" class="color-swatch" id="card-textcolor" value="#e0f8ff" oninput="syncColorHex(this,'card-textcolor-hex');previewCardColors()">
+            <input type="text" class="color-hex" id="card-textcolor-hex" value="#e0f8ff" oninput="syncColorSwatch(this,'card-textcolor');previewCardColors()">
+          </div>
+          <div class="color-swatch-wrap">
+            <label class="color-label">Dialog</label>
+            <input type="color" class="color-swatch" id="card-dialogcolor" value="#d900ff" oninput="syncColorHex(this,'card-dialogcolor-hex');previewCardColors()">
+            <input type="text" class="color-hex" id="card-dialogcolor-hex" value="#d900ff" oninput="syncColorSwatch(this,'card-dialogcolor');previewCardColors()">
+          </div>
+        </div>
+        <div style="margin-top:8px;">
+          <span class="color-preview-text" id="card-color-preview" style="color:#e0f8ff;">Narrative text... <span class="dialog-text" style="color:#d900ff;font-weight:700;">"And then dialog like this!"</span></span>
+        </div>
+      </div>
+
+      <div class="form-group">
         <label for="card-style">Writing Style</label>
         <textarea id="card-style" rows="3" placeholder="How should this character write? (replaces system prompt)"></textarea>
         <div class="form-hint">Sent as the system prompt at the start of every context.</div>
@@ -308,6 +365,25 @@
         <label for="card-personality">Personality</label>
         <textarea id="card-personality" rows="3" placeholder="Character traits, reminders, behavioral rules..."></textarea>
         <div class="form-hint">Injected periodically as a reminder to maintain character.</div>
+      </div>
+
+      <div class="form-group">
+        <label for="card-greeting">Opening Greeting</label>
+        <textarea id="card-greeting" rows="3" placeholder="The character's first message in any new thread. Leave empty for no greeting."></textarea>
+        <div class="form-hint">Injected verbatim as the character's first message in new threads &mdash; <strong>not generated by the model</strong>. Supports &#123;&#123;char&#125;&#125;, &#123;&#123;user&#125;&#125;, and macros, resolved at thread creation.</div>
+
+        <!-- ALT GREETINGS -->
+        <div class="carousel-toggle-row" onclick="toggleAltGreetingsBody()">
+          <input type="checkbox" id="card-alt-greetings-enabled" onclick="event.stopPropagation();toggleAltGreetingsBody()" style="cursor:pointer;accent-color:var(--cyan-mid,#00f3ff);">
+          <span class="carousel-toggle-label" id="alt-greetings-toggle-label">Alternative Greetings <span style="opacity:0.5;font-size:11px;">&mdash; flippable openings via the variant navigator</span></span>
+        </div>
+
+        <div class="carousel-body" id="alt-greetings-body">
+          <label for="card-alt-greetings" style="font-size:12px;color:rgba(0,243,255,0.7);margin-bottom:6px;display:block;">Alt Greetings <span style="font-weight:400;color:rgba(255,255,255,0.3);">(separate entries with a blank line)</span></label>
+          <textarea id="card-alt-greetings" rows="8" placeholder="Hey, welcome back. Picking up where we left off?&#10;&#10;Greetings, traveller. State your business.&#10;&#10;Well well well. Look who came back." style="font-size:12px;resize:vertical;border-color:rgba(0,243,255,0.2);" oninput="updateAltGreetingsCounter()"></textarea>
+          <div class="form-hint" style="margin-top:5px;">Each entry becomes a flippable variant on the greeting. Use the &#9664; &#9654; navigator above the message in chat to pick a different opening. The Opening Greeting above is variant 1; these add 2, 3, 4...</div>
+          <div class="carousel-counter" id="alt-greetings-counter"></div>
+        </div>
       </div>
 
       <div class="form-group">
@@ -384,61 +460,31 @@ gobbo.every(5, async () =&gt; {
         <div class="carousel-counter" id="card-code-status"></div>
       </div>
 
-      <div class="form-group">
-        <label for="card-greeting">Opening Greeting</label>
-        <textarea id="card-greeting" rows="3" placeholder="The character's first message in any new thread. Leave empty for no greeting."></textarea>
-        <div class="form-hint">Injected verbatim as the character's first message in new threads &mdash; <strong>not generated by the model</strong>. Supports &#123;&#123;char&#125;&#125;, &#123;&#123;user&#125;&#125;, and macros, resolved at thread creation.</div>
-
-        <!-- ALT GREETINGS -->
-        <div class="carousel-toggle-row" onclick="toggleAltGreetingsBody()">
-          <input type="checkbox" id="card-alt-greetings-enabled" onclick="event.stopPropagation();toggleAltGreetingsBody()" style="cursor:pointer;accent-color:var(--cyan-mid,#00f3ff);">
-          <span class="carousel-toggle-label" id="alt-greetings-toggle-label">Alternative Greetings <span style="opacity:0.5;font-size:11px;">&mdash; flippable openings via the variant navigator</span></span>
-        </div>
-
-        <div class="carousel-body" id="alt-greetings-body">
-          <label for="card-alt-greetings" style="font-size:12px;color:rgba(0,243,255,0.7);margin-bottom:6px;display:block;">Alt Greetings <span style="font-weight:400;color:rgba(255,255,255,0.3);">(separate entries with a blank line)</span></label>
-          <textarea id="card-alt-greetings" rows="8" placeholder="Hey, welcome back. Picking up where we left off?&#10;&#10;Greetings, traveller. State your business.&#10;&#10;Well well well. Look who came back." style="font-size:12px;resize:vertical;border-color:rgba(0,243,255,0.2);" oninput="updateAltGreetingsCounter()"></textarea>
-          <div class="form-hint" style="margin-top:5px;">Each entry becomes a flippable variant on the greeting. Use the &#9664; &#9654; navigator above the message in chat to pick a different opening. The Opening Greeting above is variant 1; these add 2, 3, 4...</div>
-          <div class="carousel-counter" id="alt-greetings-counter"></div>
-        </div>
-      </div>
-
-      <div class="form-group">
-        <label>Chat Background</label>
-        <div class="avatar-picker">
-          <div class="avatar-preview" id="card-bg-preview" style="width:80px;height:48px;">--</div>
-          <div class="avatar-picker-controls">
-            <input type="text" id="card-bg" placeholder="Image URL for chat background..." oninput="previewBg()">
-            <label class="avatar-file-btn">
-              Browse file...
-              <input type="file" accept="image/*" style="display:none" onchange="handleBgFile(this)">
-            </label>
-          </div>
-        </div>
-        <div class="form-hint">Optional. Leave empty for default black background.</div>
-      </div>
-
-      <div class="form-group">
-        <label>Character Text Colors</label>
-        <div class="form-hint" style="margin-top:0;margin-bottom:8px;">Customize how this character's messages appear. Dialog = text inside "quotes".</div>
-        <div class="color-row">
-          <div class="color-swatch-wrap">
-            <label class="color-label">Text</label>
-            <input type="color" class="color-swatch" id="card-textcolor" value="#e0f8ff" oninput="syncColorHex(this,'card-textcolor-hex');previewCardColors()">
-            <input type="text" class="color-hex" id="card-textcolor-hex" value="#e0f8ff" oninput="syncColorSwatch(this,'card-textcolor');previewCardColors()">
-          </div>
-          <div class="color-swatch-wrap">
-            <label class="color-label">Dialog</label>
-            <input type="color" class="color-swatch" id="card-dialogcolor" value="#d900ff" oninput="syncColorHex(this,'card-dialogcolor-hex');previewCardColors()">
-            <input type="text" class="color-hex" id="card-dialogcolor-hex" value="#d900ff" oninput="syncColorSwatch(this,'card-dialogcolor');previewCardColors()">
-          </div>
-        </div>
-        <div style="margin-top:8px;">
-          <span class="color-preview-text" id="card-color-preview" style="color:#e0f8ff;">Narrative text... <span class="dialog-text" style="color:#d900ff;font-weight:700;">"And then dialog like this!"</span></span>
-        </div>
-      </div>
-
       <div class="form-group" style="margin-top:12px; padding:12px; border:1px solid rgba(255,255,255,0.08); border-radius:var(--radius); background:rgba(255,255,255,0.02);">
+      <div class="form-group">
+        <label>&#128207; Context &amp; Reply Length
+          <span style="opacity:0.5;font-weight:400;font-size:11px;">&mdash; per character</span>
+        </label>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label for="card-context-limit">Context limit (tokens)</label>
+            <input type="number" id="card-context-limit" min="0" max="1048576" step="1024" placeholder="0 = auto">
+            <div class="form-hint" id="card-ctx-hint">0 follows the model's own context. 90% of this is the input budget; the rest is reply headroom.</div>
+          </div>
+          <div class="form-group">
+            <label for="card-smart-limit-tokens">Reply cap (tokens)</label>
+            <input type="number" id="card-smart-limit-tokens" min="25" max="8192" step="25" value="300">
+            <div class="form-hint">Only applies when the cap below is on. Cuts at a sentence end, not mid-word.</div>
+          </div>
+        </div>
+
+        <label class="code-enable-row" style="margin-top:4px;">
+          <input type="checkbox" id="card-smart-limit-enabled">
+          <span>Cap this character's reply length</span>
+        </label>
+      </div>
+
         <label style="color:var(--green-neon); margin-bottom:8px; display:block;">&#9881; Sampler Parameters</label>
         <div class="form-hint" style="margin-top:0;margin-bottom:12px;">Fine-tune creativity and output style per character. These are sent directly to llama.cpp with each request.</div>
 
@@ -820,9 +866,9 @@ gobbo.every(5, async () =&gt; {
   <div class="modal lore-inspect">
     <h2>LORE SUMMARY</h2>
     <div class="form-hint" style="margin-bottom:14px;">
-      What compression has actually produced for this thread. The size column is the
-      useful part: a summary doing its job stays roughly flat as new events displace
-      old ones. One that grows every pass is appending rather than rewriting.
+      The running plot log for this thread. One short beat is appended per compression
+      pass, never rewritten, so it only ever grows &mdash; steady growth is correct here.
+      What to watch is the size of each addition: beats should be one sentence.
     </div>
     <div id="lore-inspect-body"></div>
     <div class="modal-actions">
@@ -833,50 +879,57 @@ gobbo.every(5, async () =&gt; {
 </div>
 
 <div class="modal-backdrop" id="about-modal">
-  <div class="modal">
-    <h2>ABOUT</h2>
+    <div class="modal">
+      <h2>ABOUT</h2>
 
-    <div style="text-align:center;margin-bottom:20px;padding-bottom:16px;border-bottom:1px solid var(--border);">
-      <div style="font-size:28px;font-weight:800;letter-spacing:2px;color:var(--green-neon);line-height:1;">GOBBONET</div>
-      <div style="font-size:11px;color:rgba(255,255,255,0.3);margin-top:6px;letter-spacing:1.5px;">LOCAL AI TERMINAL // llama.cpp</div>
-      <div style="font-size:12px;color:rgba(255,255,255,0.5);margin-top:12px;line-height:1.6;max-width:48ch;margin-left:auto;margin-right:auto;">A self-hosted chat workbench for any local GGUF model — characters, memory, branching, and deep sampler control, all running on hardware you own.</div>
-    </div>
-
-    <div style="display:flex;flex-direction:column;gap:12px;font-size:13px;">
-
-      <div style="padding:10px 12px;border:1px solid rgba(0,255,65,0.15);border-radius:var(--radius);background:rgba(0,255,65,0.03);">
-        <div style="color:var(--green-neon);font-size:11px;font-weight:700;letter-spacing:1px;margin-bottom:6px;">&#128274; PRIVATE BY DESIGN</div>
-        <div style="color:rgba(255,255,255,0.55);line-height:1.6;">Runs 100% on your machine — no accounts, no telemetry, no cloud round-trips. The only optional network call is the web-search proxy, and you decide when it's on. Your conversations and models never leave the building.</div>
+      <div style="text-align:center;margin-bottom:20px;padding-bottom:16px;border-bottom:1px solid var(--border);">
+        <div style="font-size:28px;font-weight:800;letter-spacing:2px;color:var(--green-neon);line-height:1;">GOBBONET</div>
+        <div style="font-size:11px;color:rgba(255,255,255,0.3);margin-top:6px;letter-spacing:1.5px;">LOCAL AI TERMINAL // llama.cpp</div>
+        <div style="font-size:12px;color:rgba(255,255,255,0.5);margin-top:12px;line-height:1.6;max-width:48ch;margin-left:auto;margin-right:auto;">A self-hosted chat workbench for any local GGUF model &mdash; characters, memory, branching, retrieval and deep sampler control, all running on hardware you own.</div>
       </div>
 
-      <div style="padding:12px 14px;border:1px solid rgba(0,243,255,0.12);border-radius:var(--radius);background:rgba(0,243,255,0.02);">
-        <div style="color:var(--cyan-mid);font-size:11px;font-weight:700;letter-spacing:1px;margin-bottom:10px;">&#9881; WHAT'S INSIDE</div>
-        <div style="display:flex;flex-direction:column;gap:11px;color:rgba(255,255,255,0.55);font-size:12px;line-height:1.55;">
-          <div><span style="color:var(--cyan-bright);font-weight:700;">&#128172; Conversations</span> &mdash; branch &amp; fork any message into parallel timelines, reroll replies and step back through every variant, follow the model's reasoning in collapsible chain-of-thought, and schedule prompts to fire on their own.</div>
-          <div><span style="color:var(--cyan-bright);font-weight:700;">&#127917; Characters &amp; memory</span> &mdash; build character cards or import them from SillyTavern / TavernAI (V1&ndash;V3), swap personas per chat, fold older turns into compressed lore, and pull the right backstory in on cue with weighted-tag retrieval.</div>
-          <div><span style="color:var(--cyan-bright);font-weight:700;">&#127899; Fine control</span> &mdash; per-character samplers (temperature, min-p, top-p, repeat penalty, XTC, DRY), logit bias to nudge or ban specific tokens, carousel system prompts, and {{macros}} that expand before they reach the model.</div>
-          <div><span style="color:var(--cyan-bright);font-weight:700;">&#129513; Extend &amp; own it</span> &mdash; inject your own CSS and JS, tune the interface right down to avatar size, reach it from any device on your LAN, and export or back up everything &mdash; threads, characters, settings &mdash; as portable JSON.</div>
+      <div style="display:flex;flex-direction:column;gap:12px;font-size:13px;">
+
+        <div style="padding:10px 12px;border:1px solid rgba(0,255,65,0.15);border-radius:var(--radius);background:rgba(0,255,65,0.03);">
+          <div style="color:var(--green-neon);font-size:11px;font-weight:700;letter-spacing:1px;margin-bottom:6px;">&#128274; PRIVATE BY DESIGN</div>
+          <div style="color:rgba(255,255,255,0.55);line-height:1.6;">No accounts, no telemetry, no cloud round-trips. Two downloads get you set up &mdash; llama.cpp and whichever model you pick &mdash; and after that you can unplug the internet and it keeps working. The only network calls left are ones you ask for: the optional web-search proxy, and reaching the chat from another device on your own network.</div>
         </div>
-      </div>
 
-      <div style="padding:10px 12px;border:1px solid rgba(255,255,255,0.06);border-radius:var(--radius);background:rgba(255,255,255,0.02);">
-        <div style="color:rgba(255,255,255,0.4);font-size:11px;font-weight:700;letter-spacing:1px;margin-bottom:6px;">&#128218; STACK</div>
-        <div style="color:rgba(255,255,255,0.4);line-height:1.7;font-size:12px;">
-          <div><span style="color:var(--green-neon);">Model</span> &mdash; <span id="about-model-line">Local GGUF (detecting...)</span></div>
-          <div><span style="color:var(--green-neon);">Runtime</span> &mdash; llama.cpp &mdash; runs any GGUF; CUDA/Vulkan/CPU</div>
-          <div><span style="color:var(--green-neon);">Frontend</span> &mdash; Vanilla HTML/CSS/JS &mdash; no frameworks</div>
-          <div><span style="color:var(--green-neon);">Storage</span> &mdash; IndexedDB in your browser &mdash; nothing server-side</div>
-          <div><span style="color:var(--green-neon);">Server</span> &mdash; PowerShell HTTP listener + launch.bat</div>
+        <div style="padding:12px 14px;border:1px solid rgba(0,243,255,0.12);border-radius:var(--radius);background:rgba(0,243,255,0.02);">
+          <div style="color:var(--cyan-mid);font-size:11px;font-weight:700;letter-spacing:1px;margin-bottom:10px;">&#9881; WHAT'S INSIDE</div>
+          <div style="display:flex;flex-direction:column;gap:11px;color:rgba(255,255,255,0.55);font-size:12px;line-height:1.55;">
+            <div><span style="color:var(--cyan-bright);font-weight:700;">&#128172; Conversations</span> &mdash; branch &amp; fork any message into parallel timelines, reroll replies and step back through every variant, follow the model's reasoning in collapsible chain-of-thought, attach files, and schedule prompts to fire on their own.</div>
+            <div><span style="color:var(--cyan-bright);font-weight:700;">&#127917; Characters &amp; memory</span> &mdash; build character cards or import them from SillyTavern / TavernAI (V1&ndash;V3), swap personas per chat, and keep long stories coherent with a running plot log that records one short beat per compression pass. Open it any time to see exactly what was recorded and when.</div>
+            <div><span style="color:var(--cyan-bright);font-weight:700;">&#128269; Retrieval</span> &mdash; give a character a storybook of entities and lore, and the right entry is pulled in when it becomes relevant &mdash; by weighted tags, and by meaning via a local embedding model, so a mention that never uses your exact keyword still finds it.</div>
+            <div><span style="color:var(--cyan-bright);font-weight:700;">&#127899; Fine control</span> &mdash; per-character samplers (temperature, min-p, top-p, repeat penalty, XTC, DRY), logit bias to nudge or ban specific tokens, carousel system prompts, and {{macros}} that expand before they reach the model.</div>
+            <div><span style="color:var(--cyan-bright);font-weight:700;">&#129513; Extend &amp; own it</span> &mdash; attach JavaScript to a single character to give it behaviour of its own, inject site-wide CSS and JS, hot-swap models without restarting, reach it from any device on your LAN behind a password, and export everything as portable JSON.</div>
+          </div>
         </div>
+
+        <div style="padding:10px 12px;border:1px solid rgba(255,255,255,0.06);border-radius:var(--radius);background:rgba(255,255,255,0.02);">
+          <div style="color:rgba(255,255,255,0.4);font-size:11px;font-weight:700;letter-spacing:1px;margin-bottom:6px;">&#128218; STACK</div>
+          <div style="color:rgba(255,255,255,0.4);line-height:1.7;font-size:12px;">
+            <div><span style="color:var(--green-neon);">Model</span> &mdash; <span id="about-model-line">Local GGUF (detecting...)</span></div>
+            <div><span style="color:var(--green-neon);">Runtime</span> &mdash; llama.cpp &mdash; runs any GGUF; CUDA/Vulkan/CPU</div>
+            <div><span style="color:var(--green-neon);">Frontend</span> &mdash; Vanilla HTML/CSS/JS &mdash; no build step, no frameworks</div>
+            <div><span style="color:var(--green-neon);">Server</span> &mdash; PowerShell HTTP listener + launch.bat</div>
+            <div><span style="color:var(--green-neon);">Storage</span> &mdash; your browser, mirrored to a state file in the install folder so a reload never loses a thread</div>
+            <div><span style="color:var(--green-neon);">Licence</span> &mdash; MIT &mdash; every file in the install folder is readable and yours to change</div>
+          </div>
+        </div>
+
+        <div style="padding:10px 12px;border:1px solid rgba(255,255,255,0.06);border-radius:var(--radius);background:rgba(255,255,255,0.02);">
+          <div style="color:rgba(255,255,255,0.4);font-size:11px;font-weight:700;letter-spacing:1px;margin-bottom:6px;">&#128465; YOUR DATA</div>
+          <div style="color:rgba(255,255,255,0.4);line-height:1.6;font-size:12px;">Chats live in two places: this browser's storage for the address you opened, and a state file in the install folder. Uninstalling removes the state file. The browser copy is the browser's &mdash; clear it from site settings for the address you use, and do it for each one, since a phone on your LAN keeps its own.</div>
+        </div>
+
       </div>
 
-    </div>
-
-    <div class="modal-actions" style="margin-top:20px;">
-      <button class="btn btn-fill" onclick="closeAbout()">CLOSE</button>
+      <div class="modal-actions" style="margin-top:20px;">
+        <button class="btn btn-fill" onclick="closeAbout()">CLOSE</button>
+      </div>
     </div>
   </div>
-</div>
 
 <script src="js/01-config.js"></script>
 <script src="js/02-model.js"></script>

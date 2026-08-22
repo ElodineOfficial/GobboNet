@@ -27,3 +27,5 @@ conversations/
 active-model.json
 .llama-launch.cmd
 .embed-launch.cmd
+
+.gobbonet-port

@@ -113,6 +113,88 @@ function escapeHtml(str) {
   return div.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
+// For a value going into an inline handler: onclick="fn('${...}')".
+//
+// escapeHtml alone is NOT enough there. The HTML parser decodes character
+// references in an attribute value BEFORE the JS is compiled, so escapeHtml's
+// &#39; turns back into a real ' and closes the string literal -- the classic
+// way an "escaped" id or filename still ends up executing. Escape for the JS
+// layer first (backslash before quotes, or we'd double-escape our own output),
+// then run escapeHtml over the result for the attribute layer. \r \n and the
+// two Unicode line separators are terminators inside a JS string literal.
+function escapeJsString(str) {
+  return String(str == null ? '' : str)
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'")
+    .replace(/"/g, '\\"')
+    .replace(/\r/g, '\\r')
+    .replace(/\n/g, '\\n')
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029');
+}
+
+function escapeJsAttr(str) {
+  return escapeHtml(escapeJsString(str));
+}
+
+// Colors ride into style="color:${...}" attributes from character cards, which
+// can arrive from an imported file or a synced peer. Escaping is the wrong tool
+// for a CSS context -- allowlist the shapes a color picker actually produces and
+// drop anything else, so there is no value that reaches the CSS parser at all.
+const CSS_COLOR_RE = /^(#[0-9a-fA-F]{3,8}|[a-zA-Z]{3,20}|rgba?\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}\s*(?:,\s*(?:0|1|0?\.\d+)\s*)?\))$/;
+function safeCssColor(value, fallback) {
+  const s = String(value == null ? '' : value).trim();
+  if (CSS_COLOR_RE.test(s)) return s;
+  return fallback || '';
+}
+
+/**
+ * The single gate for every image URL that reaches the DOM: avatars, card
+ * backgrounds, attachment thumbnails.
+ *
+ * Inline image data (data:) and locally-created object URLs (blob:) are always
+ * fine -- the bytes are already on this machine and nothing is fetched.
+ *
+ * http(s) is different. A card can arrive from an imported file or a synced
+ * peer, and an <img src> pointing at a remote host beacons the viewer's IP the
+ * moment it renders. In an app whose whole premise is that nothing leaves the
+ * machine, that is a real leak, and it fires without a click. So it is gated
+ * on an explicit opt-in that defaults to off.
+ *
+ * file: is dropped outright. A page served over http from launch.bat cannot
+ * load file: URLs -- browsers block the cross-scheme reference -- so it has
+ * never worked here and removing it is not a regression.
+ *
+ * Returns '' for anything not permitted. Callers must treat '' as "no image"
+ * and fall back, never render an empty src.
+ */
+function safeImageUrl(value) {
+  const s = String(value == null ? '' : value).trim();
+  // Raster formats only. svg+xml is deliberately absent: an SVG is a document
+  // rather than a bitmap, and while <img> blocks script inside one, widening a
+  // security allowlist for a format nothing here produces is a bad trade.
+  if (/^data:image\/(png|jpeg|jpg|gif|webp|bmp|avif);base64,[A-Za-z0-9+/=\s]*$/i.test(s)) return s;
+  if (/^blob:/i.test(s)) return s;
+  if (/^https?:\/\//i.test(s)) {
+    return (typeof state !== 'undefined' && state && state.settings && state.settings.allowRemoteImages) ? s : '';
+  }
+  return '';
+}
+
+/** True when a value is a remote URL the current setting is suppressing.
+ *  Drives the one-time notice and the per-card editor hint. */
+function isSuppressedRemoteImage(value) {
+  const s = String(value == null ? '' : value).trim();
+  return /^https?:\/\//i.test(s) &&
+         !(typeof state !== 'undefined' && state && state.settings && state.settings.allowRemoteImages);
+}
+
+// Retained under its original name for the attachment path, which only ever
+// holds locally-produced data:/blob: URLs.
+function safeDataUrl(value) {
+  return safeImageUrl(value);
+}
+
 function parseSearchData(raw) {
   if (!raw) return '';
   // Parse the structured format: - Title: content\n  Source: url\n
@@ -166,8 +248,50 @@ function buildSearchEntry(title, content, url) {
   return `<div class="search-entry"><div class="search-entry-title">${safeTitle}</div><div class="search-entry-content">${safeContent}</div></div>`;
 }
 
+/* Quote styles a model might use for speech.
+ *
+ * Three things this has to survive, all of which broke earlier versions:
+ *
+ * 1. ESCAPING ASYMMETRY. escapeHtml() turns " into &quot; and leaves every
+ *    other quote character as a literal, so the straight case must match
+ *    the entity and the rest must match the raw character.
+ *
+ * 2. MIXED DELIMITERS. A model will open with " and close with ” in the
+ *    same breath, or drift from straight to curly halfway down a message.
+ *    Requiring a matching pair made colouring look random. The double-quote
+ *    family below therefore accepts any opener paired with any closer,
+ *    which also gets German „...“ for free -- there, “ is the CLOSING mark.
+ *
+ * 3. RUNAWAY MATCHES. [\s\S]+? crosses newlines, so one unpaired quote
+ *    could pair with another five lines later and colour the narration in
+ *    between. The inner text is bounded to 400 characters and forbidden
+ *    from crossing a blank line, so a stray quote fails to match instead of
+ *    painting half the message.
+ *
+ * Single curly quotes are deliberately absent: ’ is far more often an
+ * apostrophe than a closing quote, and treating it as a delimiter would
+ * mis-colour more text than it fixed.
+ */
+const DIALOG_INNER = '(?:(?!\\n\\n)[\\s\\S]){1,400}?';
+const DIALOG_QUOTE_RE = new RegExp(
+  // CJK corner brackets - unambiguous, so matched as strict pairs.
+  '\\u300c' + DIALOG_INNER + '\\u300d' + '|' +   // 「...」
+  '\\u300e' + DIALOG_INNER + '\\u300f' + '|' +   // 『...』
+  // Guillemets, both widths.
+  '\\u00ab' + DIALOG_INNER + '\\u00bb' + '|' +   // «...»
+  '\\u2039' + DIALOG_INNER + '\\u203a' + '|' +   // ‹...›
+  // Double-quote family: any opener, any closer. Covers "...", “...”,
+  // German „...“, and every mixed combination a model produces.
+  '(?:&quot;|[\\u201c\\u201e\\u201f])' + DIALOG_INNER + '(?:&quot;|[\\u201d\\u201c\\u201f])',
+  'g'
+);
+
 function parseMarkdown(text, dialogColor) {
   if (!text) return '';
+  // dialogColor rides in from a character card, which can arrive from an
+  // imported file or a synced peer, and lands in a style="color:..." attribute
+  // below. Allowlist it once here so no caller has to remember to.
+  dialogColor = safeCssColor(dialogColor, '');
   let html = escapeHtml(text);
 
   // File blocks: ```file:filename.ext → rendered with download + copy buttons
@@ -175,7 +299,7 @@ function parseMarkdown(text, dialogColor) {
     const fn = filename.trim();
     const raw = content.trim();
     const id = 'file_' + Math.random().toString(36).slice(2, 8);
-    return `<div class="file-block"><div class="file-header"><span class="file-name">&#128196; ${fn}</span><div class="code-btns"><button class="btn btn-sm code-copy-btn" onclick="copyCodeBlock(this)">Copy</button><button class="btn btn-sm" onclick="downloadFile('${id}','${fn}')">Save</button></div></div><pre><code id="${id}">${raw}</code></pre></div>`;
+    return `<div class="file-block"><div class="file-header"><span class="file-name">&#128196; ${fn}</span><div class="code-btns"><button class="btn btn-sm code-copy-btn" onclick="copyCodeBlock(this)">Copy</button><button class="btn btn-sm" data-filename="${fn}" onclick="downloadFile(this)">Save</button></div></div><pre><code id="${id}">${raw}</code></pre></div>`;
   });
 
   // Regular code blocks → wrapped with a header bar carrying a Copy button.
@@ -222,9 +346,14 @@ function parseMarkdown(text, dialogColor) {
       // not a literal " — otherwise this never fires and speech loses its
       // dialog color. Lazy [\s\S]+? pairs each opening &quot; with the
       // next one and tolerates other entities (&amp;, &#39;, …) inside.
-      return text.replace(/&quot;([\s\S]+?)&quot;/g, (_, inner) => {
-        return `<span class="dialog-text" style="color:${dialogColor};">&quot;${inner}&quot;</span>`;
-      });
+      // Wrap the whole match, delimiters included. Earlier drafts rebuilt
+      // the string from the captured inner text, which meant working out
+      // which delimiter had matched and slicing it back off the front --
+      // fiddly, and wrong the moment the inner text happens to repeat the
+      // opening character. The match already contains exactly what should
+      // be wrapped, so wrap it and keep the model's own punctuation.
+      return text.replace(DIALOG_QUOTE_RE, (m) =>
+        `<span class="dialog-text" style="color:${dialogColor};">${m}</span>`);
     });
   }
 
@@ -417,7 +546,7 @@ function renderAttachTray() {
       <span class="attach-chip-icon">${icon}</span>
       <span class="attach-chip-name">${escapeHtml(a.name)}</span>
       <span class="attach-chip-meta">${escapeHtml(meta)}</span>
-      <button class="attach-chip-x" onclick="removeAttachment('${a.id}')" title="Remove">×</button>
+      <button class="attach-chip-x" onclick="removeAttachment('${escapeJsAttr(a.id)}')" title="Remove">×</button>
     </span>`;
   }).join('');
 }
@@ -531,9 +660,26 @@ function setupDragAndDrop() {
    FILE GENERATION — download .txt/.json to browser downloads
    AI outputs ```file:filename.ext blocks, rendered with Save button.
 ================================================================ */
-function downloadFile(elementId, filename) {
-  const el = document.getElementById(elementId);
+// Takes the button, not an id + filename pair. The filename comes from a
+// ```file:<name> fence -- i.e. from model output or from a peer's message --
+// and interpolating it into onclick="downloadFile('...','<name>')" was
+// exploitable: parseMarkdown had already turned ' into &#39;, but the HTML
+// parser decodes character references in an attribute value BEFORE the JS is
+// compiled, so the entity became a real quote again and closed the string.
+// Reading it off the element -- the pattern copyCodeBlock already uses -- means
+// the value never passes through a JS parser at all.
+function downloadFile(btn) {
+  const block = btn && btn.closest && btn.closest('.file-block');
+  const el = block && block.querySelector('pre code');
   if (!el) return;
+  // parseMarkdown ran escapeHtml over the whole block before this attribute was
+  // built, so the value is HTML-encoded rather than raw. Decode it here or the
+  // saved file is literally named "x&#39;y.txt". textContent round-trip is the
+  // cheapest correct decoder and cannot execute anything.
+  let filename = (btn.dataset && btn.dataset.filename) || 'download.txt';
+  const dec = document.createElement('textarea');
+  dec.innerHTML = filename;
+  filename = dec.value || 'download.txt';
   const content = el.textContent;
   const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
   const url = URL.createObjectURL(blob);
