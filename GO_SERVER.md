@@ -304,6 +304,51 @@ table, by exact match. Architecture-derived families are normalised to that
 vocabulary — `qwen2`, `qwen3moe` and `phi3` all report `qwen`/`phi` — because a
 miss means the model's turn markers get rendered to the user as content.
 
+## Web search
+
+`/search/*` goes straight to `search_url` — `https://ollama.com/api` by default
+— carrying the browser's own `Authorization` header and nothing of ours. It is
+the only route that leaves the machine, and only when a user switches search on
+and supplies a key.
+
+Upstream ran a relay for this until 1.6.0: a hidden-window PowerShell started
+from `launch.bat` with `-EncodedCommand` and 4,656 characters of base64, binding
+11435 and forwarding authenticated traffic to that same host. 1.6.0 deleted it
+(`Handle-Search` in `fileserver.ps1` makes the call directly) because the shape
+— encoded PowerShell, hidden window, listener, external relay — is what
+antivirus scores as command-and-control largely regardless of payload.
+
+This port never started that process, so a default of `127.0.0.1:11435` meant
+`/search` answered 502 on every install where search was turned on. Now the
+proxy points at the API itself; it already strips our session cookie, which
+matters more against a third-party host than a loopback one.
+
+`/search/health` is answered here rather than forwarded, because the client
+probes it before every search and the API has no such route. It reports that the
+route is configured, not that the internet is reachable — an unauthenticated
+probe cannot tell "offline" from "bad key", and the search request that follows
+reports the real failure with the upstream's own status.
+
+## Sanitising values from a downloaded file
+
+1.6.0 added three scrubbers to the PowerShell — `ConvertTo-BatchSafe`,
+`ConvertTo-CmdArgSafe`, `ConvertTo-CmdPathSafe` — because model ids, families,
+template names and KV cache types are lifted out of a GGUF the user downloaded
+and then written into a `.cmd` that `launch.bat` CALLs. A quote or an ampersand
+in `general.architecture` is arbitrary code before the chat window opens.
+
+None of that machinery is ported, because the sink does not exist here:
+llama-server is started with an argv slice through `os/exec`, so there is no
+shell, no quoting, and no generated script. `kv_cache_type` is checked against an
+allowlist (`f16`, `q8_0`, `q4_0`) rather than scrubbed, which is stricter than
+stripping metacharacters out of it.
+
+The one clamp that is ported is `general.architecture` itself
+(`models.sanitiseArch`), at the same point upstream clamps it. It becomes the
+`id` and `family` for every model that reaches the generic branches, and both go
+to the browser in `active-model.json`; clamping at the source means a consumer
+added later cannot reopen the hole by forgetting.
+
 ## Process supervision
 
 In local mode llama-server runs in its own process group, and the group id is
