@@ -1166,3 +1166,50 @@ func TestPerfConcurrentSavesStayConsistent(t *testing.T) {
 			reloaded.CtxSize, got)
 	}
 }
+
+// --- Web search ------------------------------------------------------------
+
+// /search/health must be answered here, not forwarded.
+//
+// js/11-search.js probes it before every search and abandons the search if it
+// does not return 200. Upstream ran a relay on 11435 that answered /health
+// itself; 1.6.0 deleted that process and answered the probe inside the file
+// server. The Go port forwards /search to the search API directly, and the API
+// has no /health — so without this route every search would stop at step one
+// while the thing it depends on was working perfectly.
+func TestSearchHealthIsAnsweredLocally(t *testing.T) {
+	srv, _ := newTestServer(t) // SearchURL points at a port nothing listens on
+	defer srv.Shutdown()
+
+	rec := do(t, srv, http.MethodGet, "/search/health", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /search/health = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+	if got := decode(t, rec)["status"]; got != "ok" {
+		t.Errorf(`status = %v, want "ok"`, got)
+	}
+
+	// Everything else is still a proxy hop. Nothing is listening in this test,
+	// so a 502 here is the proof it was actually forwarded.
+	if rec := do(t, srv, http.MethodPost, "/search/web_search", strings.NewReader(`{}`)); rec.Code != http.StatusBadGateway {
+		t.Errorf("POST /search/web_search = %d, want 502 from the proxy", rec.Code)
+	}
+}
+
+// An empty search_url means the feature is off, and the health probe has to say
+// so rather than reporting a route that would 502 on use.
+func TestSearchHealthReportsDisabled(t *testing.T) {
+	srv, cfg := newTestServer(t)
+	srv.Shutdown()
+
+	cfg.SearchURL = ""
+	s, err := New(cfg, config.ModeRemote, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Shutdown()
+
+	if rec := do(t, s, http.MethodGet, "/search/health", nil); rec.Code != http.StatusBadGateway {
+		t.Errorf("GET /search/health with search_url empty = %d, want 502", rec.Code)
+	}
+}

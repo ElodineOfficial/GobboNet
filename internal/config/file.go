@@ -47,7 +47,14 @@ llm_url = "http://127.0.0.1:11437"
 # --- Optional upstream services -----------------------------------------
 # If nothing answers, features degrade gracefully: web search turns off
 # and RAG falls back to tag-only retrieval. Leave empty to disable.
-search_url = "http://127.0.0.1:11435"
+#
+# search_url is the web-search API this server forwards /search to. It is
+# the ONLY upstream that is not on your machine, and it is reached only
+# when you turn search on and supply your own key -- which the browser
+# sends and this server passes through without storing. Point it at your
+# own relay if you would rather it not talk to ollama.com directly, or
+# empty it to switch the feature off.
+search_url = "https://ollama.com/api"
 embed_url = "http://127.0.0.1:11436"
 
 # API key sent to the upstream llama.cpp server (never exposed to the

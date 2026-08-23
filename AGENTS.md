@@ -70,16 +70,17 @@ gobbonet/
 │           fileserver.ps1 (PowerShell)                     │
 │  ┌──────────────────────────────────────────────────────┐│
 │  │  Static File Server   │  Reverse Proxy /llm/*        ││
-│  │  (chat.html, css, etc)│  Reverse Proxy /search/*     ││
+│  │  (chat.html, css, etc)│  Web search /search/* (direct)││
 │  │                       │  State sync (GET/POST /state)││
 │  │                       │  Model hot-swap handler      ││
 │  └──────────────────────────────────────────────────────┘│
 └───────┬───────────────────┬───────────────────┐          │
-        │ :11437 (loopback) │ :11435 (optional) │          │
+        │ :11437 (loopback) │ https (only when  │          │
+        │                   │ search is on)     │          │
 ┌───────▼───────┐ ┌────────▼───────┐ ┌─────────▼────┐     │
-│ llama-server  │ │  Ollama proxy  │ │ Embed server │     │
+│ llama-server  │ │ ollama.com/api │ │ Embed server │     │
 │ (llama.cpp)   │ │  (web search)  │ │ (optional RAG)│     │
-│               │ │                │ │              │     │
+│               │ │                │ │  :11436      │     │
 │ GGUF Model    │ │                │ │              │     │
 └───────────────┘ └────────────────┴────────────────┘     │
         ▲                                                  │
@@ -126,7 +127,8 @@ stylesheets; globals are shared across modules, so **load order is load-bearing*
 PowerShell using `System.Net.HttpListener` — no external runtime needed.
 
 - **Static file serving** — Serves `chat.html`, `style.css`, model metadata files
-- **Reverse proxy** — Forwards `/llm/*` to llama-server (127.0.0.1:11437), `/search/*` to Ollama (11435), `/embed/*` to embedding server (11436)
+- **Reverse proxy** — Forwards `/llm/*` to llama-server (127.0.0.1:11437) and `/embed/*` to the embedding server (11436)
+- **Web search** — `/search/*` goes straight to `ollama.com/api` from the server itself (`Handle-Search`). 1.6.0 deleted the relay that used to own 11435: a hidden-window PowerShell started with `-EncodedCommand`, which is a command-and-control shape antivirus weights heavily whatever the payload does. `/search/health` is answered locally because the client probes it before every search.
 - **Hot-swap handler** — `POST /swap-model` coordinates model switching without full restart. Creates `.swap-in-progress` sentinel so `launch.bat`'s health monitor doesn't interfere.
 - **State sync** — `GET/POST /state` persists conversation state for cross-device access (phone ↔ PC)
 - **Tuning** — `GET/POST /perf` edits context size, GPU layers and KV cache type from the settings panel, then drives `/swap-model` to apply them
@@ -272,8 +274,14 @@ Phase transitions: `downloading` → `starting` → `healthy` (model loads) or `
 ### Web search (optional)
 
 ```
-POST /search/*  → proxied to Ollama's search API (requires free Ollama API key)
+GET  /search/health  → answered by the server itself: the route is wired
+POST /search/*       → forwarded to https://ollama.com/api/* with the
+                       browser's own Authorization header (free Ollama key)
 ```
+
+This is the one route that leaves the machine, and only when search is
+switched on and a key is set. The Go port's `search_url` names the API
+directly; point it at your own relay to interpose one.
 
 ---
 

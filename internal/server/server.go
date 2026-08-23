@@ -14,7 +14,8 @@
 //	/swap-model, /swap-status  model-swap contract
 //	/llm/jobs, /llm/jobs/*     detached generation (OUR routes, not llama.cpp's)
 //	/llm, /llm/*               reverse proxy -> llama.cpp
-//	/search, /search/*         reverse proxy -> web-search relay
+//	/search/health             answered here; see handleSearch
+//	/search, /search/*         reverse proxy -> the web-search API
 //	/embed, /embed/*           reverse proxy -> embedding server
 //	everything else            static files
 package server
@@ -218,7 +219,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.llmProxy.ServeHTTP(w, r)
 
 	case path == "/search" || strings.HasPrefix(path, "/search/"):
-		s.searchProxy.ServeHTTP(w, r)
+		s.handleSearch(w, r, path)
 
 	case path == "/embed" || strings.HasPrefix(path, "/embed/"):
 		// RAG embeddings. If nothing is listening the proxy returns 502 and the
@@ -367,6 +368,35 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"upstream":    s.cfg.LLMURL,
 		"upstream_ok": s.upstreamOK(),
 	})
+}
+
+// handleSearch forwards /search/* to the web-search API, answering /health here.
+//
+// The client (js/11-search.js) probes /search/health before every search and
+// treats a failure as "the proxy is not running". That probe made sense when a
+// relay process owned the route: upstream started one on 11435 and the health
+// check asked whether it had come up. Upstream 1.6.0 deleted the relay and
+// answers /health inside the file server; this does the same.
+//
+// What it reports is configuration, not reachability — search_url is set, so
+// the route is wired. It deliberately does not reach out to the API to find
+// out: that would spend a round trip on every search to answer a question the
+// search itself is about to answer properly, and an unauthenticated probe
+// cannot distinguish "the internet is down" from "your key is wrong" anyway.
+// A real failure surfaces on the real request, with the upstream's own status.
+func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, path string) {
+	if path == "/search" || path == "/search/" || path == "/search/health" {
+		if s.cfg.SearchURL == "" {
+			httpx.Error(w, r, http.StatusBadGateway, "web search is switched off (search_url is empty)")
+			return
+		}
+		httpx.WriteJSON(w, r, http.StatusOK, map[string]any{
+			"status":   "ok",
+			"upstream": s.cfg.SearchURL,
+		})
+		return
+	}
+	s.searchProxy.ServeHTTP(w, r)
 }
 
 // --- Listening -------------------------------------------------------------

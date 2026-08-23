@@ -54,8 +54,18 @@ const (
 	// starting its own, then found nothing healthy and restarted — a loop caused
 	// entirely by sharing a well-known port. Upstream moved in 1.5.8; matching
 	// it keeps one llama.cpp serving whichever server is in front of it.
-	DefaultLLMURL     = "http://127.0.0.1:11437"
-	DefaultSearchURL  = "http://127.0.0.1:11435"
+	DefaultLLMURL = "http://127.0.0.1:11437"
+	// The web-search API itself, not a relay in front of it. Upstream 1.6.0
+	// deleted the relay: it was a hidden-window PowerShell started with
+	// -EncodedCommand, binding 11435 and forwarding authenticated requests to
+	// this same host. Nothing in the Go port ever started that process, so
+	// pointing at 11435 meant /search answered 502 on every install unless the
+	// user ran the launcher's relay by hand.
+	//
+	// The one thing the relay did that a plain reverse proxy does not is answer
+	// /health locally; the client checks that before every search. Server.go
+	// answers it instead — see handleSearch.
+	DefaultSearchURL  = "https://ollama.com/api"
 	DefaultEmbedURL   = "http://127.0.0.1:11436"
 	DefaultListenHost = "0.0.0.0"
 	// 9066 ("gobb" on a keypad), not 8080. 8080 is the most contended port on a
