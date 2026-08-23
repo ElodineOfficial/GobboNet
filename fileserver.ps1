@@ -1536,6 +1536,91 @@ function Handle-Search {
     $reader = New-Object System.IO.StreamReader($Request.InputStream, [System.Text.Encoding]::UTF8)
     $body = $reader.ReadToEnd(); $reader.Close()
 
+    # ---- provider seam ----------------------------------------------------
+    #
+    # Search is hardcoded to ollama.com and forwards the caller's Authorization,
+    # so it only works for someone with an Ollama account and a key pasted into
+    # settings. Everyone else gets an upstream 401, which surfaces as "search is
+    # broken" rather than "you need an account you were never asked for".
+    #
+    # DEFAULT IS UNCHANGED. With SEARCH_URL unset this is the same request to the
+    # same host with the same header, so no existing install moves. Set
+    # SEARCH_URL and search goes to whatever you run -- a local SearxNG, your own
+    # service -- with no key unless yours needs one.
+    #
+    # SEARCH_PROVIDER pins the choice for the two cases 'auto' cannot serve:
+    # keeping Ollama even with SEARCH_URL set, and treating a missing SEARCH_URL
+    # as an ERROR rather than a quiet fallback (below), which is what you want
+    # once a self-hosted backend is the thing you rely on.
+    $provider = $env:SEARCH_PROVIDER
+    if (-not $provider) { $provider = 'auto' }
+    if ($provider -eq 'auto') {
+        $provider = if ($env:SEARCH_URL) { 'http' } else { 'ollama' }
+    }
+
+    if ($provider -eq 'http') {
+        # Deliberately NOT implemented here. A hand-rolled scraper goes stale
+        # silently -- it returns an empty list rather than an error, so the UI
+        # says "found nothing" for as long as nobody checks. Forward to something
+        # whose job search is.
+        if (-not $env:SEARCH_URL) {
+            Write-Json $Response 502 @{ error = 'search: SEARCH_PROVIDER=http but SEARCH_URL is not set' }
+            return
+        }
+        $query = ''
+        $max = 5
+        try {
+            $req = $body | ConvertFrom-Json -ErrorAction Stop
+            if ($req.query)       { $query = [string]$req.query }
+            if ($req.max_results) { $max   = [int]$req.max_results }
+        } catch {
+            Write-Json $Response 400 @{ error = 'search: request body was not valid JSON' }
+            return
+        }
+        $headers = @{ 'Content-Type' = 'application/json' }
+        # Forwarded only if the caller sent one: a self-hosted backend usually
+        # needs no key, and sending an empty header is not the same as sending none.
+        $auth = $Request.Headers['Authorization']
+        if ($auth) { $headers['Authorization'] = $auth }
+        try {
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            $payload = @{ query = $query; max_results = $max } | ConvertTo-Json -Compress
+            $wr = Invoke-WebRequest -Uri $env:SEARCH_URL -Method POST -Body $payload `
+                                    -Headers $headers -UseBasicParsing -TimeoutSec 25
+            # Decode explicitly. Invoke-WebRequest only hands back a STRING when
+            # the response declares a text content type; a backend that omits
+            # Content-Type yields bytes, and piping those to ConvertFrom-Json
+            # produces no `results` rather than an error -- so the search returns
+            # an empty list and reads as "found nothing" instead of "misread the
+            # reply". Caught by test-search-seam.ps1, which stubs a backend that
+            # sends no Content-Type precisely because that is the quiet case.
+            $raw = $wr.Content
+            if ($raw -isnot [string]) { $raw = [System.Text.Encoding]::UTF8.GetString($raw) }
+            $j = $raw | ConvertFrom-Json -ErrorAction Stop
+            $out = @()
+            foreach ($item in $j.results) {
+                if ($out.Count -ge $max) { break }
+                # Three names for one field. SearxNG says `content`, most engines
+                # say `snippet`, some say `description`. Reading only `content` is
+                # how a WORKING backend renders every row with an empty body --
+                # titles and links appear, snippets are blank, and it reads as the
+                # model ignoring the results rather than a field-name mismatch.
+                $text = $item.content
+                if (-not $text) { $text = $item.snippet }
+                if (-not $text) { $text = $item.description }
+                $out += @{ title = [string]$item.title; url = [string]$item.url; content = [string]$text }
+            }
+            # @() so a single result still serialises as an array; ConvertTo-Json
+            # unwraps a one-element array and the client would get an object where
+            # it iterates a list.
+            Write-Json $Response 200 @{ results = @($out) }
+        } catch {
+            $msg = $_.Exception.Message -replace '"','' -replace "`r",'' -replace "`n",' '
+            Write-Json $Response 502 @{ error = ('search: ' + $msg) }
+        }
+        return
+    }
+
     $target = 'https://ollama.com/api' + $SubPath
     $headers = @{ 'Content-Type' = 'application/json' }
 
