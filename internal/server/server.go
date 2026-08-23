@@ -401,11 +401,21 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, path strin
 
 // --- Listening -------------------------------------------------------------
 
-// ListenAndServe binds and serves until the context is cancelled.
-func (s *Server) ListenAndServe() error {
+// Listen binds the configured address without serving.
+//
+// Split from Serve so the caller can fail before it prints "serving on ...".
+// The banner used to go out first and a bind failure landed underneath it,
+// which reads as a server that started and then broke rather than one that
+// never got the port — the same confusion launch.bat's port-holder check was
+// added to clear up in 1.6.0.
+func (s *Server) Listen() (net.Listener, error) {
 	address := net.JoinHostPort(s.cfg.ListenHost, fmt.Sprintf("%d", s.cfg.ListenPort))
+	return net.Listen("tcp", address)
+}
+
+// Serve runs until the listener is closed.
+func (s *Server) Serve(ln net.Listener) error {
 	srv := &http.Server{
-		Addr:    address,
 		Handler: s,
 		// No WriteTimeout: a streaming generation legitimately holds a response
 		// open for many minutes, and a write deadline would sever it mid-reply.
@@ -413,7 +423,16 @@ func (s *Server) ListenAndServe() error {
 		ReadHeaderTimeout: 20 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
-	return srv.ListenAndServe()
+	return srv.Serve(ln)
+}
+
+// ListenAndServe binds and serves until the listener is closed.
+func (s *Server) ListenAndServe() error {
+	ln, err := s.Listen()
+	if err != nil {
+		return err
+	}
+	return s.Serve(ln)
 }
 
 // LANIP is a best-effort local address for the "open this on your phone" hint.

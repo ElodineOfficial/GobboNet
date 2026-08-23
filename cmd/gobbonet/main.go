@@ -259,6 +259,14 @@ func cmdServe(argv []string) error {
 		}
 	}
 
+	// Bind before the banner. A port that is already taken is the single most
+	// common startup failure and it used to print underneath "[OK] serving on
+	// ...", which reads as a server that started and then broke.
+	listener, err := srv.Listen()
+	if err != nil {
+		return portInUseError(cfg, err)
+	}
+
 	address := cfg.ListenHost
 	if address == "0.0.0.0" || address == "::" {
 		address = server.LANIP()
@@ -285,7 +293,56 @@ func cmdServe(argv []string) error {
 		os.Exit(0)
 	}()
 
-	return srv.ListenAndServe()
+	return srv.Serve(listener)
+}
+
+// portInUseError explains a bind failure in the terms the two support reports
+// it actually generates are phrased in.
+//
+// "Custom ports do not work" and "I rebooted and it fixed itself" are the same
+// event: something already held the port. Usually it is a gobbonet from an
+// earlier run — closing a terminal window does not always stop it, and a reboot
+// clears it, which is why rebooting appears to fix a configuration that was
+// never wrong. launch.bat learned to say this in 1.6.0 (and names the holding
+// PID, which needs Get-NetTCPConnection and has no portable equivalent here).
+//
+// Anything that is not an in-use error is returned unchanged: inventing an
+// explanation for a permission or bad-address failure would send the reader
+// after the wrong thing.
+func portInUseError(cfg config.Config, err error) error {
+	if !isAddrInUse(err) {
+		return err
+	}
+	return fmt.Errorf(`port %d is already in use, so nothing was started.
+
+  If you were already running GobboNet, that copy still holds the port --
+  closing its window does not always stop it. End it (or reboot) and try
+  again; it is also still serving, so the browser tab you have open works.
+
+  If something else owns the port, give this one a different number:
+      gobbonet config set listen_port 9067      (writes %s)
+      GOBBONET_LISTEN_PORT=9067 gobbonet serve  (just this run)
+
+  Original error: %w`, cfg.ListenPort, cfg.Path, err)
+}
+
+// isAddrInUse reports whether err is "that port is taken".
+//
+// syscall.EADDRINUSE alone is not enough: on Windows the failure arrives as
+// WSAEADDRINUSE (10048), a different Errno that does not compare equal to it,
+// and WSAEACCES (10013) is what an exclusive-use binding produces.
+func isAddrInUse(err error) bool {
+	if errors.Is(err, syscall.EADDRINUSE) {
+		return true
+	}
+	var errno syscall.Errno
+	if errors.As(err, &errno) {
+		switch uintptr(errno) {
+		case 10048, 10013:
+			return true
+		}
+	}
+	return false
 }
 
 // --- set-password ----------------------------------------------------------
