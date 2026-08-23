@@ -92,6 +92,11 @@ unzip -d /tmp/gn dist/*/gobbonet-*-windows-amd64.zip
 mkdir -p vendor/llama-cpp
 #   https://github.com/ggml-org/llama.cpp/releases  →  -bin-win-vulkan-x64.zip
 #   extract it into installer/vendor/llama-cpp/
+#
+# It must be the VULKAN asset. The CPU-only zip has the same filenames minus
+# ggml-vulkan.dll, and an installer built from it runs everything on the
+# processor while still setting gpu_layers 99 -- no error, just a slow machine.
+# build-installer.sh refuses that unless you pass LLAMA_BACKEND=cpu.
 
 GOBBONET_EXE=/tmp/gn/*/gobbonet.exe ./build-installer.sh
 ```

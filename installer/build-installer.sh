@@ -94,8 +94,30 @@ if [ ! -f "$LLAMA_CPP/llama-server.exe" ]; then
     echo "       Or point at it:  LLAMA_CPP=/path/to/llama-cpp $0" >&2
     exit 1
 fi
+# Is it the GPU build? launch.bat pins the -bin-win-vulkan-x64 asset, and the
+# installer sets gpu_layers 99 on the strength of it. The CPU-only asset has the
+# same filenames minus one DLL, so bundling it by accident produces an install
+# that works, offers the same models, and runs every one of them on the CPU --
+# no error anywhere, just a machine that takes a minute to answer.
+#
+# The engine is fetched by hand into vendor/, so this WILL be got wrong
+# eventually; asking here costs nothing. LLAMA_BACKEND=cpu is the deliberate
+# opt-out, for a CPU-only installer built on purpose.
+LLAMA_BACKEND="${LLAMA_BACKEND:-vulkan}"
+if [ "$LLAMA_BACKEND" = "vulkan" ] && [ ! -f "$LLAMA_CPP/ggml-vulkan.dll" ]; then
+    echo "ERROR: $LLAMA_CPP has no ggml-vulkan.dll, so it is the CPU-only build." >&2
+    echo "       An installer built from it would ignore gpu_layers entirely and" >&2
+    echo "       run every model on the processor, with nothing to say so." >&2
+    echo "       Fetch the asset ending -bin-win-vulkan-x64.zip from" >&2
+    echo "         https://github.com/ggml-org/llama.cpp/releases" >&2
+    echo "       and extract it over $LLAMA_CPP," >&2
+    echo "       or pass LLAMA_BACKEND=cpu to build a CPU-only installer on purpose." >&2
+    exit 1
+fi
+
 mkdir -p "$PAYLOAD/llama-cpp"
 cp -r "$LLAMA_CPP/." "$PAYLOAD/llama-cpp/"
+echo "  engine:   $LLAMA_CPP ($LLAMA_BACKEND)"
 
 # Web assets. web/ is generated from the repo-root frontend rather than
 # committed -- see stage-web.sh -- so assemble it fresh rather than trusting
