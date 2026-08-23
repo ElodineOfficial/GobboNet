@@ -1,0 +1,929 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GOBBONET // LOCAL_TERMINAL [llama.cpp]</title>
+<!-- Fonts are loaded locally via @font-face in css/01-tokens.css. No external network calls. -->
+<link rel="stylesheet" href="css/01-tokens.css">
+<link rel="stylesheet" href="css/02-layout.css">
+<link rel="stylesheet" href="css/03-threads.css">
+<link rel="stylesheet" href="css/04-chat.css">
+<link rel="stylesheet" href="css/05-modals.css">
+<link rel="stylesheet" href="css/06-cards.css">
+<link rel="stylesheet" href="css/07-message-extras.css">
+<link rel="stylesheet" href="css/08-pickers.css">
+<link rel="stylesheet" href="css/09-dashboard.css">
+<link rel="stylesheet" href="css/10-responsive.css">
+<link rel="stylesheet" href="css/11-panels.css">
+<link rel="stylesheet" href="css/12-organisation.css">
+<link rel="stylesheet" href="css/13-components.css">
+<link rel="stylesheet" href="css/14-card-code.css">
+<link rel="stylesheet" href="css/15-lore-view.css">
+</head>
+<body>
+
+<div id="app">
+  <!-- SIDEBAR -->
+  <aside id="sidebar">
+    <div class="sidebar-header">
+      <div class="sidebar-header-row">
+        <h1>GOBBONET</h1>
+        <button class="sidebar-close-btn" onclick="toggleSidebar()" title="Close sidebar">&times;</button>
+      </div>
+      <div style="display:flex;gap:6px;margin-bottom:8px;">
+        <button class="btn btn-sm" style="flex:1;" onclick="goHome()" title="Home / Dashboard">&#8962; HOME</button>
+        <button class="btn btn-fill btn-sm" style="flex:2;" onclick="createThread()">+ NEW_THREAD</button>
+      </div>
+      <div class="thread-search-wrap">
+        <span class="thread-search-icon">&#128269;</span>
+        <input type="text" id="thread-search" class="thread-search-input" placeholder="Search or #tag..." oninput="filterThreads()" autocomplete="off" spellcheck="false">
+        <button class="thread-search-clear" id="thread-search-clear" onclick="clearThreadSearch()" title="Clear search" style="display:none;">&times;</button>
+      </div>
+    </div>
+    <div class="thread-list" id="thread-list"></div>
+    <div class="sidebar-footer">
+      <div class="sidebar-footer-btns" style="margin-bottom:6px;">
+        <button class="btn btn-block" onclick="openCharacters()">// CHARS</button>
+        <button class="btn btn-amber btn-block" onclick="openSettings()">// CONFIG</button>
+      </div>
+      <div class="sidebar-footer-btns" style="margin-bottom:6px;">
+        <button class="btn btn-block ext-btn" onclick="openExtensions()" id="ext-btn" title="Custom stylesheets and JS extensions">// MODS <span id="ext-status-dot"></span></button>
+        <button class="btn btn-block" onclick="openDataManager()" id="data-btn" title="Export, import, and purge your data">// DATA</button>
+      </div>
+      <div class="sidebar-footer-btns">
+        <button class="btn btn-block" onclick="openScheduler()" id="sched-btn">// SCHED <span id="sched-count"></span></button>
+        <button class="btn btn-block" onclick="openAbout()" title="About Gobbonet">// ABOUT</button>
+      </div>
+    </div>
+  </aside>
+  <div id="sidebar-overlay" onclick="toggleSidebar()"></div>
+
+  <!-- CHAT AREA -->
+  <main id="chat">
+    <div class="chat-header">
+      <button class="toggle-sidebar" onclick="toggleSidebar()" title="Toggle sidebar">&#9776;</button>
+      <button class="home-btn" onclick="goHome()" title="Go to dashboard" id="home-btn">&#8962;</button>
+      <div class="header-model-wrap" id="header-model-wrap" title="Active model — pick another to hot-swap (no restart needed)">
+        <span class="header-model-label">MODEL</span>
+        <select id="header-model-select" onchange="onHeaderModelChange(this)">
+          <option value="">— detecting —</option>
+        </select>
+      </div>
+      <span class="thread-title" id="thread-title">No thread selected</span>
+      <span class="lore-chip" id="lore-chip" style="display:none" role="button" tabindex="0"
+            onclick="openLoreInspector()"
+            onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openLoreInspector();}"></span>
+      <span class="status-label" id="status-label">Checking...</span>
+      <span class="status-dot" id="status-dot"></span>
+      <span class="privacy-badge" id="privacy-badge" title="llama.cpp — fully offline, zero telemetry">&#128274;</span>
+    </div>
+    <div id="model-switch-toast"></div>
+
+    <div class="messages" id="messages">
+      <div class="welcome">
+        <h2>SYSTEMS ONLINE</h2>
+        <p>// select a thread or create a new one</p>
+      </div>
+    </div>
+
+    <div class="context-info" id="context-info"></div>
+    <div class="auto-continue-bar" id="auto-continue-indicator" style="display:none;"></div>
+    <div class="attach-tray" id="attach-tray" style="display:none;"></div>
+    <div class="input-area">
+      <input type="file" id="attach-input" multiple style="display:none" onchange="onAttachInput(this)">
+      <button class="attach-btn" id="attach-btn" onclick="document.getElementById('attach-input').click()" title="Attach files (or drag & drop onto the chat)">&#128206;</button>
+      <textarea id="msg-input" placeholder="Type your message... (Enter to send, Shift+Enter for newline)" rows="1"></textarea>
+      <button class="search-toggle" id="search-toggle" onclick="toggleSearch()" title="Toggle web search">&#128269;</button>
+      <button class="btn btn-fill" id="send-btn" onclick="sendMessage()">Send</button>
+      <button class="btn" id="stop-btn" onclick="stopGeneration()" style="display:none;">Stop</button>
+    </div>
+
+    <!-- Follow-to-bottom: re-engages the streaming auto-scroll after the
+         user touches/scrolls away during generation. Positioned in JS just
+         above the input cluster (positionFollowButton). It is a SIBLING of
+         #messages, not a child, because renderMessages() replaces
+         #messages.innerHTML on every render and would otherwise destroy it. -->
+    <button id="follow-bottom-btn" type="button" onclick="followToBottom()"
+            aria-label="Resume auto-scroll and jump to the latest message"
+            title="Jump to latest">
+      <span class="fb-arrow" aria-hidden="true">&#8595;</span>
+      <span class="fb-label">Follow</span>
+    </button>
+
+    <!-- Drag & drop overlay — covers the chat area while a file is dragged in -->
+    <div id="drop-overlay">
+      <div class="drop-overlay-inner">
+        <div class="drop-overlay-icon">&#128229;</div>
+        <div class="drop-overlay-text">Drop files to attach</div>
+        <div class="drop-overlay-sub">Text files are read into your message · images attach for reference only</div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- SETTINGS MODAL -->
+<div class="modal-backdrop" id="settings-modal">
+  <div class="modal">
+    <h2>CONFIG</h2>
+
+    <div class="form-group" style="margin-top:4px; padding:10px 12px; border:1px dashed rgba(0,243,255,0.15); border-radius:var(--radius); background:rgba(0,243,255,0.02);">
+      <div class="form-hint" style="margin:0;">
+        Your name, avatar, and text colors moved to <strong>Personas</strong> &mdash;
+        open the Characters panel and edit your persona card.
+        You can keep multiple personas and swap between them per conversation.
+      </div>
+    </div>
+
+    <div class="form-group" style="margin-top:12px; padding:12px; border:1px solid rgba(0,243,255,0.18); border-radius:var(--radius); background:rgba(0,243,255,0.02);">
+      <label for="set-avatar-scale">&#128100; Avatar Size</label>
+      <div class="form-hint" style="margin-top:2px;margin-bottom:10px;">Scales every avatar — in chat, on character cards, and on the dashboard. Applies live; set it wherever it reads best on your screen.</div>
+      <div style="display:flex;align-items:center;gap:14px;">
+        <input type="range" id="set-avatar-scale" min="0.7" max="1.6" step="0.05" value="1" oninput="previewAvatarScale(this.value)" style="flex:1;">
+        <span id="avatar-scale-val" style="font-size:13px;font-weight:700;color:var(--cyan-bright);min-width:46px;text-align:right;">100%</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:12px;margin-top:14px;">
+        <span class="form-hint" style="margin:0;flex-shrink:0;">Preview:</span>
+        <div class="msg-avatar" style="border-color:var(--cyan-dim);color:var(--cyan-bright);box-shadow:inset 0 0 12px rgba(0,0,0,0.85),0 0 9px rgba(0,243,255,0.22);">U</div>
+        <div class="msg-avatar" style="border-color:var(--magenta-dim);color:var(--magenta);box-shadow:inset 0 0 12px rgba(0,0,0,0.85),0 0 9px rgba(217,0,255,0.22);">AI</div>
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label for="set-apikey">Search API Key (web search)</label>
+      <input type="password" id="set-apikey" placeholder="Get a free key at ollama.com/settings/keys">
+      <div style="margin-top:6px; display:flex; gap:8px; align-items:center;">
+        <button class="btn btn-sm" type="button" onclick="testSearchConnection()">Test Connection</button>
+        <span id="search-test-status" style="font-size:12px;color:var(--cyan-dim);"></span>
+      </div>
+      <pre id="search-test-output" style="display:none; margin-top:8px; max-height:200px; overflow:auto; font-size:11px; padding:8px; background:var(--black); border:1px solid var(--border); border-radius:var(--radius); color:var(--cyan-mid);"></pre>
+      <div class="form-hint">Free key from ollama.com/settings/keys. Search proxy on :11435 is started by launch.bat. Note: the search proxy is the ONLY network traffic — llama.cpp itself is fully offline.</div>
+    </div>
+
+    <div class="form-row">
+      <div class="form-group">
+        <label for="set-frequency">Reminder every N msgs</label>
+        <input type="number" id="set-frequency" min="1" max="50" value="3">
+      </div>
+      <div class="form-group">
+        <label for="set-tokens">Context limit (tokens)</label>
+        <input type="number" id="set-tokens" min="2048" max="256000" value="24576">
+        <div class="form-hint" id="ctx-hint">Input context budget — 90% reserved for system prompt, lore, and conversation history. The remaining server context (CTX_SIZE minus this) is for the model's response. Context limit depends on your loaded model and VRAM.</div>
+      </div>
+    </div>
+
+    <div class="form-group" style="margin-top:12px; padding:12px; border:1px solid rgba(255,165,0,0.25); border-radius:var(--radius); background:rgba(255,165,0,0.03);">
+      <label style="color:var(--amber,#ffaa00);">&#9201; Infinite Runtime Bug Fix</label>
+      <div class="form-hint" style="margin-top:2px;margin-bottom:10px;">If COT (chain-of-thought) hangs forever, this auto-stops generation once it exceeds your expected runtime. Set to whatever feels right — if it hasn't finished by then, something's stuck.</div>
+      <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
+        <label style="display:flex;align-items:center;gap:7px;cursor:pointer;font-size:13px;color:rgba(255,255,255,0.75);">
+          <input type="checkbox" id="set-cot-timeout-enabled" style="accent-color:var(--amber,#ffaa00);width:15px;height:15px;cursor:pointer;" onchange="updateCotTimeoutRow()">
+          Enable auto-cull
+        </label>
+        <div id="cot-timeout-timer-wrap" style="display:flex;align-items:center;gap:8px;opacity:0.35;pointer-events:none;transition:opacity 0.15s;">
+          <span style="font-size:12px;color:rgba(255,255,255,0.5);">Max runtime:</span>
+          <input type="number" id="set-cot-timeout-minutes" min="1" max="60" step="1" value="2" style="width:62px;text-align:center;font-size:13px;">
+          <span style="font-size:12px;color:rgba(255,255,255,0.5);">min</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="form-group" style="margin-top:12px; padding:12px; border:1px solid rgba(217,0,255,0.25); border-radius:var(--radius); background:rgba(217,0,255,0.03);">
+      <label style="color:var(--magenta);">&#9986; Smart Response Limit</label>
+      <div class="form-hint" style="margin-top:2px;margin-bottom:10px;">Stops the AI from producing too much text. Counts a rough token estimate (&asymp;&frac34; word per token) as the reply streams and, once the cap is reached, cuts off neatly at the end of the sentence. Chain-of-thought reasoning doesn't count &mdash; only the visible reply. Each capped reply gets a &#9986; marker in its header.</div>
+      <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
+        <label style="display:flex;align-items:center;gap:7px;cursor:pointer;font-size:13px;color:rgba(255,255,255,0.75);">
+          <input type="checkbox" id="set-smart-limit-enabled" style="accent-color:var(--magenta);width:15px;height:15px;cursor:pointer;" onchange="updateSmartLimitRow()">
+          Enable smart limit
+        </label>
+        <div id="smart-limit-tokens-wrap" style="display:flex;align-items:center;gap:8px;opacity:0.35;pointer-events:none;transition:opacity 0.15s;">
+          <span style="font-size:12px;color:rgba(255,255,255,0.5);">Max reply:</span>
+          <input type="number" id="set-smart-limit-tokens" min="25" max="8192" step="25" value="300" style="width:74px;text-align:center;font-size:13px;">
+          <span style="font-size:12px;color:rgba(255,255,255,0.5);">tokens (est.)</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="form-group" style="margin-top:12px; padding:12px; border:1px solid var(--green-dim); border-radius:var(--radius); background:rgba(0,255,65,0.03);">
+      <label style="color:var(--green-neon);">&#128274; Privacy Status</label>
+      <div class="form-hint" style="color:var(--green-dim);">
+        llama.cpp runs 100% offline — no accounts, no telemetry, no network calls.
+        Your model and conversations never leave your machine.
+        The only network traffic is the optional web search proxy (port 11435),
+        which you control via the search toggle.
+      </div>
+    </div>
+
+    <div class="modal-actions">
+      <button class="btn" onclick="closeSettings()">Cancel</button>
+      <button class="btn btn-fill" onclick="saveSettings()">SAVE</button>
+    </div>
+  </div>
+</div>
+
+<!-- CHARACTER CARD MODAL -->
+<div class="modal-backdrop" id="char-modal">
+  <div class="modal">
+    <h2>CAST</h2>
+
+    <!-- LIST VIEW: characters on top, personas on bottom -->
+    <div id="char-modal-list">
+
+      <div class="cast-section-header">
+        <span class="cast-section-title">&#9864; CHARACTERS</span>
+        <span class="cast-section-sub">who you are talking to</span>
+      </div>
+      <div class="card-grid" id="card-grid"></div>
+      <button class="btn btn-fill btn-block" onclick="createCard()" style="margin-bottom:8px;">+ NEW CHARACTER</button>
+      <label class="btn btn-block" style="margin-bottom:20px; cursor:pointer;" title="Import a SillyTavern / TavernAI character card (V1, V2 or V3) — .png, .json or .charx">
+        &#8593; IMPORT CARD
+        <input type="file" accept=".png,.json,.charx,image/png,application/json" style="display:none" onchange="importCharacterCard(this)">
+      </label>
+
+      <div class="cast-divider"></div>
+
+      <div class="cast-section-header cast-section-header-persona">
+        <span class="cast-section-title">&#128100; PERSONAS</span>
+        <span class="cast-section-sub">who you are</span>
+      </div>
+      <div class="card-grid card-grid-persona" id="persona-grid"></div>
+      <button class="btn btn-fill btn-block btn-persona" onclick="createPersona()" style="margin-bottom:20px;">+ NEW PERSONA</button>
+
+    </div>
+
+    <div id="card-editor" style="display:none;">
+      <div class="form-group">
+        <label for="card-name">Character Name</label>
+        <input type="text" id="card-name" placeholder="e.g. Archivist, CodeGoblin, Professor...">
+      </div>
+
+      <div class="form-group">
+        <label>Avatar</label>
+        <div class="avatar-picker">
+          <div class="avatar-preview" id="card-avatar-preview">--</div>
+          <div class="avatar-picker-controls">
+            <input type="text" id="card-avatar" placeholder="Paste image URL..." oninput="previewAvatar('card-avatar','card-avatar-preview')">
+            <label class="avatar-file-btn">
+              Browse file...
+              <input type="file" accept="image/*" style="display:none" onchange="handleAvatarFile(this,'card-avatar','card-avatar-preview')">
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label for="card-style">Writing Style</label>
+        <textarea id="card-style" rows="3" placeholder="How should this character write? (replaces system prompt)"></textarea>
+        <div class="form-hint">Sent as the system prompt at the start of every context.</div>
+
+        <!-- CAROUSEL PROMPT -->
+        <div class="carousel-toggle-row" onclick="toggleCarouselBody()">
+          <input type="checkbox" id="card-carousel-enabled" onclick="event.stopPropagation();toggleCarouselBody()" style="cursor:pointer;accent-color:var(--cyan-mid,#00f3ff);">
+          <span class="carousel-toggle-label" id="carousel-toggle-label">Carousel Prompt <span style="opacity:0.5;font-size:11px;">— rotating instructions injected each turn</span></span>
+        </div>
+
+        <div class="carousel-body" id="carousel-body">
+          <label for="card-carousel-prompts" style="font-size:12px;color:rgba(0,243,255,0.7);margin-bottom:6px;display:block;">Carousel Lines <span style="font-weight:400;color:rgba(255,255,255,0.3);">(one instruction per line)</span></label>
+          <textarea id="card-carousel-prompts" rows="6" placeholder="change the scene.&#10;write in the style of Cormac McCarthy.&#10;write in the style of Terry Pratchett.&#10;advance the plot significantly.&#10;focus on sensory details and atmosphere.&#10;introduce an unexpected complication." style="font-size:12px;resize:vertical;border-color:rgba(0,243,255,0.2);"></textarea>
+          <div class="form-hint" style="margin-top:5px;">Each line is a separate instruction. On every AI turn, one line is selected and injected as a hidden system nudge — the model sees it but it won't appear in chat.</div>
+
+          <div class="carousel-mode-row">
+            <span>Order:</span>
+            <label>
+              <input type="radio" name="carousel-mode" id="carousel-mode-random" value="random" checked>
+              Random
+            </label>
+            <label>
+              <input type="radio" name="carousel-mode" id="carousel-mode-sequential" value="sequential">
+              Sequential
+            </label>
+            <div style="flex:1;"></div>
+            <button class="btn btn-sm" type="button" onclick="resetCarouselIndex()" title="Reset sequential position back to line 1" style="font-size:11px;">Reset Index</button>
+          </div>
+          <div class="carousel-counter" id="carousel-counter"></div>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label for="card-personality">Personality</label>
+        <textarea id="card-personality" rows="3" placeholder="Character traits, reminders, behavioral rules..."></textarea>
+        <div class="form-hint">Injected periodically as a reminder to maintain character.</div>
+      </div>
+
+      <div class="form-group">
+        <label for="card-lore-toggle">Lore System</label>
+        <select id="card-lore-toggle">
+          <option value="on">Enabled — auto-summarize old messages</option>
+          <option value="off">Disabled — oldest messages are dropped</option>
+        </select>
+        <div class="form-hint">When enabled, messages beyond the last 40 are compressed into a running summary that persists across the conversation.</div>
+      </div>
+
+      <div class="form-group">
+        <label for="card-starting-lore">Starting Lore</label>
+        <textarea id="card-starting-lore" rows="3" placeholder="Background context, world-building, scenario setup... Pre-filled into new threads using this character."></textarea>
+        <div class="form-hint">Injected before all user/AI messages. New threads start with this as their lore. Auto-summarization adds to it as the conversation grows.</div>
+      </div>
+
+      <div class="form-group">
+        <label for="card-rag-storybook">RAG Storybook <span style="opacity:0.5;font-weight:400;font-size:11px;">&mdash; retrieved on demand, not always-on</span></label>
+        <textarea id="card-rag-storybook" rows="6" placeholder="The big character/world bible. Author once; only the slice a scene needs enters context.&#10;&#10;Structured (weighted tags fire by theme):&#10;# selah&#10;A winged figure, divine and remote.&#10;tags: angel [1.0], divine [0.8], winged [1.0], halo [0.5]&#10;relation: reinhard&#10;role_in_arcs: protector&#10;offscreen_default: false&#10;use_principles: Render her speech as formal and archaic.&#10;&#10;...or just plain prose, which is chunked and matched semantically." style="font-size:12px;resize:vertical;" oninput="updateStorybookReadout()"></textarea>
+        <div class="form-hint">Unlike Starting Lore (small, always present), the storybook is large and pulled <strong>on demand</strong>. Accepts structured lines (<code>tags:</code>, <code>relation:</code>, <code>role_in_arcs:</code>, <code>offscreen_default:</code>, <code>use_principles:</code> &mdash; flat <code>name_tags:</code> form works too) and/or plain prose; the parser routes by shape. Tag <code>[weights]</code> are control data and never reach the model.</div>
+        <div class="carousel-counter" id="storybook-readout"></div>
+      </div>
+
+      <div class="form-group">
+        <label for="card-custom-code">
+          Custom Code
+          <span style="opacity:0.5;font-weight:400;font-size:11px;">&mdash; JavaScript scoped to this character</span>
+        </label>
+        <label class="code-enable-row">
+          <input type="checkbox" id="card-code-enabled">
+          <span>Run this code while this character is active</span>
+        </label>
+        <textarea id="card-custom-code" rows="10" spellcheck="false" placeholder="// Runs when this character is activated. Torn down when you switch away.
+//
+// HOOKS
+// gobbo.on(&#39;send&#39;,    ctx =&gt; ...)  return a string to rewrite your message
+// gobbo.on(&#39;reply&#39;,   ctx =&gt; ...)  return a string to rewrite the response
+// gobbo.on(&#39;context&#39;, ctx =&gt; ...)  ctx.messages is the array about to be sent
+// gobbo.on(&#39;activate&#39;,   () =&gt; ...)
+// gobbo.on(&#39;deactivate&#39;, () =&gt; ...)
+//
+// ACTIONS
+// await gobbo.ask(prompt, { system, maxTokens, temperature })  -&gt; string
+// gobbo.note(text, { label, open })   collapsed note; model never sees it
+// gobbo.every(5, ctx =&gt; ...)          run every 5 replies
+// gobbo.notify(&#39;text&#39;)               toast
+//
+// DATA
+// gobbo.card     this character
+// gobbo.thread   the open thread, for reading
+// gobbo.store    an object that persists across reloads
+// gobbo.save()   persist after changing gobbo.store
+// gobbo.log()    console, tagged with the character name
+
+// Example - a plot tracker that fires every 5 replies:
+gobbo.every(5, async () =&gt; {
+  const recent = gobbo.thread.messages
+    .filter(m =&gt; !m.cardNote).slice(-12)
+    .map(m =&gt; m.role + &#39;: &#39; + m.content).join(&#39;\n&#39;);
+
+  const plot = await gobbo.ask(recent, {
+    system: &#39;Reply with exactly two lines:\nSHORT: the immediate goal\nLONG: the overarching goal&#39;
+  });
+
+  if (plot) gobbo.note(plot, { label: &#39;Plot tracker&#39; });
+});"></textarea>
+        <div class="form-hint">
+          <b>Writing this with an AI?</b> Paste the comment block above into it &mdash; that is the whole API, and a model that has not seen it will invent methods that do not exist.<br>
+          Runs with full page access &mdash; it is your machine and your code, so there is no sandbox pretending otherwise.
+          What it <em>cannot</em> do is break the app: a hook that throws is switched off and logged, and the character keeps working.
+          <strong>Cards imported from elsewhere always arrive with their code disabled</strong>, however the file was saved. Read it before you switch it on.
+        </div>
+        <div class="carousel-counter" id="card-code-status"></div>
+      </div>
+
+      <div class="form-group">
+        <label for="card-greeting">Opening Greeting</label>
+        <textarea id="card-greeting" rows="3" placeholder="The character's first message in any new thread. Leave empty for no greeting."></textarea>
+        <div class="form-hint">Injected verbatim as the character's first message in new threads &mdash; <strong>not generated by the model</strong>. Supports &#123;&#123;char&#125;&#125;, &#123;&#123;user&#125;&#125;, and macros, resolved at thread creation.</div>
+
+        <!-- ALT GREETINGS -->
+        <div class="carousel-toggle-row" onclick="toggleAltGreetingsBody()">
+          <input type="checkbox" id="card-alt-greetings-enabled" onclick="event.stopPropagation();toggleAltGreetingsBody()" style="cursor:pointer;accent-color:var(--cyan-mid,#00f3ff);">
+          <span class="carousel-toggle-label" id="alt-greetings-toggle-label">Alternative Greetings <span style="opacity:0.5;font-size:11px;">&mdash; flippable openings via the variant navigator</span></span>
+        </div>
+
+        <div class="carousel-body" id="alt-greetings-body">
+          <label for="card-alt-greetings" style="font-size:12px;color:rgba(0,243,255,0.7);margin-bottom:6px;display:block;">Alt Greetings <span style="font-weight:400;color:rgba(255,255,255,0.3);">(separate entries with a blank line)</span></label>
+          <textarea id="card-alt-greetings" rows="8" placeholder="Hey, welcome back. Picking up where we left off?&#10;&#10;Greetings, traveller. State your business.&#10;&#10;Well well well. Look who came back." style="font-size:12px;resize:vertical;border-color:rgba(0,243,255,0.2);" oninput="updateAltGreetingsCounter()"></textarea>
+          <div class="form-hint" style="margin-top:5px;">Each entry becomes a flippable variant on the greeting. Use the &#9664; &#9654; navigator above the message in chat to pick a different opening. The Opening Greeting above is variant 1; these add 2, 3, 4...</div>
+          <div class="carousel-counter" id="alt-greetings-counter"></div>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label>Chat Background</label>
+        <div class="avatar-picker">
+          <div class="avatar-preview" id="card-bg-preview" style="width:80px;height:48px;">--</div>
+          <div class="avatar-picker-controls">
+            <input type="text" id="card-bg" placeholder="Image URL for chat background..." oninput="previewBg()">
+            <label class="avatar-file-btn">
+              Browse file...
+              <input type="file" accept="image/*" style="display:none" onchange="handleBgFile(this)">
+            </label>
+          </div>
+        </div>
+        <div class="form-hint">Optional. Leave empty for default black background.</div>
+      </div>
+
+      <div class="form-group">
+        <label>Character Text Colors</label>
+        <div class="form-hint" style="margin-top:0;margin-bottom:8px;">Customize how this character's messages appear. Dialog = text inside "quotes".</div>
+        <div class="color-row">
+          <div class="color-swatch-wrap">
+            <label class="color-label">Text</label>
+            <input type="color" class="color-swatch" id="card-textcolor" value="#e0f8ff" oninput="syncColorHex(this,'card-textcolor-hex');previewCardColors()">
+            <input type="text" class="color-hex" id="card-textcolor-hex" value="#e0f8ff" oninput="syncColorSwatch(this,'card-textcolor');previewCardColors()">
+          </div>
+          <div class="color-swatch-wrap">
+            <label class="color-label">Dialog</label>
+            <input type="color" class="color-swatch" id="card-dialogcolor" value="#d900ff" oninput="syncColorHex(this,'card-dialogcolor-hex');previewCardColors()">
+            <input type="text" class="color-hex" id="card-dialogcolor-hex" value="#d900ff" oninput="syncColorSwatch(this,'card-dialogcolor');previewCardColors()">
+          </div>
+        </div>
+        <div style="margin-top:8px;">
+          <span class="color-preview-text" id="card-color-preview" style="color:#e0f8ff;">Narrative text... <span class="dialog-text" style="color:#d900ff;font-weight:700;">"And then dialog like this!"</span></span>
+        </div>
+      </div>
+
+      <div class="form-group" style="margin-top:12px; padding:12px; border:1px solid rgba(255,255,255,0.08); border-radius:var(--radius); background:rgba(255,255,255,0.02);">
+        <label style="color:var(--green-neon); margin-bottom:8px; display:block;">&#9881; Sampler Parameters</label>
+        <div class="form-hint" style="margin-top:0;margin-bottom:12px;">Fine-tune creativity and output style per character. These are sent directly to llama.cpp with each request.</div>
+
+        <div class="form-row">
+          <div class="form-group" style="flex:1;">
+            <label for="card-temperature">Temperature</label>
+            <input type="range" id="card-temperature" min="0" max="2" step="0.05" value="0.7" oninput="document.getElementById('card-temp-val').textContent=this.value">
+            <div class="form-hint" style="display:flex;justify-content:space-between;"><span>Precise 0</span><span id="card-temp-val">0.7</span><span>2 Creative</span></div>
+          </div>
+          <div class="form-group" style="flex:1;">
+            <label for="card-min-p">Min P</label>
+            <input type="range" id="card-min-p" min="0" max="0.5" step="0.01" value="0.05" oninput="document.getElementById('card-minp-val').textContent=this.value">
+            <div class="form-hint" style="display:flex;justify-content:space-between;"><span>Off 0</span><span id="card-minp-val">0.05</span><span>0.5 Strict</span></div>
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group" style="flex:1;">
+            <label for="card-top-k">Top K</label>
+            <input type="number" id="card-top-k" min="0" max="200" step="1" value="40">
+            <div class="form-hint">0 = disabled. Limits token pool to top K candidates.</div>
+          </div>
+          <div class="form-group" style="flex:1;">
+            <label for="card-top-p">Top P</label>
+            <input type="range" id="card-top-p" min="0" max="1" step="0.05" value="0.95" oninput="document.getElementById('card-topp-val').textContent=this.value">
+            <div class="form-hint" style="display:flex;justify-content:space-between;"><span>Narrow 0</span><span id="card-topp-val">0.95</span><span>1 Full</span></div>
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group" style="flex:1;">
+            <label for="card-repeat-penalty">Repeat Penalty</label>
+            <input type="range" id="card-repeat-penalty" min="1" max="2" step="0.05" value="1.1" oninput="document.getElementById('card-rep-val').textContent=this.value">
+            <div class="form-hint" style="display:flex;justify-content:space-between;"><span>Off 1</span><span id="card-rep-val">1.1</span><span>2 Strong</span></div>
+          </div>
+          <div class="form-group" style="flex:1;">
+            <label for="card-repeat-last-n">Repeat Window</label>
+            <input type="number" id="card-repeat-last-n" min="0" max="2048" step="1" value="64">
+            <div class="form-hint">How many recent tokens the repeat penalty looks back. 0 = disabled.</div>
+          </div>
+        </div>
+
+        <div style="margin-top:14px;padding-top:10px;border-top:1px dashed rgba(255,255,255,0.08);">
+          <label style="color:var(--cyan-dim);font-size:12px;letter-spacing:0.5px;">Advanced — XTC &amp; DRY</label>
+          <div class="form-hint" style="margin-top:2px;margin-bottom:10px;">Force exploration (XTC) and block phrase repetition (DRY). Especially useful for confident models that stay rigid even when temperature alone is turned up.</div>
+
+          <div class="form-row">
+            <div class="form-group" style="flex:1;">
+              <label for="card-xtc-prob">XTC Probability</label>
+              <input type="range" id="card-xtc-prob" min="0" max="1" step="0.05" value="0" oninput="document.getElementById('card-xtc-prob-val').textContent=this.value">
+              <div class="form-hint" style="display:flex;justify-content:space-between;"><span>Off 0</span><span id="card-xtc-prob-val">0</span><span>1 Always</span></div>
+            </div>
+            <div class="form-group" style="flex:1;">
+              <label for="card-xtc-threshold">XTC Threshold</label>
+              <input type="range" id="card-xtc-threshold" min="0" max="0.5" step="0.01" value="0.1" oninput="document.getElementById('card-xtc-threshold-val').textContent=this.value">
+              <div class="form-hint" style="display:flex;justify-content:space-between;"><span>0.01</span><span id="card-xtc-threshold-val">0.1</span><span>0.5</span></div>
+            </div>
+          </div>
+
+          <div class="form-group" style="margin-top:8px;">
+            <label for="card-dry-mult">DRY Multiplier</label>
+            <input type="range" id="card-dry-mult" min="0" max="2" step="0.1" value="0" oninput="document.getElementById('card-dry-mult-val').textContent=this.value">
+            <div class="form-hint" style="display:flex;justify-content:space-between;"><span>Off 0</span><span id="card-dry-mult-val">0</span><span>2 Strong</span></div>
+            <div class="form-hint">0.8 is a typical "on" setting. DRY blocks repeated phrases longer than 2 tokens; pairs well with disabling Repeat Penalty above.</div>
+          </div>
+        </div>
+
+        <div class="form-group" style="margin-top:12px;">
+          <label for="card-banned-phrases">Banned Phrases <span style="font-weight:400;color:var(--cyan-dim);font-size:11px;">(one per line)</span></label>
+          <textarea id="card-banned-phrases" rows="4" placeholder="e.g.&#10;suddenly&#10;chuckle&#10;nodded&#10;smirked" style="font-size:12px;resize:vertical;"></textarea>
+          <div class="form-hint">Each phrase is tokenized in 8 variants (lowercase, Title Case, UPPER CASE, as-typed; each with and without leading space) and suppressed via logit bias. Note: the model can still emit the same word via multi-token decomposition (e.g. "blue" → "bl"+"ue"). For a true ban, use a streaming filter. See devtools console for per-phrase debug.</div>
+        </div>
+
+        <div class="form-group" style="margin-top:4px;">
+          <label for="card-logit-strength">Bias Strength</label>
+          <input type="range" id="card-logit-strength" min="-100" max="-1" step="1" value="-20" oninput="document.getElementById('card-logit-strength-val').textContent=this.value">
+          <div class="form-hint" style="display:flex;justify-content:space-between;"><span>Mild -1</span><span id="card-logit-strength-val">-20</span><span>-100 Near-ban</span></div>
+          <div class="form-hint">-20 = strongly discouraged. -100 = near-ban (token still theoretically possible at very high temperature).</div>
+        </div>
+
+        <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">
+          <button class="btn btn-sm" type="button" onclick="applySamplerPreset('precise')" title="Tight, deterministic. Best for code, factual Q&amp;A, structured output.">Precise</button>
+          <button class="btn btn-sm" type="button" onclick="applySamplerPreset('balanced')" title="Loose-but-coherent. Good general default for chat.">Balanced</button>
+          <button class="btn btn-sm" type="button" onclick="applySamplerPreset('creative')" title="High variety with XTC + DRY enabled. Best for fiction / RP.">Creative</button>
+          <button class="btn btn-sm" type="button" onclick="resetSamplerDefaults()" title="Reset to factory defaults (matches the Precise preset).">Reset</button>
+        </div>
+      </div>
+
+      <div class="modal-actions">
+        <button class="btn btn-danger btn-sm" onclick="deleteCard()" id="card-delete-btn" style="margin-right:auto;">DELETE</button>
+        <button class="btn" onclick="exportCardAsV3()" title="Export as a Character Card V3 PNG (also embeds a V2 chunk for backward compatibility)">EXPORT V3</button>
+        <button class="btn" onclick="cancelCardEdit()">Cancel</button>
+        <button class="btn btn-fill" onclick="saveCard()">SAVE</button>
+      </div>
+    </div>
+
+    <!-- PERSONA EDITOR -->
+    <div id="persona-editor" style="display:none;">
+      <div class="persona-editor-header">
+        <span class="persona-editor-tag">&#128100; PERSONA</span>
+        <span class="persona-editor-tag-sub">character card for &#123;&#123;user&#125;&#125;</span>
+      </div>
+
+      <div class="form-group">
+        <label for="persona-name">Persona Name</label>
+        <input type="text" id="persona-name" placeholder="e.g. Anonymous, Sir Lancelot, Dr. Smith...">
+        <div class="form-hint">Shown in chat. Replaces &#123;&#123;user&#125;&#125; macros in character prompts.</div>
+      </div>
+
+      <div class="form-group">
+        <label>Avatar</label>
+        <div class="avatar-picker">
+          <div class="avatar-preview" id="persona-avatar-preview">--</div>
+          <div class="avatar-picker-controls">
+            <input type="text" id="persona-avatar" placeholder="Paste image URL..." oninput="previewAvatar('persona-avatar','persona-avatar-preview')">
+            <label class="avatar-file-btn">
+              Browse file...
+              <input type="file" accept="image/*" style="display:none" onchange="handleAvatarFile(this,'persona-avatar','persona-avatar-preview')">
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label for="persona-description">Description</label>
+        <textarea id="persona-description" rows="6" placeholder="Background, personality, appearance, role in the scene... Anything you want the AI to know about you."></textarea>
+        <div class="form-hint">Shared with the bot as a system message on the cadence below. Supports &#123;&#123;char&#125;&#125;, &#123;&#123;user&#125;&#125;, and macros.</div>
+      </div>
+
+      <div class="form-group">
+        <label for="persona-frequency">Share Every N Messages</label>
+        <input type="number" id="persona-frequency" min="0" max="50" value="5">
+        <div class="form-hint">Re-injects the description as a system prompt every N user messages (and always on message 1). Set to <strong>0</strong> to never share &mdash; name and avatar still apply, but the bot never sees the description.</div>
+      </div>
+
+      <div class="form-group">
+        <label>Your Text Colors</label>
+        <div class="form-hint" style="margin-top:0;margin-bottom:8px;">How YOUR messages appear in chat. Dialog = text inside "quotes".</div>
+        <div class="color-row">
+          <div class="color-swatch-wrap">
+            <label class="color-label">Text</label>
+            <input type="color" class="color-swatch" id="persona-textcolor" value="#00b8ff" oninput="syncColorHex(this,'persona-textcolor-hex');previewPersonaColors()">
+            <input type="text" class="color-hex" id="persona-textcolor-hex" value="#00b8ff" oninput="syncColorSwatch(this,'persona-textcolor');previewPersonaColors()">
+          </div>
+          <div class="color-swatch-wrap">
+            <label class="color-label">Dialog</label>
+            <input type="color" class="color-swatch" id="persona-dialogcolor" value="#00f3ff" oninput="syncColorHex(this,'persona-dialogcolor-hex');previewPersonaColors()">
+            <input type="text" class="color-hex" id="persona-dialogcolor-hex" value="#00f3ff" oninput="syncColorSwatch(this,'persona-dialogcolor');previewPersonaColors()">
+          </div>
+        </div>
+        <div style="margin-top:8px;">
+          <span class="color-preview-text" id="persona-color-preview" style="color:#00b8ff;">Narrative text... <span class="dialog-text" style="color:#00f3ff;font-weight:700;">"And then dialog like this!"</span></span>
+        </div>
+      </div>
+
+      <div class="modal-actions">
+        <button class="btn btn-danger btn-sm" onclick="deletePersona()" id="persona-delete-btn" style="margin-right:auto;">DELETE</button>
+        <button class="btn" onclick="cancelPersonaEdit()">Cancel</button>
+        <button class="btn btn-fill" onclick="savePersona()">SAVE</button>
+      </div>
+    </div>
+
+    <div class="modal-actions" id="char-close-row">
+      <button class="btn" onclick="closeCharacters()">CLOSE</button>
+    </div>
+  </div>
+</div>
+
+<!-- SCHEDULER MODAL -->
+<div class="modal-backdrop" id="sched-modal">
+  <div class="modal">
+    <h2>SCHEDULER</h2>
+
+    <div id="sched-list"></div>
+
+    <div id="sched-editor" style="display:none; margin-top:16px;">
+      <div class="form-group">
+        <label for="sched-time">Time (24hr)</label>
+        <input type="time" id="sched-time" step="60">
+      </div>
+      <div class="form-group">
+        <label for="sched-thread">Thread</label>
+        <select id="sched-thread"></select>
+      </div>
+      <div class="form-group">
+        <label for="sched-prompt">Prompt to Send</label>
+        <textarea id="sched-prompt" rows="3" placeholder="The message that will be sent to the AI at the scheduled time..."></textarea>
+      </div>
+      <div class="form-group">
+        <label for="sched-recurring">Type</label>
+        <select id="sched-recurring">
+          <option value="once">One-time (fires once, then removed)</option>
+          <option value="daily">Daily (fires every day at this time)</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label for="sched-search">Web Search</label>
+        <select id="sched-search">
+          <option value="off">Off — prompt only</option>
+          <option value="on">On — search the web before sending to AI</option>
+        </select>
+        <div class="form-hint">When enabled, searches the web using the prompt text and includes results in the AI's context.</div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn" onclick="cancelSchedEdit()">Cancel</button>
+        <button class="btn btn-fill" onclick="saveSched()">SAVE</button>
+      </div>
+    </div>
+
+    <div id="sched-footer" style="margin-top:16px;">
+      <button class="btn btn-fill btn-block" onclick="createSched()">+ NEW SCHEDULE</button>
+      <div class="modal-actions">
+        <button class="btn" onclick="closeScheduler()">CLOSE</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- EXTENSIONS MODAL -->
+<div class="modal-backdrop" id="ext-modal">
+  <div class="modal">
+    <h2>MODS</h2>
+
+    <div class="ext-warning-box">
+      <span class="ext-warning-icon">&#9888;</span>
+      <div>
+        <strong>Only load stylesheets and scripts you trust.</strong>
+        Extensions run with full access to the Gobbonet interface.
+        External URLs are fetched at load time — keep them on your local network
+        or from sources you control.
+      </div>
+    </div>
+
+    <div class="form-group" style="margin-top:16px;">
+      <label>Extension Status</label>
+      <div style="display:flex;align-items:center;gap:12px;margin-top:4px;">
+        <label class="ext-toggle-wrap">
+          <input type="checkbox" id="ext-enabled" onchange="updateExtStatusLabel()">
+          <span class="ext-toggle-label" id="ext-toggle-label">Disabled</span>
+        </label>
+        <span class="form-hint" style="margin:0;">Toggle all extensions on/off without clearing them.</span>
+      </div>
+    </div>
+
+    <!-- STYLESHEETS SECTION (multiple) -->
+    <div class="ext-section">
+      <div class="ext-section-header">&#127912; STYLESHEETS</div>
+      <div class="form-hint" style="margin-top:0;margin-bottom:10px;">
+        Load one or more stylesheets. Each entry can be a URL, inline CSS, or both
+        (inline applies after its URL). They're injected in order, top to bottom.
+      </div>
+      <div id="ext-styles-list"></div>
+      <div style="display:flex;gap:8px;margin-top:6px;">
+        <button class="btn btn-sm" onclick="addExtEntry('styles')">+ Add stylesheet</button>
+        <button class="btn btn-sm" onclick="previewExtCSS()" title="Apply all inline CSS as a live preview without saving">Preview all</button>
+      </div>
+    </div>
+
+    <!-- SCRIPTS SECTION (multiple) -->
+    <div class="ext-section">
+      <div class="ext-section-header">&#9889; SCRIPTS</div>
+      <div class="form-hint" style="margin-top:0;margin-bottom:10px;">
+        Load one or more scripts. Each entry can be a URL or inline JS. They run in
+        order at boot with full DOM + state access.
+      </div>
+      <div id="ext-scripts-list"></div>
+      <button class="btn btn-sm" onclick="addExtEntry('scripts')" style="margin-top:6px;">+ Add script</button>
+    </div>
+
+    <!-- CUSTOM MACROS SECTION -->
+    <div class="ext-section">
+      <div class="ext-section-header">&#9679; CUSTOM MACROS</div>
+      <div class="form-group">
+        <div class="form-hint" style="margin-top:0;margin-bottom:10px;">
+          Define <code>{{trigger}}</code> shortcuts — when found in any message or character card field, the trigger expands to your text <em>before being sent to the model</em>. In the chat itself the compact <code>{{trigger}}</code> tag stays visible, so your messages don't get cluttered with the full expansion.<br><br>
+          <strong>Built-in (read-only):</strong>&nbsp;<code>{{char}}</code> &middot; <code>{{user}}</code> &middot; <code>{{current_DAT}}</code> <span style="opacity:0.7;">(these still resolve on screen)</span>
+        </div>
+        <div id="macro-list"></div>
+        <div id="macro-editor" style="display:none;margin-top:10px;padding:12px;border:1px solid var(--border);border-radius:var(--radius);background:rgba(0,243,255,0.02);">
+          <div class="form-group" style="margin-bottom:8px;">
+            <label for="macro-trigger" style="font-size:11px;">Trigger name <span class="form-hint" style="display:inline;margin:0;">(letters, numbers, underscores — no spaces)</span></label>
+            <input type="text" id="macro-trigger" placeholder="e.g. continue" autocomplete="off" spellcheck="false" style="font-family:var(--font);letter-spacing:0.5px;">
+          </div>
+          <div class="form-group" style="margin-bottom:10px;">
+            <label for="macro-text" style="font-size:11px;">Expansion text</label>
+            <textarea id="macro-text" rows="3" placeholder="The text that replaces {{trigger}} everywhere it appears."></textarea>
+          </div>
+          <div style="display:flex;gap:8px;">
+            <button class="btn btn-sm btn-fill" onclick="saveMacroEdit()">Save Macro</button>
+            <button class="btn btn-sm" onclick="cancelMacroEdit()">Cancel</button>
+          </div>
+        </div>
+        <button class="btn btn-sm" id="macro-add-btn" onclick="showMacroEditor()" style="margin-top:10px;">+ Add Macro</button>
+      </div>
+    </div>
+
+    <!-- CURRENTLY LOADED STATUS -->
+    <div class="ext-status-panel" id="ext-status-panel">
+      <div class="ext-status-header">&#128266; LOADED EXTENSIONS</div>
+      <div id="ext-status-list" class="ext-status-list"></div>
+    </div>
+
+    <div class="modal-actions">
+      <button class="btn" onclick="closeExtensions()">Cancel</button>
+      <button class="btn btn-danger btn-sm" onclick="clearAllExtensions()" style="margin-right:auto;" title="Remove all extension data">CLEAR ALL</button>
+      <button class="btn btn-fill" onclick="saveExtensions()">SAVE &amp; APPLY</button>
+    </div>
+  </div>
+</div>
+
+<!-- DATA MODAL -->
+<div class="modal-backdrop" id="data-modal">
+  <div class="modal">
+    <h2>DATA</h2>
+
+    <!-- EXPORT -->
+    <div class="data-section">
+      <div class="data-section-header">&#8681; EXPORT</div>
+      <div class="data-section-body">
+        <div class="form-hint" style="margin-bottom:10px;">Download your data as JSON files you can back up or share with another instance.</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <button class="btn btn-sm" onclick="exportData('threads')" title="Export all conversation threads">Threads</button>
+          <button class="btn btn-sm" onclick="exportData('cards')" title="Export all character cards">Characters</button>
+          <button class="btn btn-sm" onclick="exportData('personas')" title="Export all user personas">Personas</button>
+          <button class="btn btn-sm" onclick="exportData('all')" title="Full snapshot &mdash; threads, characters, personas, settings, schedules, extensions">Full Backup</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- IMPORT -->
+    <div class="data-section">
+      <div class="data-section-header">&#8679; IMPORT</div>
+      <div class="data-section-body">
+        <div class="form-hint" style="margin-bottom:10px;">Threads, characters, and personas are <strong>merged</strong> &mdash; existing entries are kept and only new IDs are added. Full backup replaces everything.</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+          <label class="avatar-file-btn" style="margin:0;" title="Import a threads JSON">
+            Threads&hellip;
+            <input type="file" accept=".json,application/json" style="display:none" onchange="importData(this,'threads')">
+          </label>
+          <label class="avatar-file-btn" style="margin:0;" title="Import a characters JSON">
+            Characters&hellip;
+            <input type="file" accept=".json,application/json" style="display:none" onchange="importData(this,'cards')">
+          </label>
+          <label class="avatar-file-btn" style="margin:0;" title="Import a personas JSON">
+            Personas&hellip;
+            <input type="file" accept=".json,application/json" style="display:none" onchange="importData(this,'personas')">
+          </label>
+          <label class="avatar-file-btn" style="margin:0;" title="Import a full backup &mdash; replaces all current data">
+            Full Backup&hellip;
+            <input type="file" accept=".json,application/json" style="display:none" onchange="importData(this,'all')">
+          </label>
+        </div>
+        <div id="import-status" class="data-import-status" style="display:none;margin-top:10px;"></div>
+      </div>
+    </div>
+
+    <!-- PURGE -->
+    <div class="data-section data-section-danger">
+      <div class="data-section-header" style="color:var(--red-neon);border-color:rgba(255,0,60,0.2);background:rgba(255,0,60,0.04);">&#128465; PURGE</div>
+      <div class="data-section-body">
+        <div class="form-hint" style="margin-bottom:10px;"><strong>Cannot be undone.</strong> Export first if you want a backup.</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <button class="btn btn-sm btn-danger" onclick="purgeData('threads')" title="Delete all conversation threads">Purge Threads</button>
+          <button class="btn btn-sm btn-danger" onclick="purgeData('cards')" title="Reset characters to the built-in default">Purge Characters</button>
+          <button class="btn btn-sm btn-danger" onclick="purgeData('personas')" title="Reset personas to the built-in Anonymous default">Purge Personas</button>
+          <button class="btn btn-sm btn-danger" onclick="purgeData('all')" title="Full factory reset &mdash; wipes all data">PURGE ALL</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-actions">
+      <button class="btn" onclick="closeDataManager()">CLOSE</button>
+    </div>
+  </div>
+</div>
+
+<!-- ABOUT MODAL -->
+<div class="modal-backdrop" id="lore-inspect-modal">
+  <div class="modal lore-inspect">
+    <h2>LORE SUMMARY</h2>
+    <div class="form-hint" style="margin-bottom:14px;">
+      What compression has actually produced for this thread. The size column is the
+      useful part: a summary doing its job stays roughly flat as new events displace
+      old ones. One that grows every pass is appending rather than rewriting.
+    </div>
+    <div id="lore-inspect-body"></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="copyLoreSummary(this)">COPY SUMMARY</button>
+      <button class="btn btn-fill" onclick="closeLoreInspector()">CLOSE</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="about-modal">
+  <div class="modal">
+    <h2>ABOUT</h2>
+
+    <div style="text-align:center;margin-bottom:20px;padding-bottom:16px;border-bottom:1px solid var(--border);">
+      <div style="font-size:28px;font-weight:800;letter-spacing:2px;color:var(--green-neon);line-height:1;">GOBBONET</div>
+      <div style="font-size:11px;color:rgba(255,255,255,0.3);margin-top:6px;letter-spacing:1.5px;">LOCAL AI TERMINAL // llama.cpp</div>
+      <div style="font-size:12px;color:rgba(255,255,255,0.5);margin-top:12px;line-height:1.6;max-width:48ch;margin-left:auto;margin-right:auto;">A self-hosted chat workbench for any local GGUF model — characters, memory, branching, and deep sampler control, all running on hardware you own.</div>
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:12px;font-size:13px;">
+
+      <div style="padding:10px 12px;border:1px solid rgba(0,255,65,0.15);border-radius:var(--radius);background:rgba(0,255,65,0.03);">
+        <div style="color:var(--green-neon);font-size:11px;font-weight:700;letter-spacing:1px;margin-bottom:6px;">&#128274; PRIVATE BY DESIGN</div>
+        <div style="color:rgba(255,255,255,0.55);line-height:1.6;">Runs 100% on your machine — no accounts, no telemetry, no cloud round-trips. The only optional network call is the web-search proxy, and you decide when it's on. Your conversations and models never leave the building.</div>
+      </div>
+
+      <div style="padding:12px 14px;border:1px solid rgba(0,243,255,0.12);border-radius:var(--radius);background:rgba(0,243,255,0.02);">
+        <div style="color:var(--cyan-mid);font-size:11px;font-weight:700;letter-spacing:1px;margin-bottom:10px;">&#9881; WHAT'S INSIDE</div>
+        <div style="display:flex;flex-direction:column;gap:11px;color:rgba(255,255,255,0.55);font-size:12px;line-height:1.55;">
+          <div><span style="color:var(--cyan-bright);font-weight:700;">&#128172; Conversations</span> &mdash; branch &amp; fork any message into parallel timelines, reroll replies and step back through every variant, follow the model's reasoning in collapsible chain-of-thought, and schedule prompts to fire on their own.</div>
+          <div><span style="color:var(--cyan-bright);font-weight:700;">&#127917; Characters &amp; memory</span> &mdash; build character cards or import them from SillyTavern / TavernAI (V1&ndash;V3), swap personas per chat, fold older turns into compressed lore, and pull the right backstory in on cue with weighted-tag retrieval.</div>
+          <div><span style="color:var(--cyan-bright);font-weight:700;">&#127899; Fine control</span> &mdash; per-character samplers (temperature, min-p, top-p, repeat penalty, XTC, DRY), logit bias to nudge or ban specific tokens, carousel system prompts, and {{macros}} that expand before they reach the model.</div>
+          <div><span style="color:var(--cyan-bright);font-weight:700;">&#129513; Extend &amp; own it</span> &mdash; inject your own CSS and JS, tune the interface right down to avatar size, reach it from any device on your LAN, and export or back up everything &mdash; threads, characters, settings &mdash; as portable JSON.</div>
+        </div>
+      </div>
+
+      <div style="padding:10px 12px;border:1px solid rgba(255,255,255,0.06);border-radius:var(--radius);background:rgba(255,255,255,0.02);">
+        <div style="color:rgba(255,255,255,0.4);font-size:11px;font-weight:700;letter-spacing:1px;margin-bottom:6px;">&#128218; STACK</div>
+        <div style="color:rgba(255,255,255,0.4);line-height:1.7;font-size:12px;">
+          <div><span style="color:var(--green-neon);">Model</span> &mdash; <span id="about-model-line">Local GGUF (detecting...)</span></div>
+          <div><span style="color:var(--green-neon);">Runtime</span> &mdash; llama.cpp &mdash; runs any GGUF; CUDA/Vulkan/CPU</div>
+          <div><span style="color:var(--green-neon);">Frontend</span> &mdash; Vanilla HTML/CSS/JS &mdash; no frameworks</div>
+          <div><span style="color:var(--green-neon);">Storage</span> &mdash; IndexedDB in your browser &mdash; nothing server-side</div>
+          <div><span style="color:var(--green-neon);">Server</span> &mdash; PowerShell HTTP listener + launch.bat</div>
+        </div>
+      </div>
+
+    </div>
+
+    <div class="modal-actions" style="margin-top:20px;">
+      <button class="btn btn-fill" onclick="closeAbout()">CLOSE</button>
+    </div>
+  </div>
+</div>
+
+<script src="js/01-config.js"></script>
+<script src="js/02-model.js"></script>
+<script src="js/03-generation.js"></script>
+<script src="js/04-state.js"></script>
+<script src="js/05-persistence.js"></script>
+<script src="js/06-state-sync.js"></script>
+<script src="js/07-prompt.js"></script>
+<script src="js/08-rag.js"></script>
+<script src="js/09-threads.js"></script>
+<script src="js/10-chat.js"></script>
+<script src="js/11-search.js"></script>
+<script src="js/12-render.js"></script>
+<script src="js/13-dashboard.js"></script>
+<script src="js/14-scroll.js"></script>
+<script src="js/15-cards.js"></script>
+<script src="js/16-card-io.js"></script>
+<script src="js/17-personas.js"></script>
+<script src="js/18-utils.js"></script>
+<script src="js/19-extensions.js"></script>
+<script src="js/20-macros.js"></script>
+<script src="js/21-data.js"></script>
+<script src="js/22-scheduler.js"></script>
+<script src="js/23-card-code.js"></script>
+<script src="js/24-boot.js"></script>
+<script src="aither-bonsai-adapter.js"></script>
+<script>
+/* The tag above can 404 without throwing. If it did, GobboNet would run on its DEFAULT
+   transport and every signal would look healthy — so say so, visibly, rather than let a
+   silent fallback masquerade as on-device inference. */
+(function () {
+  if (window.__aitherBonsaiAdapter) return;
+  console.error('[aither] Bonsai adapter did not install — this chat is NOT running on your GPU.');
+  addEventListener('DOMContentLoaded', function () {
+    var b = document.createElement('div');
+    b.setAttribute('role', 'alert');
+    b.textContent = '// ADAPTER FAILED TO LOAD \u2014 this chat is NOT running on your GPU';
+    // GobboNet's OWN palette (css/: --red-neon #ff003c on --black #020205, mono). A generic
+    // red system-ui bar would read as someone else's error injected into their terminal —
+    // which is exactly what it would be. Speak the app's language when interrupting it.
+    b.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:2147483647;'
+      + 'padding:10px 14px;text-align:center;letter-spacing:0.06em;'
+      + "font:600 12px/1.5 'Atkinson Hyperlegible Mono',ui-monospace,Consolas,monospace;"
+      + 'background:#020205;color:#ff003c;border-top:1px solid #ff003c';
+    document.body.appendChild(b);
+  });
+})();
+</script>
+</body>
+</html>

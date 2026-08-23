@@ -1,0 +1,46 @@
+# Publish the in-browser demo to this repo's own GitHub Pages.
+#
+# WHAT THE DEMO IS: GobboNet running with a model IN the browser — no install,
+# no server, no account. browser-demo/ is the ordinary GobboNet static app plus
+# aither-bonsai-adapter.js, which serves the app's OpenAI-compatible endpoint
+# from a WebGPU/WASM worker running the weights locally in the visitor's tab.
+# Nothing is sent anywhere: the model downloads once (with an explicit consent
+# dialog, ~size shown, remembered only if the visitor ticks the box) and
+# generation happens on the visitor's own hardware.
+#
+# ONE-TIME SETUP after merging: repo Settings -> Pages -> Source: "GitHub
+# Actions". The demo then serves at <owner>.github.io/gobbonet/.
+name: Publish browser demo
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'browser-demo/**'
+      - '.github/workflows/publish-browser-demo.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deploy at a time; a newer push supersedes an older queued one.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: browser-demo/
+      - id: deployment
+        uses: actions/deploy-pages@v4
