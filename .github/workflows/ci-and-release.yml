@@ -1,0 +1,84 @@
+# CI and releases for GobboNet, fully automated.
+#
+# WHAT THIS GIVES THE REPO (it currently has neither):
+#
+#   CI     — every push and PR: all JS parses, all JSON parses, and the pages
+#            actually serve from a plain static file server (the way launch.bat
+#            and Pages both serve them). Contributors find out in two minutes,
+#            not after a maintainer pulls the branch.
+#
+#   RELEASE — push a tag like `v1.7` and the zip appears on a GitHub release
+#            by itself, named and checksummed. No more hand-zipping: the tag is
+#            the release decision, everything after it is the machine's job.
+#
+# Nothing here changes the app. Delete the file and everything is as before.
+name: CI and release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Every JS file parses
+        run: |
+          set -e
+          fail=0
+          while IFS= read -r f; do
+            node --check "$f" || fail=1
+          done < <(find . -name '*.js' -not -path './.git/*' -not -path './browser-demo/workers/*')
+          exit $fail
+      - name: Every JSON file parses
+        run: |
+          set -e
+          while IFS= read -r f; do
+            python3 -m json.tool "$f" > /dev/null || { echo "::error::invalid JSON: $f"; exit 1; }
+          done < <(find . -name '*.json' -not -path './.git/*')
+      - name: The app serves from a plain static server
+        # The same way launch.bat and GitHub Pages serve it: no build step, no
+        # bundler — if index/chat load with 200 from a dumb file server, a
+        # visitor's browser gets what a contributor tested.
+        run: |
+          set -e
+          python3 -m http.server 8123 &
+          SRV=$!
+          sleep 1
+          curl -fsS -o /dev/null http://127.0.0.1:8123/chat.html
+          if [ -f browser-demo/index.html ]; then
+            curl -fsS -o /dev/null http://127.0.0.1:8123/browser-demo/index.html
+          fi
+          kill $SRV
+          echo "static serve OK"
+
+  release:
+    needs: check
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Zip the app and cut the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          TAG="${GITHUB_REF_NAME}"
+          NAME="gobbonet-${TAG}"
+          # Everything a user runs, nothing they don't: no .git, no CI, and not
+          # the browser-demo (that ships via Pages, not the download zip).
+          zip -qr "${NAME}.zip" . \
+            -x '.git/*' -x '.github/*' -x 'browser-demo/*'
+          sha256sum "${NAME}.zip" > "${NAME}.zip.sha256"
+          gh release create "$TAG" \
+            --title "GobboNet ${TAG}" \
+            --generate-notes \
+            "${NAME}.zip" "${NAME}.zip.sha256"
+          echo "released ${NAME}.zip ($(du -h "${NAME}.zip" | cut -f1))"
