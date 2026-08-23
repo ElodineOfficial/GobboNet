@@ -153,21 +153,43 @@ if defined GEMMA_LLM_PORT (
 ::   3. 9066                -- the default
 :: ---------------------------------------------------------------
 set "WEB_PORT="
+set "WEB_PORT_SRC="
 if exist "%~dp0.gobbonet-port" (
-    for /f "usebackq delims=" %%P in ("%~dp0.gobbonet-port") do if not defined WEB_PORT set "WEB_PORT=%%P"
+    :: Digits only, deliberately.
+    ::
+    :: A plain `for /f` read of this file is fragile in ways that all look
+    :: identical from the outside: a UTF-8 BOM, a UTF-16 file (which some
+    :: installer toolchains produce), a trailing CR, or a stray space each
+    :: yield a value that fails the numeric test below. The old code then
+    :: fell back to 9066 SILENTLY -- so a user who picked 8420 during setup
+    :: got 9066 with no explanation, which reads exactly like "custom ports
+    :: do not work". Strip everything that is not a digit and the file
+    :: parses the same whatever wrote it.
+    for /f "usebackq delims=" %%P in ("%~dp0.gobbonet-port") do if not defined WEB_PORT_SRC set "WEB_PORT_SRC=%%P"
+    if defined HAVE_PS (
+        set "GN_RAWPORT=!WEB_PORT_SRC!"
+        for /f "usebackq delims=" %%D in (`powershell -NoProfile -Command "($env:GN_RAWPORT -replace '[^0-9]','')"`) do set "WEB_PORT=%%D"
+        set "GN_RAWPORT="
+    ) else (
+        set "WEB_PORT=!WEB_PORT_SRC!"
+    )
 )
 if defined GEMMA_LISTEN_PORT set "WEB_PORT=!GEMMA_LISTEN_PORT!"
 if not defined WEB_PORT set "WEB_PORT=9066"
 
 :: Reject anything that is not a plain number in the usable range rather
-:: than passing it to HttpListener and getting an opaque bind failure.
+:: than passing it to HttpListener and getting an opaque bind failure. Every
+:: rejection below SAYS SO -- a silently corrected port is indistinguishable
+:: from a broken feature.
 echo !WEB_PORT!| findstr /r "^[0-9][0-9]*$" >nul 2>&1
 if errorlevel 1 (
-    echo  [*] Ignoring invalid web port "!WEB_PORT!" -- using 9066.
+    echo  [*] Could not read a port number from .gobbonet-port -- using 9066.
+    if defined WEB_PORT_SRC echo      The file contained: "!WEB_PORT_SRC!"
+    echo      Delete .gobbonet-port and reinstall, or put a single number in it.
     set "WEB_PORT=9066"
 )
 if !WEB_PORT! lss 1024 (
-    echo  [*] Web port !WEB_PORT! is in the privileged range -- using 9066.
+    echo  [*] Web port !WEB_PORT! is below 1024 ^(reserved by Windows^) -- using 9066.
     set "WEB_PORT=9066"
 )
 :: Upper bound is 32767, not 65535, on purpose. Windows hands out
@@ -350,13 +372,21 @@ set "LOG_FILE=%~dp0llama-server.log"
 :: or hijacked future release can't silently land on users' machines -- you bump
 :: this deliberately after testing a new build. Leave empty to use 'latest'.
 set "LLAMA_PIN_TAG=b9294"
-:: Known-good SHA-256 of the pinned release's Windows Vulkan x64 zip.
-:: Leave EMPTY to download without verifying the hash -- after the first
-:: successful download the script prints the hash and the exact line to
-:: paste here. Once set, any future download whose hash doesn't match is
-:: refused. This value must correspond to LLAMA_PIN_TAG above; if you bump
-:: the tag, clear this and re-pin from the next download.
-set "LLAMA_PIN_SHA256="
+:: SHA-256 of llama-b9294-bin-win-vulkan-x64.zip as GitHub publishes it.
+::
+:: Pinning means the zip is refused if the asset is ever replaced under the
+:: same tag (GitHub permits that), if a TLS-intercepting proxy substitutes
+:: it, or if the download is simply truncated -- none of which HTTPS alone
+:: catches. This matters more here than almost anywhere else in the file:
+:: the zip contains the executables that run the model.
+::
+:: This value must correspond to LLAMA_PIN_TAG above; if you bump the tag,
+:: clear this and re-pin from the next download. Leaving it EMPTY still
+:: works but now asks for confirmation before running the result.
+::
+:: Verified 2026-08-19 by downloading the asset and hashing it, not copied
+:: from a third party.
+set "LLAMA_PIN_SHA256=1aff5b8159303b44a5570b85f99d730336935314dec389f0857f992699f43d44"
 
 :: LAUNCH_SCRIPT holds the cmd line we hand to the OS to start llama-server.
 :: It lives in the project root (not %TEMP%) on purpose: fileserver.ps1
@@ -396,20 +426,25 @@ if defined GEMMA_EMBED_PORT (
 ) else (
     set "EMBED_PORT=11436"
 )
-if defined GEMMA_SEARCH_PORT (
-    set "SEARCH_PORT=!GEMMA_SEARCH_PORT!"
-) else (
-    set "SEARCH_PORT=11435"
-)
+:: SEARCH_PORT is gone. Web search is served by fileserver.ps1 on the web UI
+:: port now, so nothing binds 11435 and GEMMA_SEARCH_PORT no longer does
+:: anything. Setting it is harmless; it is simply ignored.
 set "EMBED_CTX=2048"
 set "EMBED_GPU_LAYERS=0"
 set "EMBED_MODEL_GGUF=nomic-embed-text-v1.5.Q8_0.gguf"
 set "EMBED_MODEL_URL=https://huggingface.co/nomic-ai/nomic-embed-text-v1.5-GGUF/resolve/main/nomic-embed-text-v1.5.Q8_0.gguf?download=true"
-:: Known-good SHA-256 of the embedding GGUF. Leave EMPTY to download
-:: without verifying; after the first download the script prints the
-:: hash and the exact line to paste here to pin it (same mechanism as
-:: LLAMA_PIN_SHA256 above).
-set "EMBED_PIN_SHA256="
+:: Known-good SHA-256 of the embedding GGUF -- the sha256 HuggingFace
+:: records for that LFS object. Leave EMPTY to download without verifying;
+:: the script then prints the hash and the exact line to paste here (same
+:: mechanism as LLAMA_PIN_SHA256 above).
+::
+:: The failure mode here is deliberately softer than the engine's: a
+:: mismatch discards the file and leaves semantic retrieval off rather than
+:: failing the launch, because this model is optional. That softness is
+:: also why a WRONG pin is dangerous in a quiet way -- it would turn RAG
+:: off for every user with no obvious cause -- so the mismatch message
+:: below names that possibility explicitly.
+set "EMBED_PIN_SHA256=3e24342164b3d94991ba9692fdc0dd08e3fd7362e0aacc396a9a5c54a544c3b7"
 set "EMBED_LOG_FILE=%~dp0embed-server.log"
 set "EMBED_LAUNCH_SCRIPT=%~dp0.embed-launch.cmd"
 
@@ -718,14 +753,24 @@ goto :fatal
 
 :llama_hash_unpinned
 echo.
-echo  [*] No SHA-256 is pinned for this build, so the download was NOT
-echo      verified against a known-good hash. It arrived over HTTPS from
-echo      github.com, which is normally fine -- but to lock it down for
-echo      every machine you install this on, set this near the top of
-echo      launch.bat (replacing the empty LLAMA_PIN_SHA256):
+echo  [*] WARNING: no SHA-256 is pinned for this build, so this download
+echo      was NOT verified against a known-good hash. What is about to be
+echo      extracted includes the executables that run the model on this
+echo      machine.
+echo.
+echo      It arrived over HTTPS from github.com, which is normally fine.
+echo      Pinning it additionally refuses a release asset that gets
+echo      replaced later, and a proxy that intercepts TLS. Set this near
+echo      the top of launch.bat to pin what you just downloaded:
 echo.
 echo        set "LLAMA_PIN_SHA256=!LLAMA_ACTUAL!"
 echo.
+call :prompt_yn "  Extract and run this UNVERIFIED download?" LLAMA_UNPINNED_OK
+if /i not "!LLAMA_UNPINNED_OK!"=="Y" (
+    echo  [*] Cancelled. The downloaded zip has been deleted.
+    del /f /q "!LLAMA_ZIP!" >nul 2>&1
+    goto :fatal
+)
 goto :llama_extract
 
 :llama_hash_ok
@@ -880,7 +925,7 @@ goto :write_model_json
 ::
 :: REC = best model that fits detected VRAM (flagship-first):
 ::   >=16 GB -> 5 (Gemma 4 26B)   >=12 -> 8 (gpt-oss 20B)
-::   >=8  GB -> 4 (Llama 3.1 8B)  >=6  -> 1 (Gemma 3 4B)
+::   >=8  GB -> 4 (Qwen3.5 9B)    >=6  -> 1 (Gemma 4 E4B)
 ::   cpu_only / tiny -> 2 (Llama 3.2 3B)
 :: MK_n is one of:
 ::   "[ RECOMMENDED FOR YOUR PC ]"      (the REC option)
@@ -922,7 +967,7 @@ set "REC=0"
 :: payload is pure single-quoted PowerShell + string concatenation (no
 :: embedded double quotes, no pipes, no '!', output is pure ASCII) so the
 :: redirect and for/f read it back cleanly regardless of console encoding.
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='SilentlyContinue'; try { $h = ConvertFrom-Json (Get-Content -Raw '%~dp0hardware.json') } catch { $h = $null }; $min=@{1=6;2=4;3=8;4=8;5=16;6=18;7=10;8=12;9=8;10=24}; if (-not $h) { 'HW_OK=0'; 'REC=0'; 'HW_TIER=unknown'; 'HW_VRAM=0'; 'HW_RAM=0'; 'HW_DISK=0'; foreach($i in 1..10){ 'MK_' + $i + '=' }; exit }; $v=[int]$h.gpu.vram_gb; $t=[string]$h.recommended_tier; $ram=[int]$h.ram_gb; $disk=[int]$h.disk.free_gb; $rec=0; if($t -eq 'cpu_only'){ $rec=2 } elseif($v -ge 16){ $rec=5 } elseif($v -ge 12){ $rec=8 } elseif($v -ge 8){ $rec=4 } elseif($v -ge 6){ $rec=1 } else { $rec=2 }; 'HW_OK=1'; 'HW_TIER=' + $t; 'HW_VRAM=' + $v; 'HW_RAM=' + $ram; 'HW_DISK=' + $disk; 'REC=' + $rec; foreach($i in 1..10){ if($i -eq $rec){ $m='[ RECOMMENDED FOR YOUR PC ]' } elseif($t -eq 'cpu_only'){ if($min[$i] -le 6){ $m='' } else { $m='[ likely too slow without a GPU ]' } } elseif($v -ge $min[$i]){ $m='' } else { $m='[ needs ~' + $min[$i] + ' GB VRAM - will be slow ]' }; 'MK_' + $i + '=' + $m }" > "%~dp0.hw-parsed.env" 2>nul
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0hw-recommend.ps1" > "%~dp0.hw-parsed.env" 2>nul
 
 if exist "%~dp0.hw-parsed.env" (
     for /f "usebackq tokens=1,* delims==" %%K in ("%~dp0.hw-parsed.env") do set "%%K=%%L"
@@ -944,47 +989,48 @@ echo   VRAM estimates are approximate at default CTX_SIZE.
 echo   Adjust CTX_SIZE and KV_CACHE_TYPE at the top of
 echo   this script to trade context length vs VRAM usage.
 echo.
-echo   -- SMALL (fits ~8 GB VRAM) ----------------------
+echo   -- SMALL (fits ~6 GB VRAM) ----------------------
 echo.
-echo     [1] Gemma 3 4B IT          Q8_0  ~4.7 GB  !MK_1!
-echo         Google - fast and sharp for its size
-echo.
-echo     [2] Llama 3.2 3B Instruct  Q8_0  ~3.3 GB  !MK_2!
+echo     [2] Llama 3.2 3B Instruct  Q8_0    ~3.4 GB  !MK_2!
 echo         Meta - ultra-light, surprisingly good chat
 echo.
-echo   -- MEDIUM (fits ~10-12 GB VRAM) -----------------
+echo     [1] Gemma 4 E4B IT         Q4_K_M  ~5.4 GB  !MK_1!
+echo         Google - fast and sharp for its size
 echo.
-echo     [3] Mistral 7B v0.3        Q6_K  ~5.8 GB  !MK_3!
-echo         Mistral AI - tight instruction following
+echo   -- MEDIUM (fits ~8-12 GB VRAM) ------------------
 echo.
-echo     [4] Llama 3.1 8B Instruct  Q6_K  ~6.1 GB  !MK_4!
-echo         Meta - solid all-rounder, 128K context
+echo     [4] Qwen3.5 9B             Q4_K_M  ~6.2 GB  !MK_4!
+echo         Alibaba - strong all-rounder, 128K context
+echo         Emits chain-of-thought between ^<think^> tags
 echo.
-echo     [9] Command R 7B (12-2024) Q6_K  ~6.6 GB  !MK_9!
+echo     [9] Command R 7B (12-2024) Q6_K    ~6.6 GB  !MK_9!
 echo         Cohere - strong instruction following, 128K
 echo         Multilingual; no chain-of-thought
 echo.
-echo   -- LARGE (fits ~16 GB VRAM) ---------------------
-echo.
-echo     [5] Gemma 4 26B-A4B MoE    Q4_K_S  ~16 GB  !MK_5!
-echo         Google - MoE runs FAST despite large size
-echo         Great default for 16 GB GPUs
-echo.
-echo     [6] Qwen3 30B-A3B MoE      Q4_K_M  ~18 GB  !MK_6!
-echo         Alibaba - strong reasoning, 128K context
-echo         Emits chain-of-thought between ^<think^> tags
+echo     [3] Mistral 7B v0.3        Q6_K    ~7.5 GB  !MK_3!
+echo         Mistral AI - tight instruction following
 echo.
 echo     [7] DeepSeek-R1 8B         Q8_0    ~8.5 GB  !MK_7!
 echo         Reasoning-focused model (Qwen3 distill)
 echo         Shows chain-of-thought by default
 echo.
-echo     [8] gpt-oss 20B            MXFP4   ~12 GB  !MK_8!
+echo     [8] gpt-oss 20B            MXFP4   ~12 GB   !MK_8!
 echo         OpenAI - open-weights reasoning model
 echo         Uses Harmony channel format for CoT
 echo.
-echo    [10] Command R 35B (08-2024) Q4_K_S ~20 GB  !MK_10!
+echo   -- LARGE (16 GB VRAM and up) --------------------
+echo.
+echo     [5] Gemma 4 26B-A4B MoE    Q4_K_S  ~16 GB   !MK_5!
+echo         Google - MoE runs FAST despite large size
+echo         Great default for 16 GB GPUs
+echo.
+echo    [10] Command R 35B (08-2024) Q4_K_S ~19 GB   !MK_10!
 echo         Cohere - heavy chat model, needs ~24 GB VRAM
 echo         Multilingual strength, 128K context
+echo.
+echo     [6] Qwen3.6 35B-A3B MoE    Q4_K_M  ~22 GB   !MK_6!
+echo         Alibaba - largest in this list, needs ~24 GB
+echo         Strong reasoning; ^<think^> tags; 128K context
 echo.
 echo   -- MANUAL ---------------------------------------
 echo.
@@ -1014,9 +1060,13 @@ if "!MODEL_CHOICE!"=="2" set "PICK_MIN=4"
 if "!MODEL_CHOICE!"=="3" set "PICK_MIN=8"
 if "!MODEL_CHOICE!"=="4" set "PICK_MIN=8"
 if "!MODEL_CHOICE!"=="5" set "PICK_MIN=16"
-if "!MODEL_CHOICE!"=="6" set "PICK_MIN=18"
+if "!MODEL_CHOICE!"=="6" set "PICK_MIN=24"
 if "!MODEL_CHOICE!"=="7" set "PICK_MIN=10"
 if "!MODEL_CHOICE!"=="8" set "PICK_MIN=12"
+:: 9 and 10 had no gate at all, so the VRAM warning never fired for them --
+:: including for slot 10, which is the second-largest model in the list.
+if "!MODEL_CHOICE!"=="9" set "PICK_MIN=8"
+if "!MODEL_CHOICE!"=="10" set "PICK_MIN=24"
 if not defined HW_VRAM set "HW_VRAM=0"
 if !HW_VRAM! gtr 0 if !PICK_MIN! gtr 0 if !HW_VRAM! lss !PICK_MIN! (
     echo.
@@ -1031,10 +1081,10 @@ if !HW_VRAM! gtr 0 if !PICK_MIN! gtr 0 if !HW_VRAM! lss !PICK_MIN! (
 )
 
 if "!MODEL_CHOICE!"=="1" (
-    set "DL_REPO=bartowski/google_gemma-3-4b-it-GGUF"
-    set "DL_FILE=google_gemma-3-4b-it-Q8_0.gguf"
-    set "MODEL_ID=gemma3-4b"
-    set "MODEL_DISPLAY=Gemma 3 4B IT"
+    set "DL_REPO=bartowski/google_gemma-4-E4B-it-GGUF"
+    set "DL_FILE=google_gemma-4-E4B-it-Q4_K_M.gguf"
+    set "MODEL_ID=gemma4-e4b"
+    set "MODEL_DISPLAY=Gemma 4 E4B IT"
     set "MODEL_FAMILY=gemma"
     set "MODEL_MAX_CTX=131072"
     set "MODEL_THINK_FMT=none"
@@ -1067,13 +1117,16 @@ if "!MODEL_CHOICE!"=="3" (
     goto :download_model
 )
 if "!MODEL_CHOICE!"=="4" (
-    set "DL_REPO=bartowski/Meta-Llama-3.1-8B-Instruct-GGUF"
-    set "DL_FILE=Meta-Llama-3.1-8B-Instruct-Q6_K.gguf"
-    set "MODEL_ID=llama31-8b"
-    set "MODEL_DISPLAY=Llama 3.1 8B Instruct"
-    set "MODEL_FAMILY=llama"
+    set "DL_REPO=bartowski/Qwen_Qwen3.5-9B-GGUF"
+    set "DL_FILE=Qwen_Qwen3.5-9B-Q4_K_M.gguf"
+    set "MODEL_ID=qwen35-9b"
+    set "MODEL_DISPLAY=Qwen3.5 9B"
+    set "MODEL_FAMILY=qwen"
     set "MODEL_MAX_CTX=131072"
-    set "MODEL_THINK_FMT=none"
+    :: Qwen3.5 emits reasoning between <think> tags like the rest of the
+    :: Qwen3 line. identify-model.ps1 re-detects this from the GGUF after
+    :: download, so this value only has to be right enough to start with.
+    set "MODEL_THINK_FMT=deepseek"
     set "CTX_SIZE=32768"
     set "KV_CACHE_TYPE=q8_0"
     goto :download_model
@@ -1091,20 +1144,28 @@ if "!MODEL_CHOICE!"=="5" (
     goto :download_model
 )
 if "!MODEL_CHOICE!"=="6" (
-    set "DL_REPO=bartowski/Qwen_Qwen3-30B-A3B-GGUF"
-    set "DL_FILE=Qwen_Qwen3-30B-A3B-Q4_K_M.gguf"
-    set "MODEL_ID=qwen3-30b"
-    set "MODEL_DISPLAY=Qwen3 30B-A3B MoE"
+    set "DL_REPO=bartowski/Qwen_Qwen3.6-35B-A3B-GGUF"
+    set "DL_FILE=Qwen_Qwen3.6-35B-A3B-Q4_K_M.gguf"
+    set "MODEL_ID=qwen36-35b"
+    set "MODEL_DISPLAY=Qwen3.6 35B-A3B MoE"
     set "MODEL_FAMILY=qwen"
     set "MODEL_MAX_CTX=131072"
     set "MODEL_THINK_FMT=deepseek"
-    set "CTX_SIZE=16384"
+    :: 8192, not the 16384 its predecessor used. The weights are 22.29 GB
+    :: and the gate below asks for 24 GB, so on a card that only just
+    :: qualifies there is under 2 GB left for the KV cache. A context that
+    :: does not fit fails at load with an out-of-memory error rather than
+    :: degrading, so the default errs small; the config panel raises it for
+    :: anyone with headroom.
+    set "CTX_SIZE=8192"
     set "KV_CACHE_TYPE=q8_0"
     goto :download_model
 )
 if "!MODEL_CHOICE!"=="7" (
-    set "DL_REPO=bartowski/DeepSeek-R1-0528-Qwen3-8B-GGUF"
-    set "DL_FILE=DeepSeek-R1-0528-Qwen3-8B-Q8_0.gguf"
+    :: The repo and the filename both carry a deepseek-ai_ prefix. Without
+    :: it the URL 404s, which is what made this slot uninstallable.
+    set "DL_REPO=bartowski/deepseek-ai_DeepSeek-R1-0528-Qwen3-8B-GGUF"
+    set "DL_FILE=deepseek-ai_DeepSeek-R1-0528-Qwen3-8B-Q8_0.gguf"
     set "MODEL_ID=deepseek-r1-8b"
     set "MODEL_DISPLAY=DeepSeek-R1 8B"
     set "MODEL_FAMILY=deepseek"
@@ -1116,7 +1177,9 @@ if "!MODEL_CHOICE!"=="7" (
 )
 if "!MODEL_CHOICE!"=="8" (
     set "DL_REPO=ggml-org/gpt-oss-20b-GGUF"
-    set "DL_FILE=gpt-oss-20b-mxfp4.gguf"
+    :: MXFP4 uppercase. Hugging Face paths are case-sensitive, so the
+    :: lowercase spelling 404s.
+    set "DL_FILE=gpt-oss-20b-MXFP4.gguf"
     set "MODEL_ID=gpt-oss-20b"
     set "MODEL_DISPLAY=gpt-oss 20B"
     set "MODEL_FAMILY=gpt-oss"
@@ -1190,14 +1253,31 @@ echo.
 :: Download to <name>.part and rename only after it verifies. Nothing in
 :: models\ that this script did not create is ever touched, and an aborted
 :: download cannot leave a half-file for the models\*.gguf scan to find.
-call :http_get "!DL_URL!" "!GGUF_PART!"
+call :http_get "!DL_URL!" "!GGUF_PART!" resume
 if not "!HTTP_OK!"=="1" (
     echo.
     echo  [ERROR] Download failed.
-    echo         Try downloading manually:
+    echo.
+    :: The partial file is kept on a TRANSPORT failure, deliberately, so
+    :: re-running resumes instead of starting a multi-gigabyte transfer
+    :: over. It is still deleted further down when VERIFICATION fails --
+    :: a file that arrived intact but hashes wrong is not something to
+    :: resume, it is something to discard.
+    if exist "!GGUF_PART!" (
+        for %%A in ("!GGUF_PART!") do set "PART_MB=%%~zA"
+        echo         The partial download has been kept. Run launch.bat
+        echo         again and pick the same model to carry on from where
+        echo         it stopped -- it will not start over.
+        echo.
+        echo         To start clean instead, delete:
+        echo         !GGUF_PART!
+    ) else (
+        echo         Nothing was downloaded. Check your connection.
+    )
+    echo.
+    echo         Or fetch it by hand:
     echo         !DL_URL!
     echo         Save to: !MODEL_DIR!\
-    del "!GGUF_PART!" 2>nul
     goto :fatal
 )
 
@@ -1665,9 +1745,17 @@ if /i "!EMBED_ACTUAL!"=="!EMBED_PIN_SHA256!" (
     echo  [OK] Embedding model checksum verified.
     goto :embed_finalize
 )
-echo  [*] Embedding model CHECKSUM MISMATCH -- discarding and skipping ^(RAG semantic off^).
+echo  [*] Embedding model CHECKSUM MISMATCH -- discarding it. Semantic
+echo      retrieval will be OFF for this session. Chat is unaffected.
 echo        expected: !EMBED_PIN_SHA256!
 echo        actual:   !EMBED_ACTUAL!
+echo.
+echo      Two things this can mean:
+echo        1. The download was corrupted or intercepted -- rerun and see
+echo           whether the "actual" value changes.
+echo        2. EMBED_PIN_SHA256 in launch.bat is wrong. If the "actual"
+echo           value is the SAME every time, and other people report the
+echo           same hash, that is the likely cause -- please report it.
 del /f /q "!EMBED_PART!" >nul 2>&1
 goto :start_proxy
 
@@ -1712,38 +1800,28 @@ echo  [OK] Embedding server ready on :!EMBED_PORT!
 echo.
 
 :: ---------------------------------------------------------------
-:: STEP 4: SEARCH PROXY (127.0.0.1:!SEARCH_PORT! -> ollama.com/api)
-:: The search proxy is independent of the inference backend.
-:: It's a simple HTTP relay so the chat UI can do web searches.
-:: Bound to loopback: only the file server's /search route reaches
-:: it (via 127.0.0.1), so it is not exposed on the LAN and needs no
-:: separate auth. The browser's search Authorization header is
-:: forwarded through the file server proxy to here unchanged.
+:: STEP 4: WEB SEARCH
+::
+:: There is no separate process for this any more -- fileserver.ps1
+:: serves /search directly. The label below is kept because several
+:: earlier branches jump to it; it is now just the point where the
+:: embedding step finishes.
 :: ---------------------------------------------------------------
 :start_proxy
 
-call :http_alive "http://127.0.0.1:!SEARCH_PORT!/health"
-if not errorlevel 1 (
-    echo  [OK] Search proxy on :!SEARCH_PORT!
-    goto :launch
-)
-
-echo  [..] Starting search proxy on :!SEARCH_PORT!...
-start /min powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand "JABFAHIAcgBvAHIAQQBjAHQAaQBvAG4AUAByAGUAZgBlAHIAZQBuAGMAZQAgAD0AIAAnAFMAaQBsAGUAbgB0AGwAeQBDAG8AbgB0AGkAbgB1AGUAJwAKAFsATgBlAHQALgBTAGUAcgB2AGkAYwBlAFAAbwBpAG4AdABNAGEAbgBhAGcAZQByAF0AOgA6AFMAZQBjAHUAcgBpAHQAeQBQAHIAbwB0AG8AYwBvAGwAIAA9ACAAWwBOAGUAdAAuAFMAZQBjAHUAcgBpAHQAeQBQAHIAbwB0AG8AYwBvAGwAVAB5AHAAZQBdADoAOgBUAGwAcwAxADIACgAkAGwAaQBzAHQAZQBuAGUAcgAgAD0AIABOAGUAdwAtAE8AYgBqAGUAYwB0ACAAUwB5AHMAdABlAG0ALgBOAGUAdAAuAEgAdAB0AHAATABpAHMAdABlAG4AZQByAAoAJABsAGkAcwB0AGUAbgBlAHIALgBQAHIAZQBmAGkAeABlAHMALgBBAGQAZAAoACcAaAB0AHQAcAA6AC8ALwAxADIANwAuADAALgAwAC4AMQA6ADEAMQA0ADMANQAvACcAKQAKAHQAcgB5ACAAewAgACQAbABpAHMAdABlAG4AZQByAC4AUwB0AGEAcgB0ACgAKQAgAH0AIABjAGEAdABjAGgAIAB7ACAAZQB4AGkAdAAgADEAIAB9AAoAdwBoAGkAbABlACAAKAAkAGwAaQBzAHQAZQBuAGUAcgAuAEkAcwBMAGkAcwB0AGUAbgBpAG4AZwApACAAewAKACAAIAAkAGMAdAB4ACAAPQAgACQAbABpAHMAdABlAG4AZQByAC4ARwBlAHQAQwBvAG4AdABlAHgAdAAoACkACgAgACAAJAByAGUAcwBwACAAPQAgACQAYwB0AHgALgBSAGUAcwBwAG8AbgBzAGUACgAgACAAJAByAGUAcwBwAC4AQQBkAGQASABlAGEAZABlAHIAKAAnAEEAYwBjAGUAcwBzAC0AQwBvAG4AdAByAG8AbAAtAEEAbABsAG8AdwAtAE8AcgBpAGcAaQBuACcALAAgACcAKgAnACkACgAgACAAJAByAGUAcwBwAC4AQQBkAGQASABlAGEAZABlAHIAKAAnAEEAYwBjAGUAcwBzAC0AQwBvAG4AdAByAG8AbAAtAEEAbABsAG8AdwAtAE0AZQB0AGgAbwBkAHMAJwAsACAAJwBQAE8AUwBUACwAIABHAEUAVAAsACAATwBQAFQASQBPAE4AUwAnACkACgAgACAAJAByAGUAcwBwAC4AQQBkAGQASABlAGEAZABlAHIAKAAnAEEAYwBjAGUAcwBzAC0AQwBvAG4AdAByAG8AbAAtAEEAbABsAG8AdwAtAEgAZQBhAGQAZQByAHMAJwAsACAAJwBDAG8AbgB0AGUAbgB0AC0AVAB5AHAAZQAsACAAQQB1AHQAaABvAHIAaQB6AGEAdABpAG8AbgAnACkACgAgACAAaQBmACAAKAAkAGMAdAB4AC4AUgBlAHEAdQBlAHMAdAAuAEgAdAB0AHAATQBlAHQAaABvAGQAIAAtAGUAcQAgACcATwBQAFQASQBPAE4AUwAnACkAIAB7AAoAIAAgACAAIAAkAHIAZQBzAHAALgBTAHQAYQB0AHUAcwBDAG8AZABlACAAPQAgADIAMAA0ADsAIAAkAHIAZQBzAHAALgBDAGwAbwBzAGUAKAApADsAIABjAG8AbgB0AGkAbgB1AGUACgAgACAAfQAKACAAIAAkAHAAYQB0AGgAIAA9ACAAJABjAHQAeAAuAFIAZQBxAHUAZQBzAHQALgBVAHIAbAAuAEEAYgBzAG8AbAB1AHQAZQBQAGEAdABoAAoAIAAgAGkAZgAgACgAJABwAGEAdABoACAALQBlAHEAIAAnAC8AaABlAGEAbAB0AGgAJwApACAAewAKACAAIAAgACAAJAByAGUAcwBwAC4AUwB0AGEAdAB1AHMAQwBvAGQAZQAgAD0AIAAyADAAMAAKACAAIAAgACAAJABiACAAPQAgAFsAVABlAHgAdAAuAEUAbgBjAG8AZABpAG4AZwBdADoAOgBVAFQARgA4AC4ARwBlAHQAQgB5AHQAZQBzACgAJwB7ACIAcwB0AGEAdAB1AHMAIgA6ACIAbwBrACIAfQAnACkACgAgACAAIAAgACQAcgBlAHMAcAAuAE8AdQB0AHAAdQB0AFMAdAByAGUAYQBtAC4AVwByAGkAdABlACgAJABiACwAIAAwACwAIAAkAGIALgBMAGUAbgBnAHQAaAApADsAIAAkAHIAZQBzAHAALgBDAGwAbwBzAGUAKAApADsAIABjAG8AbgB0AGkAbgB1AGUACgAgACAAfQAKACAAIAB0AHIAeQAgAHsACgAgACAAIAAgACQAcwByACAAPQAgAE4AZQB3AC0ATwBiAGoAZQBjAHQAIABJAE8ALgBTAHQAcgBlAGEAbQBSAGUAYQBkAGUAcgAoACQAYwB0AHgALgBSAGUAcQB1AGUAcwB0AC4ASQBuAHAAdQB0AFMAdAByAGUAYQBtACkACgAgACAAIAAgACQAYgBvAGQAeQAgAD0AIAAkAHMAcgAuAFIAZQBhAGQAVABvAEUAbgBkACgAKQA7ACAAJABzAHIALgBDAGwAbwBzAGUAKAApAAoAIAAgACAAIAAkAHQAYQByAGcAZQB0AFUAcgBsACAAPQAgACcAaAB0AHQAcABzADoALwAvAG8AbABsAGEAbQBhAC4AYwBvAG0ALwBhAHAAaQAnACAAKwAgACQAcABhAHQAaAAKACAAIAAgACAAJABoAGUAYQBkAGUAcgBzACAAPQAgAEAAewAgACcAQwBvAG4AdABlAG4AdAAtAFQAeQBwAGUAJwAgAD0AIAAnAGEAcABwAGwAaQBjAGEAdABpAG8AbgAvAGoAcwBvAG4AJwAgAH0ACgAgACAAIAAgACQAYQB1AHQAaAAgAD0AIAAkAGMAdAB4AC4AUgBlAHEAdQBlAHMAdAAuAEgAZQBhAGQAZQByAHMAWwAnAEEAdQB0AGgAbwByAGkAegBhAHQAaQBvAG4AJwBdAAoAIAAgACAAIABpAGYAIAAoACQAYQB1AHQAaAApACAAewAgACQAaABlAGEAZABlAHIAcwBbACcAQQB1AHQAaABvAHIAaQB6AGEAdABpAG8AbgAnAF0AIAA9ACAAJABhAHUAdABoACAAfQAKACAAIAAgACAAJAB3AHIAIAA9ACAASQBuAHYAbwBrAGUALQBXAGUAYgBSAGUAcQB1AGUAcwB0ACAALQBVAHIAaQAgACQAdABhAHIAZwBlAHQAVQByAGwAIAAtAE0AZQB0AGgAbwBkACAAUABPAFMAVAAgAC0AQgBvAGQAeQAgACQAYgBvAGQAeQAgAC0ASABlAGEAZABlAHIAcwAgACQAaABlAGEAZABlAHIAcwAgAC0AVQBzAGUAQgBhAHMAaQBjAFAAYQByAHMAaQBuAGcAIAAtAFQAaQBtAGUAbwB1AHQAUwBlAGMAIAAzADAACgAgACAAIAAgACQAcgBlAHMAcAAuAEMAbwBuAHQAZQBuAHQAVAB5AHAAZQAgAD0AIAAnAGEAcABwAGwAaQBjAGEAdABpAG8AbgAvAGoAcwBvAG4AJwAKACAAIAAgACAAJABvAGIAIAA9ACAAWwBUAGUAeAB0AC4ARQBuAGMAbwBkAGkAbgBnAF0AOgA6AFUAVABGADgALgBHAGUAdABCAHkAdABlAHMAKAAkAHcAcgAuAEMAbwBuAHQAZQBuAHQAKQAKACAAIAAgACAAJAByAGUAcwBwAC4ATwB1AHQAcAB1AHQAUwB0AHIAZQBhAG0ALgBXAHIAaQB0AGUAKAAkAG8AYgAsACAAMAAsACAAJABvAGIALgBMAGUAbgBnAHQAaAApAAoAIAAgAH0AIABjAGEAdABjAGgAIAB7AAoAIAAgACAAIAAkAHIAZQBzAHAALgBTAHQAYQB0AHUAcwBDAG8AZABlACAAPQAgADUAMAAyAAoAIAAgACAAIAAkAGUAbQAgAD0AIAAnAHsAIgBlAHIAcgBvAHIAIgA6ACIAcAByAG8AeAB5ADoAIAAnACAAKwAgACQAXwAuAEUAeABjAGUAcAB0AGkAbwBuAC4ATQBlAHMAcwBhAGcAZQAuAFIAZQBwAGwAYQBjAGUAKAAnACIAJwAsACcAJwApAC4AUgBlAHAAbABhAGMAZQAoACIAYAByACIALAAnACcAKQAuAFIAZQBwAGwAYQBjAGUAKAAiAGAAbgAiACwAJwAgACcAKQAgACsAIAAnACIAfQAnAAoAIAAgACAAIAAkAGUAYgAgAD0AIABbAFQAZQB4AHQALgBFAG4AYwBvAGQAaQBuAGcAXQA6ADoAVQBUAEYAOAAuAEcAZQB0AEIAeQB0AGUAcwAoACQAZQBtACkACgAgACAAIAAgACQAcgBlAHMAcAAuAE8AdQB0AHAAdQB0AFMAdAByAGUAYQBtAC4AVwByAGkAdABlACgAJABlAGIALAAgADAALAAgACQAZQBiAC4ATABlAG4AZwB0AGgAKQAKACAAIAB9AAoAIAAgACQAcgBlAHMAcAAuAEMAbABvAHMAZQAoACkACgB9AAoA"
-
-set "PRETRIES=0"
-:proxy_wait
-set /a PRETRIES+=1
-if !PRETRIES! gtr 10 (
-    echo  [*] Search proxy failed. Web search will not work.
-    echo      Chat still functions normally without search.
-    goto :launch
-)
-timeout /t 1 /nobreak >nul
-call :http_alive "http://127.0.0.1:!SEARCH_PORT!/health"
-if errorlevel 1 goto :proxy_wait
-echo  [OK] Search proxy on :!SEARCH_PORT!
-echo.
+:: The search proxy used to live here: a hidden-window PowerShell started with
+:: -EncodedCommand and 4,656 characters of base64, opening a listener on its
+:: own port and relaying authenticated requests to an external host.
+::
+:: That is, in shape, a command-and-control relay. Antivirus engines weight
+:: encoded PowerShell heavily and largely independently of what the payload
+:: actually does, because ordinary software almost never does it -- and this
+:: file already carries two comments explaining why the same pattern was
+:: removed from the download paths. The search path had kept a worse version.
+::
+:: fileserver.ps1 now serves /search itself (Handle-Search). Same destination,
+:: same forwarded header, one fewer process, one fewer port, and no encoded
+:: payload anywhere in the project.
 
 :: ---------------------------------------------------------------
 :: STEP 5: FILE SERVER (serves chat.html over HTTP for LAN access)
@@ -1765,6 +1843,44 @@ if not errorlevel 1 (
     goto :get_lan_ip
 )
 
+:: ---------------------------------------------------------------
+:: Is the port already taken, and by what?
+::
+:: This is the check behind both "custom ports do not work" and "I rebooted
+:: and it fixed itself". Same cause: something was already bound to the
+:: port. Usually it is a fileserver.ps1 orphaned by a previous run --
+:: closing the launcher window does not stop it -- and a reboot clears it,
+:: which is why rebooting appears to fix a configuration that was never
+:: wrong.
+::
+:: HttpListener's message for this is unhelpful, so identify the holder here
+:: and name it. "PID 9312, powershell.exe" turns a mystery into one Task
+:: Manager click.
+:: ---------------------------------------------------------------
+set "PORT_HOLDER="
+if defined HAVE_PS (
+    set "GN_CHKPORT=!WEB_PORT!"
+    for /f "usebackq delims=" %%H in (`powershell -NoProfile -Command "try { $p=[int]$env:GN_CHKPORT; $c=Get-NetTCPConnection -LocalPort $p -State Listen -ErrorAction Stop | Select-Object -First 1; if ($c) { $pr=Get-Process -Id $c.OwningProcess -ErrorAction SilentlyContinue; ('PID {0} ({1})' -f $c.OwningProcess, $(if($pr){$pr.ProcessName}else{'unknown'})) } } catch { }"`) do set "PORT_HOLDER=%%H"
+    set "GN_CHKPORT="
+)
+if defined PORT_HOLDER (
+    echo.
+    echo  [*] Port !WEB_PORT! is already in use by !PORT_HOLDER!.
+    echo.
+    echo      If that is powershell.exe it is almost certainly a GobboNet
+    echo      file server left over from a previous run -- closing the
+    echo      launcher window does not stop it. End that PID in Task
+    echo      Manager, or reboot, then start again.
+    echo.
+    echo      If it is something else, that program owns the port. Choose a
+    echo      different one: put a number in .gobbonet-port, or run
+    echo          set GEMMA_LISTEN_PORT=9067
+    echo      in this window and launch again.
+    echo.
+    call :prompt_yn "  Try to start anyway?" PORT_TRY_ANYWAY
+    if /i not "!PORT_TRY_ANYWAY!"=="Y" goto :fatal
+)
+
 echo  [..] Starting file server on :!WEB_PORT!...
 
 :: Use the standalone fileserver.ps1 (reverse proxy included).
@@ -1776,7 +1892,6 @@ if not exist "%~dp0fileserver.ps1" (
 )
 set "GEMMA_ROOT=%~dp0."
 set "GEMMA_LLM_PORT=!SERVER_PORT!"
-set "GEMMA_SEARCH_PORT=!SEARCH_PORT!"
 set "GEMMA_EMBED_PORT=!EMBED_PORT!"
 :: Extra env vars the file server needs to spawn a replacement
 :: llama-server during a hot-swap. fileserver.ps1 reads these once at
@@ -1794,7 +1909,22 @@ set "GEMMA_ACCESS_SECRET=!ACCESS_SECRET!"
 :: fileserver.ps1 resolves the port the same way, but pass it explicitly so
 :: the two can never disagree about which port this run is using.
 set "GEMMA_LISTEN_PORT=!WEB_PORT!"
-start /min powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%~dp0fileserver.ps1"
+:: -WindowStyle Hidden removed, deliberately, for two reasons.
+::
+:: 1. A hidden-window PowerShell that binds a LAN-facing port is its own
+::    antivirus signal, on top of the encoded-payload one this release
+::    already removed. -File against a real .ps1 gets AMSI-scanned in
+::    plaintext and reads as what it is: a web server.
+::
+:: 2. It was actively harmful. fileserver.ps1 records that hidden state
+::    propagates to children created by Start-Process, so the cmd it spawns
+::    for a model hot-swap never allocated a console and llama-server could
+::    not write its log. That comment is still in fileserver.ps1; this is
+::    the cause it was working around.
+::
+:: start /min alone gives a minimised taskbar entry instead of nothing. That
+:: is one more button than before -- the honest cost of this change.
+start /min powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0fileserver.ps1"
 
 set "FRETRIES=0"
 :fserver_wait
@@ -1838,6 +1968,30 @@ timeout /t 1 /nobreak >nul
 call :http_probe "http://127.0.0.1:!WEB_PORT!/"
 if errorlevel 1 goto :fserver_wait
 echo  [OK] File server on :!WEB_PORT!
+
+:: Did it fall back to loopback? fileserver.ps1 retries 127.0.0.1 when the
+:: wildcard prefix is refused, so the chat works here but phones cannot
+:: reach it. That is the normal state after changing ports or upgrading
+:: from an install that only ever had a URL ACL for the old one -- and it
+:: is silent unless someone reads the log, which nobody does when the chat
+:: is working. Say it in the window instead.
+if exist "%~dp0fileserver.log" (
+    findstr /c:"THIS PC ONLY" "%~dp0fileserver.log" >nul 2>&1
+    if not errorlevel 1 (
+        echo.
+        echo  [*] The file server is bound to this PC only.
+        echo      Other devices on your network cannot reach it yet.
+        echo.
+        echo      Windows needs a URL reservation for port !WEB_PORT!, and
+        echo      there is not one. If you changed the port, or upgraded from
+        echo      a version that used 8080, the old reservation does not
+        echo      carry over.
+        echo.
+        echo      Fix: right-click setup-lan.bat and Run as administrator.
+        echo      It reads the same port this launcher is using.
+        echo.
+    )
+)
 
 :: ---------------------------------------------------------------
 :: STEP 6: GET LAN IP + LAUNCH BROWSER
@@ -2139,10 +2293,27 @@ set "_OK=0"
 if defined HAVE_CURL (
     if /i "!_Q!"=="quiet" (
         curl.exe -s -L --fail --retry 3 -o "!_O!" "!_U!"
+        if not errorlevel 1 set "_OK=1"
+    ) else if /i "!_Q!"=="resume" (
+        :: -C - continues a partial file instead of starting over. Worth
+        :: having for a 22 GB model on a domestic connection, where losing
+        :: 90%% of a download to a dropped Wi-Fi link is a real event.
+        curl.exe -L --fail --retry 3 -C - --progress-bar -o "!_O!" "!_U!"
+        if not errorlevel 1 set "_OK=1"
+        :: A server that does not honour range requests fails the resume
+        :: rather than ignoring it, and so does a .part left over from an
+        :: interrupted transfer of a DIFFERENT build of the same filename.
+        :: Both are fixed by starting clean, so try exactly once more.
+        if not "!_OK!"=="1" (
+            echo       [..] resume refused -- restarting this download from the beginning...
+            del /f /q "!_O!" >nul 2>&1
+            curl.exe -L --fail --retry 3 --progress-bar -o "!_O!" "!_U!"
+            if not errorlevel 1 set "_OK=1"
+        )
     ) else (
         curl.exe -L --fail --retry 3 --progress-bar -o "!_O!" "!_U!"
+        if not errorlevel 1 set "_OK=1"
     )
-    if not errorlevel 1 set "_OK=1"
 )
 if "!_OK!"=="0" if defined HAVE_PS (
     if /i not "!_Q!"=="quiet" echo       [..] fetching via PowerShell -- no progress bar, please wait...

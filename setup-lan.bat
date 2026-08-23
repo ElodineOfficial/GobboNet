@@ -50,8 +50,16 @@ echo.
 :: which looks like a broken firewall and is nothing of the kind.
 :: ---------------------------------------------------------------
 set "WEB_PORT="
+set "WEB_PORT_SRC="
 if exist "%~dp0.gobbonet-port" (
-    for /f "usebackq delims=" %%P in ("%~dp0.gobbonet-port") do if not defined WEB_PORT set "WEB_PORT=%%P"
+    :: Digits only, matching launch.bat. If these two ever disagree about the
+    :: port, the firewall rule and the URL reservation land on a port nothing
+    :: listens on -- which looks like a broken firewall and is nothing of the
+    :: kind. Same parse, same result, whatever wrote the file.
+    for /f "usebackq delims=" %%P in ("%~dp0.gobbonet-port") do if not defined WEB_PORT_SRC set "WEB_PORT_SRC=%%P"
+    set "GN_RAWPORT=!WEB_PORT_SRC!"
+    for /f "usebackq delims=" %%D in (`powershell -NoProfile -Command "($env:GN_RAWPORT -replace '[^0-9]','')"`) do set "WEB_PORT=%%D"
+    set "GN_RAWPORT="
 )
 if defined GEMMA_LISTEN_PORT set "WEB_PORT=!GEMMA_LISTEN_PORT!"
 if not defined WEB_PORT set "WEB_PORT=9066"
@@ -68,12 +76,10 @@ if defined GEMMA_LLM_PORT (
 ) else (
     set "LLM_PORT=11437"
 )
-if defined GEMMA_SEARCH_PORT (
-    set "SEARCH_PORT=!GEMMA_SEARCH_PORT!"
-) else (
-    set "SEARCH_PORT=11435"
-)
-echo  [OK] llama.cpp port: !LLM_PORT!   search proxy port: !SEARCH_PORT!
+:: No search port any more -- fileserver.ps1 serves /search itself, so
+:: nothing binds 11435. The firewall rule and URL reservation for it are
+:: removed below rather than maintained.
+echo  [OK] llama.cpp port: !LLM_PORT!
 echo.
 
 :: ---------------------------------------------------------------
@@ -81,24 +87,30 @@ echo.
 :: ---------------------------------------------------------------
 echo  [..] Adding firewall rules...
 
+:: The Gemma4-LLM rule is gone, and any existing one is deleted.
+::
+:: llama-server is started with --host 127.0.0.1 (launch.bat, the generated
+:: .llama-launch.cmd), so it only ever accepts loopback connections. An
+:: inbound LAN rule for it could never have done anything except widen the
+:: firewall for a port nothing outside this machine can reach -- and if the
+:: bind address were ever changed, that rule would silently expose an
+:: unauthenticated model server to the whole subnet.
+::
+:: The chat reaches the model through the file server's /llm proxy, which is
+:: behind the password. That is the only path that should exist.
 netsh advfirewall firewall show rule name="Gemma4-LLM" >nul 2>&1
-if errorlevel 1 (
-    netsh advfirewall firewall add rule name="Gemma4-LLM" dir=in action=allow protocol=TCP localport=!LLM_PORT! profile=private,public remoteip=LocalSubnet >nul
-    echo  [OK] Firewall rule added: Gemma4-LLM (port !LLM_PORT!, llama.cpp, local subnet only)
-) else (
-    rem Repair any pre-existing (possibly wide-open) rule from an older run.
-    netsh advfirewall firewall set rule name="Gemma4-LLM" new dir=in action=allow protocol=TCP localport=!LLM_PORT! profile=private,public remoteip=LocalSubnet >nul
-    echo  [OK] Firewall rule updated: Gemma4-LLM (re-scoped to local subnet only)
+if not errorlevel 1 (
+    netsh advfirewall firewall delete rule name="Gemma4-LLM" >nul 2>&1
+    echo  [OK] Removed the old firewall rule: Gemma4-LLM ^(loopback-only service^)
 )
 
+:: The Gemma4-Search rule opened 11435 for a proxy that no longer exists.
+:: An inbound rule with nothing listening behind it is pure attack surface
+:: and pure antivirus signal, so it is deleted rather than refreshed.
 netsh advfirewall firewall show rule name="Gemma4-Search" >nul 2>&1
-if errorlevel 1 (
-    netsh advfirewall firewall add rule name="Gemma4-Search" dir=in action=allow protocol=TCP localport=11435 profile=private,public remoteip=LocalSubnet >nul
-    echo  [OK] Firewall rule added: Gemma4-Search (port 11435, search proxy, local subnet only)
-) else (
-    rem Repair any pre-existing (possibly wide-open) rule from an older run.
-    netsh advfirewall firewall set rule name="Gemma4-Search" new dir=in action=allow protocol=TCP localport=11435 profile=private,public remoteip=LocalSubnet >nul
-    echo  [OK] Firewall rule updated: Gemma4-Search (re-scoped to local subnet only)
+if not errorlevel 1 (
+    netsh advfirewall firewall delete rule name="Gemma4-Search" >nul 2>&1
+    echo  [OK] Removed the old firewall rule: Gemma4-Search ^(no longer needed^)
 )
 
 netsh advfirewall firewall show rule name="Gemma4-Web" >nul 2>&1
@@ -200,19 +212,18 @@ echo  [..] Adding URL ACL reservations...
 :: the web-port failures down the wrong path.
 :: ---------------------------------------------------------------
 
-call :add_urlacl !SEARCH_PORT! "search proxy"
+:: (no search proxy ACL -- nothing binds that port now)
 call :add_urlacl !WEB_PORT! "file server"
 
 :: Upgrade cleanup. Installs before 1.5.5 defaulted to 8080 and left a URL
 :: ACL behind for it. It is harmless but it is also a reservation on a port
 :: half the developer world wants, which is the exact rudeness that
 :: prompted the move. Drop it if we are no longer using it.
-if not "!SEARCH_PORT!"=="11435" (
-    netsh http show urlacl url=http://+:11435/ 2>nul | findstr /i ":11435/" >nul 2>&1
-    if not errorlevel 1 (
-        netsh http delete urlacl url=http://+:11435/ >nul 2>&1
-        echo  [OK] Removed the old URL ACL for http://+:11435/ ^(no longer used^)
-    )
+:: Unconditional now: nothing binds 11435 in any configuration.
+netsh http show urlacl url=http://+:11435/ 2>nul | findstr /i ":11435/" >nul 2>&1
+if not errorlevel 1 (
+    netsh http delete urlacl url=http://+:11435/ >nul 2>&1
+    echo  [OK] Removed the old URL ACL for http://+:11435/ ^(no longer used^)
 )
 
 if not "!WEB_PORT!"=="8080" (

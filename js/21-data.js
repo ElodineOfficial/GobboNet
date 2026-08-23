@@ -97,9 +97,19 @@ function importData(fileInput, type) {
       // Merge: add cards whose ID doesn't already exist
       const existingIds = new Set(state.characterCards.map(c => c.id));
       const newCards = data.characterCards.filter(c => !existingIds.has(c.id));
+      // Same rule as the PNG card import and the full-backup restore: a card
+      // from a file someone sent you does not get to arrive pre-armed. Wrapped
+      // in a bare object because neutralizeUntrustedCode works on a state-shaped
+      // blob; only the cards being merged are touched.
+      const neutralizedCards = (typeof neutralizeUntrustedCode === 'function')
+        ? neutralizeUntrustedCode({ characterCards: newCards })
+        : { cards: 0, extensions: false };
       state.characterCards = [...state.characterCards, ...newCards];
       saveState(); render();
-      showStatus(`✓ Imported ${newCards.length} character(s). ${data.characterCards.length - newCards.length} skipped (already exist).`, true);
+      const cardCodeNote = neutralizedCards.cards
+        ? ` ${neutralizedCards.cards} carried custom code — kept, but switched OFF.`
+        : '';
+      showStatus(`✓ Imported ${newCards.length} character(s). ${data.characterCards.length - newCards.length} skipped (already exist).` + cardCodeNote, true);
 
     } else if (type === 'personas') {
       if (!Array.isArray(data.personaCards)) { showStatus('✗ No personaCards array found.', false); return; }
@@ -151,12 +161,23 @@ function importData(fileInput, type) {
       state.schedules      = data.schedules      || [];
       state.folders        = data.folders        || [];
       state.extensions     = migrateExtensions(data.extensions);
+      // A backup file comes from wherever the user got it, and applyExtensions()
+      // below injects <script> from it while boot runs card code. Same rule as
+      // the character-card import: the content is kept, the run flags are not.
+      // state.characterCards was assigned earlier in this function, so the cards
+      // are present by the time this runs.
+      const neutralized = (typeof neutralizeUntrustedCode === 'function')
+        ? neutralizeUntrustedCode(state)
+        : { cards: 0, extensions: false };
       state.macros         = Array.isArray(data.macros) ? data.macros : DEFAULT_MACROS.map(m => ({ ...m }));
       state.searchEnabled  = data.searchEnabled  || false;
       saveState();
       applyExtensions();
       render();
-      showStatus('✓ Full backup restored successfully.', true);
+      const codeNote = (neutralized.cards || neutralized.extensions)
+        ? ' Custom code in the backup was kept but left switched OFF — review it before enabling.'
+        : '';
+      showStatus('✓ Full backup restored successfully.' + codeNote, true);
     }
 
     // Reset the file input so the same file can be re-imported if needed
@@ -165,11 +186,15 @@ function importData(fileInput, type) {
   reader.readAsText(file);
 }
 
-function purgeData(type) {
+async function purgeData(type) {
   if (type === 'threads') {
     if (!confirm(`Delete ALL ${state.threads.length} thread(s)? This cannot be undone.`)) return;
     state.threads = [];
     state.activeThreadId = null;
+    // Destroy first, then write the clean baseline. Saving an empty array does
+    // not delete anything -- the bulk put iterates zero times and every stored
+    // thread survives. See wipeLocalStorageAll.
+    try { await idbClearStore('threads'); } catch (e) { console.warn('[purge] threads', e); }
     saveState(); render();
   } else if (type === 'cards') {
     if (!confirm('Reset all character cards to the built-in default? This cannot be undone.')) return;
@@ -194,9 +219,54 @@ function purgeData(type) {
     state.folders        = [];
     state.extensions     = { ...DEFAULT_EXTENSIONS };
     state.searchEnabled  = false;
+
+    // These four are persisted by buildStateBlob but were not being reset, so
+    // they survived a "factory reset":
+    //
+    //   macros              user-authored text expansions -- content, not
+    //                       preference, and the one that actually matters
+    //   seededDefaultMacros bookkeeping for the above; left stale it stops the
+    //                       built-in macros from re-seeding on next boot
+    //   threadOrder         ordering by thread id, every one of which was just
+    //                       deleted -- dangling references to purged data
+    //   sidebarOpen         a UI preference, reset for consistency with the
+    //                       rest of a full reset
+    state.macros              = DEFAULT_MACROS.map(m => ({ ...m }));
+    state.seededDefaultMacros = DEFAULT_MACROS.map(m => m.trigger);
+    state.threadOrder         = [];
+    state.sidebarOpen         = true;
+
+    // Not persisted, but it is per-card scratch space written by card code and
+    // therefore derived from conversations. It lives in memory until reload;
+    // clearing it here means the purge is complete without one.
+    state._cardCodeStore = {};
+
+    // Destroy, THEN write the clean baseline. This order is load-bearing.
+    //
+    // Saving first re-seeds the meta record from an already-empty state, the
+    // wipe then removes it, and the next boot falls through to the localStorage
+    // migration branch looking for a key the wipe also deleted. Harmless, but
+    // it takes the long way round for no reason.
+    //
+    // The reason this call has to exist at all: assigning [] to state.threads
+    // and saving does not delete anything. The bulk put iterates the empty
+    // array zero times, so every stored thread survives and can come back on
+    // the next reload. PURGE ALL was reporting success while keeping the
+    // entire history -- the worst possible failure for the one button whose
+    // whole purpose is destroying data.
+    const failed = await wipeLocalStorageAll();
+
     saveState();
     applyExtensions();
     render();
+
+    // A purge that half-worked is worse than one that says what it missed.
+    if (failed && failed.length) {
+      alert('Purge finished, but these could not be cleared:\n\n  ' +
+            failed.join('\n  ') +
+            '\n\nClose any other GobboNet tabs and purge again. ' +
+            'A tab holding the database open will block it.');
+    }
     // Close modal after full purge so the user sees the clean state
     closeDataManager();
   }

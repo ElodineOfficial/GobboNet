@@ -21,8 +21,8 @@ function renderMacroList() {
       <span class="macro-trigger">{{${escapeHtml(m.trigger)}}}</span>
       <span class="macro-preview">${escapeHtml(m.text.length > 64 ? m.text.slice(0, 61) + '...' : m.text)}</span>
       <div class="macro-actions">
-        <button class="btn btn-sm" onclick="editMacro('${escapeHtml(m.trigger)}')">Edit</button>
-        <button class="btn btn-sm btn-danger" onclick="deleteMacro('${escapeHtml(m.trigger)}')">Del</button>
+        <button class="btn btn-sm" onclick="editMacro('${escapeJsAttr(m.trigger)}')">Edit</button>
+        <button class="btn btn-sm btn-danger" onclick="deleteMacro('${escapeJsAttr(m.trigger)}')">Del</button>
       </div>
     </div>
   `).join('');
