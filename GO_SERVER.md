@@ -30,14 +30,31 @@ unpacks it and runs it.
 
 Builds are stamped `<VERSION>-go-<short sha>` at link time — the release half
 read from the `VERSION` file at the repo root, the sha from `git rev-parse`, so
-`1.5.1-go-afb7e0d`. `installer/build-installer.sh` reads the same file and
+`1.5.8-go-afb7e0d`. `installer/build-installer.sh` reads the same file and
 stamps the same string, which is why the two cannot drift apart again. Every
 build reports it from `gobbonet version`, the startup banner, and
 `/health-fileserver` — the last so a tester can copy a build identity out of a
 browser without a terminal.
 
-To cut a release, edit `VERSION`, commit, and run the build. Nothing else
-carries a version literal.
+The release half is **upstream's number, not ours**. This port tracks a
+GobboNet release; a build stamped `1.5.1-go-<sha>` on a tree carrying 1.5.8's
+frontend names a release it is not built from, and says so everywhere the
+version is reported. `VERSION` therefore holds the upstream release, and
+`internal/version/version_test.go` fails the suite when it disagrees with the
+nearest upstream release tag reachable from `HEAD`:
+
+```
+VERSION is "1.5.1" but the nearest upstream release tag is v1.5.8.
+Every build stamped from this tree reports 1.5.1-go-<sha>, which names a
+release it is not built from. Set VERSION to 1.5.8, or explain the gap here.
+```
+
+The tag is the check and not the source, because a release build cannot assume
+a clone with tags fetched. Where there are none — a shallow clone, an export —
+the test skips and names what it could not verify.
+
+So: after merging an upstream release, set `VERSION` to that release, commit,
+and run the build. Nothing else carries a version literal.
 
 The script refuses to build from a dirty tree. A stamped sha that does not
 describe the code inside the binary is worse than no stamp: a bug gets reported

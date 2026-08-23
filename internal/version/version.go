@@ -13,12 +13,16 @@ import (
 )
 
 // Version is the release identity: "<VERSION>-go-<short sha>", e.g.
-// "1.5.1-go-afb7e0d". The release half comes from the VERSION file at the repo
+// "1.5.8-go-afb7e0d". The release half comes from the VERSION file at the repo
 // root, which build-release.sh and installer/build-installer.sh both read.
+//
+// That half names the *upstream* release this branch is built on, not a number
+// of our own. TestVersionFileMatchesUpstreamRelease holds it to the nearest
+// upstream release tag, because it has now gone stale twice on its own.
 //
 // Overridden at build time:
 //
-//	go build -ldflags "-X github.com/jmccardle/gobbonet/internal/version.Version=1.5.1-go-abc1234"
+//	go build -ldflags "-X github.com/jmccardle/gobbonet/internal/version.Version=1.5.8-go-abc1234"
 //
 // The default says "dev" rather than inventing a number, so an unstamped build
 // can never be mistaken for a distributed one.
