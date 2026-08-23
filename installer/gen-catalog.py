@@ -6,8 +6,11 @@ launch.bat is the single source of truth for the model catalogue. It holds
 that catalogue in three separate places:
 
   1. the menu text          (echo lines: display name, quant, approximate size)
-  2. the recommendation map (the inline PowerShell at ~line 617: $min table
-                             plus the vram -> pick ladder)
+  2. the recommendation map ($min table plus the vram -> pick ladder, in
+                             hw-recommend.ps1 beside launch.bat -- upstream
+                             1.6.0 moved these out of an inline PowerShell
+                             one-liner, because a kilobyte of semicolon-chained
+                             -Command reads to antivirus like payload staging)
   3. the download ladder    (if "!MODEL_CHOICE!"=="N" blocks: repo, file,
                              context size, kv cache type)
 
@@ -64,11 +67,28 @@ def parse_sizes(text):
 
 
 def parse_min_vram(text):
-    """The $min hashtable inside the inline PowerShell recommendation block."""
+    """The $min hashtable in hw-recommend.ps1."""
     match = re.search(r'\$min\s*=\s*@\{([^}]*)\}', text)
     if not match:
-        die("could not find the $min=@{...} VRAM table in the inline PowerShell")
+        die("could not find the $min=@{...} VRAM table in hw-recommend.ps1")
     return {int(k): int(v) for k, v in re.findall(r'(\d+)\s*=\s*(\d+)', match.group(1))}
+
+
+def parse_pick_min(text):
+    """
+    launch.bat's own copy of the VRAM gate: `if "!MODEL_CHOICE!"=="N" set
+    "PICK_MIN=V"`. It exists separately from $min because one is read by batch
+    and the other by PowerShell, and hw-recommend.ps1 says in as many words
+    that the two must agree.
+
+    Cross-checking them here costs one regex and catches the failure the split
+    invites: a catalogue change edited in one place, so the menu warns about a
+    threshold the download does not enforce -- or the reverse. The installer
+    replays $min, so a drift is a warning our wizard shows that the launcher
+    disagrees with.
+    """
+    return {int(idx): int(vram) for idx, vram in
+            re.findall(r'if\s+"!MODEL_CHOICE!"=="(\d+)"\s+set\s+"PICK_MIN=(\d+)"', text)}
 
 
 def parse_recommend(text):

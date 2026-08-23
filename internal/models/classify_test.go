@@ -443,3 +443,40 @@ func TestProjectorDetection(t *testing.T) {
 }
 
 var errUnreadable = errors.New("unreadable")
+
+// general.architecture comes out of a downloaded file, and for every model that
+// falls through to the generic branches it becomes both the id and the family
+// this program publishes in active-model.json.
+//
+// Upstream clamps it in identify-model.ps1 because there it is interpolated
+// into a .cmd the launcher executes. Nothing here builds a command line out of
+// it — but the clamp is at the same place for the same reason: one choke point,
+// so a value that could never legitimately contain a quote, an ampersand or a
+// newline cannot carry one into a consumer added later.
+func TestArchitectureIsClamped(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"llama", "llama"},
+		{"Qwen3MoE", "qwen3moe"},
+		{"gemma-3.1_x", "gemma-3.1_x"},
+		{`llama" & calc.exe`, "llamacalc.exe"},
+		{"llama\r\nset X=1", "llamasetx1"},
+		{strings.Repeat("a", 100), strings.Repeat("a", 64)},
+	}
+	for _, tc := range cases {
+		if got := sanitiseArch(tc.in); got != tc.want {
+			t.Errorf("sanitiseArch(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+
+	// End to end: the hostile value must not survive into the published record.
+	got := Classify(ClassifyInput{
+		Filename:     "unrecognisable.gguf",
+		ChatTemplate: "{% for m in messages %}{{m.role}}{% endfor %}",
+		Architecture: `mystery" & del /q *`,
+	})
+	for _, field := range []string{got.ID, got.Family} {
+		if strings.ContainsAny(field, `"&<>|^!`+"\r\n") {
+			t.Errorf("record carries shell metacharacters: %q", field)
+		}
+	}
+}

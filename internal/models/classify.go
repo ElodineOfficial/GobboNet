@@ -274,7 +274,7 @@ func Classify(in ClassifyInput) Record {
 	}
 
 	template := in.ChatTemplate
-	arch := strings.ToLower(in.Architecture)
+	arch := sanitiseArch(in.Architecture)
 
 	if template == "" && arch == "" && in.ContextLength <= 0 {
 		// No metadata at all: mirror the PowerShell's $null-meta fallback.
@@ -393,6 +393,38 @@ func Classify(in ClassifyInput) Record {
 		rec.ThinkingFormat = "deepseek"
 	}
 	return rec
+}
+
+// sanitiseArch clamps general.architecture to the shape a real one has.
+//
+// Upstream 1.6.0 added this to identify-model.ps1 because the value is raw
+// UTF-8 lifted out of a downloaded file's key-value block, and there it lands
+// in a `set "MODEL_ID=..."` line of a .cmd the launcher CALLs — a quote or an
+// ampersand runs as the user before the chat opens.
+//
+// Nothing in this program builds a command line out of it: llama-server is
+// exec'd with an argv slice and the value reaches disk through encoding/json.
+// It is clamped anyway, for the reason upstream gives for doing it at the
+// source rather than at each sink: the arch string becomes rec.ID and rec.Family
+// for every model that falls through to the generic branches, and those travel
+// to the browser in active-model.json. One choke point here means a future
+// consumer cannot reopen a hole by forgetting.
+//
+// Real values are short lowercase identifiers — "llama", "qwen3moe", "gemma3".
+func sanitiseArch(s string) string {
+	lower := strings.ToLower(s)
+	var b strings.Builder
+	for _, r := range lower {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '.', r == '_', r == '-':
+			b.WriteRune(r)
+		}
+	}
+	out := b.String()
+	if len(out) > 64 {
+		out = out[:64]
+	}
+	return out
 }
 
 // familyFromArch maps an architecture string onto the family vocabulary
