@@ -66,6 +66,60 @@
   // exited 2 (NOT VERIFIED) on every run. Fixed in the same commit as this line.
   var FIRST_TOKEN_FAIL_MS = 60000;
   var WORKER_URL = '/workers/webgpu-brain-bonsai-worker.js';
+
+  // WHERE THE WORKERS ACTUALLY ARE. That path is origin-ABSOLUTE, which is right
+  // for gobbonet.aitherium.com (app and workers both at the root) and for
+  // aitherium.com (app under /gobbonet/, workers at the ROOT) — and wrong for
+  // every SUBPATH copy of this demo, where it 404s and the engine never starts.
+  //
+  // Measured 2026-08-23, driving both live: on wizzense.github.io/GobboNet/ the
+  // page rendered, chat answered, and the answer was "[the in-browser model
+  // worker crashed before it could start]", while the root origin got far enough
+  // to report "no WebGPU adapter" — an honest hardware answer. Same code, and
+  // only the second one had actually reached the engine. Any vendored copy of
+  // this page on another Pages site fails the first way, silently.
+  //
+  // Resolve by PROBE, not by rule, because the origins genuinely disagree: on the
+  // apex the workers are NOT beside the adapter, so "always relative" breaks it.
+  // Adapter-relative first (right for every subpath copy), origin-absolute second
+  // (right for the apex). Cached: one HEAD per worker per session.
+  var ADAPTER_DIR = (function () {
+    try {
+      var src = document.currentScript && document.currentScript.src;
+      if (src) return new URL('.', src).href;
+    } catch (e) { /* no currentScript here; fall through */ }
+    try { return new URL('.', window.location.href).href; } catch (e) { return ''; }
+  })();
+
+  var _workerUrlCache = {};
+  function resolveWorkerUrl(absolutePath) {
+    if (_workerUrlCache[absolutePath]) return _workerUrlCache[absolutePath];
+    var name = absolutePath.split('/').pop();
+    var cands = [];
+    try { if (ADAPTER_DIR) cands.push(new URL('workers/' + name, ADAPTER_DIR).href); }
+    catch (e) { /* an unparseable base is simply not a candidate */ }
+    try { cands.push(new URL(absolutePath, window.location.origin).href); }
+    catch (e) { cands.push(absolutePath); }
+    var last = cands[cands.length - 1];
+    _workerUrlCache[absolutePath] = (function next(i) {
+      if (i >= cands.length) return Promise.resolve(last);
+      // HEAD, never GET: on our own origins the real bundle is ~235KB, and a GET
+      // probe would pull the engine down twice every session.
+      return fetch(cands[i], { method: 'HEAD' })
+        .then(function (r) { return (r && r.ok) ? cands[i] : next(i + 1); })
+        .catch(function () { return next(i + 1); });
+    })(0);
+    return _workerUrlCache[absolutePath];
+  }
+  // THE CPU LANE. llama.cpp compiled to wasm (wllama), same message protocol as the GPU
+  // worker, takes a weights URL as its modelId. Served beside the GPU worker on every
+  // Pages origin (verified 2026-08-23 on aitherium.com, gobbonet.aitherium.com and
+  // wizzense.github.io/GobboNet: 299,568 B worker + 7.6 MB wllama.wasm, all 200).
+  var WASM_WORKER_URL = '/workers/webgpu-brain-wasm-worker.js';
+  // Converted stock-quant GGUFs, via the CORS-adding Worker in front of the GitHub release
+  // assets (see AitherVeil src/lib/bonsai-models.ts wasmModelUrl). Only the 1.7B exists.
+  var WASM_WEIGHTS_BASE = 'https://weights.aitherium.com';
+  var WASM_RUNNABLE_IDS = ['bonsai-1.7b'];
   // The SAME tool registry aitherium.com's React surface uses, bundled to a global by
   // scripts/build-workers.mjs. Reported live 2026-08-22: the same model, in the same
   // browser, on two of our own pages -- 'what time is it?' answered correctly on
@@ -180,6 +234,23 @@
     return /Macintosh/i.test(ua) && touch > 1;
   }
 
+  // A PHONE NEVER GETS THE GPU LANE -- tap or no tap. Mirrors gpuLaneAllowed() in Veil's
+  // gpu-class.ts and awkit's device-class.ts (BIH003c). The 320 MB budget below let the
+  // 1.7B onto a phone's GPU, and that was still too much: the OS killed the worker for
+  // memory mid-load, a memory-killed worker posts nothing and fires no onerror, so the
+  // corpse was never torn down and "try the CPU version" fought it for the same RAM
+  // (owner report 2026-08-23). So on a phone the ONLY in-tab lane is the wasm CPU worker,
+  // and requestAdapter() is never called.
+  function gpuLaneAllowed() { return !isMobileDevice(); }
+  function cpuLane() { return !gpuLaneAllowed(); }
+  function wasmRunnable(id) { return WASM_RUNNABLE_IDS.indexOf(id) !== -1; }
+  function wasmModelUrl(id) {
+    var cat = webgpuCatalogEntry(id);
+    var m = cat && /([\d.]+B)/.exec(cat.label);
+    var size = m ? m[1] : '1.7B';
+    return WASM_WEIGHTS_BASE + '/Bonsai-' + size + '-TQ1_0.gguf';
+  }
+
   // The largest in-browser model a phone may be offered, in MB of weights.
   //
   // 320 is deliberately ABOVE the 1.7B (236 MB) and BELOW the 4B (545 MB), so the
@@ -209,10 +280,12 @@
   function deviceRefusal(id) {
     if (!isMobileDevice()) return null;
     var cat = webgpuCatalogEntry(id);
-    if (!cat || !cat.sizeMb || cat.sizeMb <= MOBILE_MAX_MB) return null;
-    return cat.label + ' needs about ' + cat.sizeMb + ' MB of GPU memory, which is more '
-      + 'than a phone browser tab is allowed to hold -- loading it here ends the tab '
-      + 'rather than reporting an error. Pick a smaller model, or run it on this phone '
+    // On a phone the GPU is never used (gpuLaneAllowed): a size is runnable here only if
+    // its converted CPU weights exist, which today is the 1.7B alone.
+    if (cat && wasmRunnable(id)) return null;
+    return (cat ? cat.label : id) + ' has no CPU build for this phone, and the phone GPU '
+      + 'is never used in this tab -- loading it there ends the tab rather than reporting '
+      + 'an error. Pick the 1.7B (runs on the CPU here), or run it on this phone '
       + 'properly with a Linux terminal (Termux or the Android Linux Terminal):\n\n'
       + PHONE_BOOTSTRAP + '\n\n'
       + 'That serves the model over 127.0.0.1 and this page picks it up by itself -- no '
@@ -868,8 +941,9 @@
     if (active && active.timer) { clearTimeout(active.timer); active.timer = null; }
   }
 
-  function spawn() {
-    var w = new Worker(WORKER_URL, { type: 'module' });
+  function spawn(resolvedUrl) {
+    var w = new Worker(resolvedUrl || (cpuLane() ? WASM_WORKER_URL : WORKER_URL),
+                       { type: 'module' });
 
     w.onmessage = function (ev) {
       var msg = ev.data || {};
@@ -971,9 +1045,15 @@
     // chokepoint discipline start() uses in webgpu-brain.tsx — a third caller added later
     // inherits the gate instead of having to remember it.
     return requireConsent().then(function () {
+      // Resolve the lane's worker BEFORE constructing it: a 404 here is what a
+      // subpath deployment used to hit, and `new Worker` on a 404 dies as an
+      // opaque "crashed before it could start".
+      return resolveWorkerUrl(cpuLane() ? WASM_WORKER_URL : WORKER_URL);
+    }).then(function (resolvedUrl) {
       if (!worker) {
-        worker = spawn();
-        worker.postMessage({ type: 'load', modelId: modelId });
+        worker = spawn(resolvedUrl);
+        // The wasm worker has no catalogue: its modelId IS the weights URL.
+        worker.postMessage({ type: 'load', modelId: cpuLane() ? wasmModelUrl(modelId) : modelId });
       }
       return new Promise(function (resolve, reject) {
         readyWaiters.push({ resolve: resolve, reject: reject });
@@ -1515,11 +1595,14 @@
    */
   function backendPhase() {
     if (preferLocalNode && localNode.base) return 'node';
-    if (typeof navigator === 'undefined' || !('gpu' in navigator)) return 'unsupported';
+    if (typeof navigator === 'undefined') return 'unsupported';
+    if (cpuLane() ? typeof WebAssembly === 'undefined' : !('gpu' in navigator)) return 'unsupported';
     if (ready && worker) return 'ready';
     if (worker) return 'loading';
     return 'idle';
   }
+
+  function laneWord() { return cpuLane() ? 'CPU (phone-safe, slower)' : 'GPU'; }
 
   function describeBackend() {
     if (preferLocalNode && localNode.base) {
@@ -1573,24 +1656,24 @@
         // now is the point — it is what the visitor needs in order to answer the consent
         // dialog. Only the tense was wrong, never the claim.
         privacy: phase === 'loading'
-          ? 'downloading to this browser — it will run in this tab on your GPU, and your'
+          ? 'downloading to this browser — it will run in this tab on your ' + laneWord() + ', and your'
             + ' conversation stays on this device'
-          : 'will run in this tab on your GPU once you allow it — your conversation stays'
+          : 'will run in this tab on your ' + laneWord() + ' once you allow it — your conversation stays'
             + ' on this device; web search, when you use it, queries AitherSearch',
         badgeTitle: name + ' has not been downloaded to this browser yet. When you allow'
-          + ' it, it runs in this tab on your GPU and your conversation stays on this'
+          + ' it, it runs in this tab on your ' + laneWord() + ' and your conversation stays on this'
           + ' device. Web search, when you use it, queries AitherSearch.',
         onramp: ONRAMP_TEXT,
       };
     }
     return {
-      pill: name.toUpperCase() + ' — RUNNING ON YOUR GPU',
+      pill: name.toUpperCase() + (cpuLane() ? ' — RUNNING ON YOUR CPU' : ' — RUNNING ON YOUR GPU'),
       // Deliberately NOT "fully offline". Since the search plane was pointed at AitherSearch,
       // a query you run DOES leave the device, and repeating upstream's absolute claim would
       // trade one false statement for another.
-      privacy: 'runs in this tab on your GPU — your conversation stays on this device'
+      privacy: 'runs in this tab on your ' + laneWord() + ' — your conversation stays on this device'
         + '; web search, when you use it, queries AitherSearch',
-      badgeTitle: name + ' runs in this tab on your GPU. Your conversation stays on this '
+      badgeTitle: name + ' runs in this tab on your ' + laneWord() + '. Your conversation stays on this '
         + 'device. Web search, when you use it, queries AitherSearch.',
       // THE ONRAMP. The adapter has polled six loopback ports every 4s this whole time,
       // ready to hand the conversation to a real local node the moment one answers — and
