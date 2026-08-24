@@ -134,3 +134,92 @@ body::after {
 ::-webkit-scrollbar-track { background: var(--black); }
 ::-webkit-scrollbar-thumb { background: var(--cyan-dim); border-radius: var(--radius); }
 ::-webkit-scrollbar-thumb:hover { background: var(--cyan-bright); box-shadow: var(--glow-cyan); }
+
+/* ========================================================
+   GOBLIN_BIOS: REDUCED — an opt-in second palette
+   ========================================================
+
+   For people who read GobboNet for hours. Same hues, same identity, same
+   default — pulled out of the range where saturated colour on near-black
+   starts to smear.
+
+   Nothing above this comment changes. GOBLIN_BIOS is still what you get if
+   you never open settings.
+
+   WHY, measured on #020205 with the WCAG 2.1 relative-luminance formula
+   (reproduce with contrast.py in this PR):
+
+     --white        #e0f8ff   18.8:1     body text
+     --cyan-bright  #00f3ff   15.1:1     accent
+     --green-neon   #00ff73   15.3:1     success
+     --cyan-dim     #005a88    2.8:1     secondary text — below the 4.5 AA floor
+
+   The palette is harsh and faint at the same time, which is why turning the
+   monitor down does not help: it lowers the glare and takes the dim text with
+   it. Body copy sits ~19:1 at full chroma, well above the band where sustained
+   reading is comfortable, while the token used for secondary text is the one
+   value that fails AA outright.
+
+   Each value below keeps its hue and moves only chroma and luminance, solved
+   numerically until it lands in band rather than picked by eye. Ratio in the
+   comment is computed, not asserted.
+   ======================================================== */
+
+:root[data-theme="reduced"] {
+  /* grounds are unchanged — the identity lives here */
+  --black:        #020205;
+  --surface:      #080814;
+  --elevated:     #0d0d26;
+  --border:       #1a1a40;
+
+  --white:        #a5adaf;   /*  9.1:1  was 18.8:1  body text            */
+  --cyan-bright:  #56afb3;   /*  8.1:1  was 15.1:1  accent, links        */
+  --cyan-mid:     #4d9ab7;   /*  6.5:1  was  9.2:1  accent 2             */
+  --cyan-dim:     #4284a5;   /*  5.0:1  was  2.8:1  secondary — now AA   */
+  --green-neon:   #52ac7b;   /*  7.4:1  was 15.3:1  success              */
+  --green-dim:    #2f6b4c;   /*  3.3:1  non-text: rails, borders         */
+  --magenta:      #d338ee;   /*  5.5:1  was  5.3:1  highlight            */
+  --magenta-dim:  #6b3080;   /*  non-text                                */
+  --red-neon:     #f53662;   /*  5.5:1  was  5.2:1  error                */
+  --label:        #7f9aa3;   /*  7.0:1  labels                           */
+
+  /* Glow is the other half of the problem and it is a token, so it comes with.
+     A bloom around already-bright text is what makes edges look doubled after
+     an hour. Kept, not deleted — this is still GOBLIN_BIOS, just quieter. */
+  --glow-cyan:    0 0 6px rgba(86, 175, 179, 0.20);
+  --glow-magenta: 0 0 6px rgba(211, 56, 238, 0.18);
+  --glow-red:     0 0 6px rgba(245, 54, 98, 0.22);
+  --glow-text-c:  0 0 4px rgba(86, 175, 179, 0.25);
+  --glow-text-m:  0 0 4px rgba(211, 56, 238, 0.22);
+}
+
+/* The scanline overlay and the flicker keyframe are atmosphere, and atmosphere
+   is the first thing to go for someone who gets migraines or motion sickness.
+   Honour the OS switch regardless of which palette is active — this is not a
+   Reduced-only concern. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+  body::after { display: none; }   /* scanlines */
+}
+
+/* Someone who has asked their OS for MORE contrast is telling you the opposite
+   of what this palette assumes. Give them the full range back, deliberately,
+   rather than leaving Reduced applied to a person who wants the neon. */
+@media (prefers-contrast: more) {
+  :root[data-theme="reduced"] {
+    --white:        #e0f8ff;
+    --cyan-bright:  #00f3ff;
+    --cyan-mid:     #00b8ff;
+    --cyan-dim:     #4fa8cc;   /* not the original #005a88 — that fails AA */
+    --green-neon:   #00ff73;
+    --magenta:      #d900ff;
+    --red-neon:     #ff003c;
+  }
+}

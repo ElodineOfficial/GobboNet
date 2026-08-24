@@ -144,6 +144,10 @@ const DEFAULT_SETTINGS = {
   smartLimitEnabled: false,   // cap AI reply length (rough token estimate, sentence-end cut)
   smartLimitTokens: 300,      // max estimated tokens per reply when the cap is on
   avatarScale: 1,             // avatar size multiplier (CONFIG slider; 1 = default)
+  // Palette. 'goblin-bios' is the default and always will be; 'reduced'
+  // is opt-in from CONFIG. Unset means goblin-bios, so a save file written
+  // before this existed keeps exactly the look it had.
+  theme: 'goblin-bios',
   // Remote (http/https) images in cards -- avatars, backgrounds, thumbnails.
   // Off by default: a card from an import or a synced peer can point <img src>
   // at any host, and that beacons this machine's IP on render. data:/blob:

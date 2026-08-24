@@ -22,6 +22,7 @@ function openSettings() {
   const aScale = state.settings.avatarScale || 1;
   document.getElementById('set-avatar-scale').value = aScale;
   document.getElementById('set-allow-remote-images').checked = !!state.settings.allowRemoteImages;
+  document.getElementById('set-theme').value = state.settings.theme || 'goblin-bios';
   document.getElementById('avatar-scale-val').textContent = Math.round(aScale * 100) + '%';
   document.getElementById('settings-modal').classList.add('open');
 }
@@ -29,6 +30,7 @@ function openSettings() {
 function closeSettings() {
   document.getElementById('settings-modal').classList.remove('open');
   applyAvatarScale(); // revert any unsaved live-preview drag back to the saved value
+  applyTheme();       // and any unsaved palette preview
 }
 
 function saveSettings() {
@@ -39,6 +41,8 @@ function saveSettings() {
   state.settings.cotTimeoutMinutes = parseInt(document.getElementById('set-cot-timeout-minutes').value) || 2;
   state.settings.avatarScale = parseFloat(document.getElementById('set-avatar-scale').value) || 1;
   state.settings.allowRemoteImages = document.getElementById('set-allow-remote-images').checked;
+  state.settings.theme = document.getElementById('set-theme').value || 'goblin-bios';
+  applyTheme();
   saveState();
   closeSettings();
   renderMessages();
@@ -60,6 +64,21 @@ function previewAvatarScale(val) {
 function applyAvatarScale() {
   const scale = (state.settings && state.settings.avatarScale) || 1;
   document.documentElement.style.setProperty('--avatar-scale', scale);
+}
+
+/* Palette -- same shape as the avatar scale above: previewTheme() runs live as
+   the CONFIG selector changes, applyTheme() restores the saved value (on boot,
+   and on Cancel to discard an unsaved preview).
+
+   The whole switch is one attribute on <html>; css/01-tokens.css does the rest
+   under :root[data-theme="reduced"]. No attribute = GOBLIN_BIOS, so a save file
+   written before this existed opens looking exactly as it did. */
+function previewTheme(val) {
+  if (val === 'reduced') document.documentElement.setAttribute('data-theme', 'reduced');
+  else document.documentElement.removeAttribute('data-theme');
+}
+function applyTheme() {
+  previewTheme((state.settings && state.settings.theme) || 'goblin-bios');
 }
 
 /* ================================================================

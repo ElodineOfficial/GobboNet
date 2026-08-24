@@ -45,6 +45,7 @@
   // switched on. Must come after state is restored and before render.
   try { applyCardCode(); } catch (e) { console.error('[card-code] boot:', e); }
   applyAvatarScale(); // restore saved avatar size preference
+  applyTheme();       // restore saved palette
 
   // Load default characters from JSON, then render the landing page.
   // fetch() works when served via launch.bat; fails silently on file:// (no CORS).

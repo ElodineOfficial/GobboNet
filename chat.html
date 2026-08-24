@@ -136,6 +136,15 @@
       </label>
     </div>
 
+    <div class="form-group" style="margin-top:12px;">
+      <label>&#128065; Palette</label>
+      <div class="form-hint" style="margin-top:2px;margin-bottom:10px;">GOBLIN_BIOS is the original. Reduced keeps the same colours and dims the glow &mdash; easier on the eyes over a long session. Nothing leaves your machine either way.</div>
+      <select id="set-theme" onchange="previewTheme(this.value)">
+        <option value="goblin-bios">GOBLIN_BIOS (default)</option>
+        <option value="reduced">GOBLIN_BIOS: Reduced</option>
+      </select>
+    </div>
+
     <div class="form-group" style="margin-top:12px; padding:12px; border:1px solid rgba(255,149,0,0.22); border-radius:var(--radius); background:rgba(255,149,0,0.03);">
       <label>&#9889; Performance &mdash; llama.cpp tuning</label>
       <div class="form-hint" style="margin-top:2px;margin-bottom:12px;">
