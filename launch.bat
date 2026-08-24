@@ -155,16 +155,16 @@ if defined GEMMA_LLM_PORT (
 set "WEB_PORT="
 set "WEB_PORT_SRC="
 if exist "%~dp0.gobbonet-port" (
-    :: Digits only, deliberately.
-    ::
-    :: A plain `for /f` read of this file is fragile in ways that all look
-    :: identical from the outside: a UTF-8 BOM, a UTF-16 file (which some
-    :: installer toolchains produce), a trailing CR, or a stray space each
-    :: yield a value that fails the numeric test below. The old code then
-    :: fell back to 9066 SILENTLY -- so a user who picked 8420 during setup
-    :: got 9066 with no explanation, which reads exactly like "custom ports
-    :: do not work". Strip everything that is not a digit and the file
-    :: parses the same whatever wrote it.
+    rem Digits only, deliberately.
+    rem
+    rem A plain `for /f` read of this file is fragile in ways that all look
+    rem identical from the outside: a UTF-8 BOM, a UTF-16 file (which some
+    rem installer toolchains produce), a trailing CR, or a stray space each
+    rem yield a value that fails the numeric test below. The old code then
+    rem fell back to 9066 SILENTLY -- so a user who picked 8420 during setup
+    rem got 9066 with no explanation, which reads exactly like "custom ports
+    rem do not work". Strip everything that is not a digit and the file
+    rem parses the same whatever wrote it.
     for /f "usebackq delims=" %%P in ("%~dp0.gobbonet-port") do if not defined WEB_PORT_SRC set "WEB_PORT_SRC=%%P"
     if defined HAVE_PS (
         set "GN_RAWPORT=!WEB_PORT_SRC!"
@@ -1130,9 +1130,9 @@ if "!MODEL_CHOICE!"=="4" (
     set "MODEL_DISPLAY=Qwen3.5 9B"
     set "MODEL_FAMILY=qwen"
     set "MODEL_MAX_CTX=131072"
-    :: Qwen3.5 emits reasoning between <think> tags like the rest of the
-    :: Qwen3 line. identify-model.ps1 re-detects this from the GGUF after
-    :: download, so this value only has to be right enough to start with.
+    rem Qwen3.5 emits reasoning between <think> tags like the rest of the
+    rem Qwen3 line. identify-model.ps1 re-detects this from the GGUF after
+    rem download, so this value only has to be right enough to start with.
     set "MODEL_THINK_FMT=deepseek"
     set "CTX_SIZE=32768"
     set "KV_CACHE_TYPE=q8_0"
@@ -1158,19 +1158,19 @@ if "!MODEL_CHOICE!"=="6" (
     set "MODEL_FAMILY=qwen"
     set "MODEL_MAX_CTX=131072"
     set "MODEL_THINK_FMT=deepseek"
-    :: 8192, not the 16384 its predecessor used. The weights are 22.29 GB
-    :: and the gate below asks for 24 GB, so on a card that only just
-    :: qualifies there is under 2 GB left for the KV cache. A context that
-    :: does not fit fails at load with an out-of-memory error rather than
-    :: degrading, so the default errs small; the config panel raises it for
-    :: anyone with headroom.
+    rem 8192, not the 16384 its predecessor used. The weights are 22.29 GB
+    rem and the gate below asks for 24 GB, so on a card that only just
+    rem qualifies there is under 2 GB left for the KV cache. A context that
+    rem does not fit fails at load with an out-of-memory error rather than
+    rem degrading, so the default errs small; the config panel raises it for
+    rem anyone with headroom.
     set "CTX_SIZE=8192"
     set "KV_CACHE_TYPE=q8_0"
     goto :download_model
 )
 if "!MODEL_CHOICE!"=="7" (
-    :: The repo and the filename both carry a deepseek-ai_ prefix. Without
-    :: it the URL 404s, which is what made this slot uninstallable.
+    rem The repo and the filename both carry a deepseek-ai_ prefix. Without
+    rem it the URL 404s, which is what made this slot uninstallable.
     set "DL_REPO=bartowski/deepseek-ai_DeepSeek-R1-0528-Qwen3-8B-GGUF"
     set "DL_FILE=deepseek-ai_DeepSeek-R1-0528-Qwen3-8B-Q8_0.gguf"
     set "MODEL_ID=deepseek-r1-8b"
@@ -1184,8 +1184,8 @@ if "!MODEL_CHOICE!"=="7" (
 )
 if "!MODEL_CHOICE!"=="8" (
     set "DL_REPO=ggml-org/gpt-oss-20b-GGUF"
-    :: MXFP4 uppercase. Hugging Face paths are case-sensitive, so the
-    :: lowercase spelling 404s.
+    rem MXFP4 uppercase. Hugging Face paths are case-sensitive, so the
+    rem lowercase spelling 404s.
     set "DL_FILE=gpt-oss-20b-MXFP4.gguf"
     set "MODEL_ID=gpt-oss-20b"
     set "MODEL_DISPLAY=gpt-oss 20B"
@@ -1265,11 +1265,11 @@ if not "!HTTP_OK!"=="1" (
     echo.
     echo  [ERROR] Download failed.
     echo.
-    :: The partial file is kept on a TRANSPORT failure, deliberately, so
-    :: re-running resumes instead of starting a multi-gigabyte transfer
-    :: over. It is still deleted further down when VERIFICATION fails --
-    :: a file that arrived intact but hashes wrong is not something to
-    :: resume, it is something to discard.
+    rem The partial file is kept on a TRANSPORT failure, deliberately, so
+    rem re-running resumes instead of starting a multi-gigabyte transfer
+    rem over. It is still deleted further down when VERIFICATION fails --
+    rem a file that arrived intact but hashes wrong is not something to
+    rem resume, it is something to discard.
     if exist "!GGUF_PART!" (
         for %%A in ("!GGUF_PART!") do set "PART_MB=%%~zA"
         echo         The partial download has been kept. Run launch.bat
@@ -1959,11 +1959,11 @@ if !FRETRIES! gtr 8 (
     echo.
     echo  [*] File server did not come up on :!WEB_PORT!.
     echo.
-    :: fileserver.ps1 has always printed the specific reason -- into a
-    :: window started with -WindowStyle Hidden, so nobody ever read it.
-    :: It now mirrors startup output to fileserver.log. Print that rather
-    :: than guessing; the old guess named one of four possible causes and
-    :: was usually the wrong one.
+    rem fileserver.ps1 has always printed the specific reason -- into a
+    rem window started with -WindowStyle Hidden, so nobody ever read it.
+    rem It now mirrors startup output to fileserver.log. Print that rather
+    rem than guessing; the old guess named one of four possible causes and
+    rem was usually the wrong one.
     if exist "%~dp0fileserver.log" (
         echo      --- fileserver.log -------------------------------------
         type "%~dp0fileserver.log"
@@ -1974,11 +1974,11 @@ if !FRETRIES! gtr 8 (
         echo      script policy, or antivirus quarantine of fileserver.ps1.
     )
     echo.
-    :: The old text said "Desktop chat still works normally." It does not:
-    :: chat.html is SERVED by this file server and all model traffic is
-    :: proxied same-origin through /llm, so when this is down there is no
-    :: chat at all. A leftover from the pre-proxy design, and reporters
-    :: were right to call it out.
+    rem The old text said "Desktop chat still works normally." It does not:
+    rem chat.html is SERVED by this file server and all model traffic is
+    rem proxied same-origin through /llm, so when this is down there is no
+    rem chat at all. A leftover from the pre-proxy design, and reporters
+    rem were right to call it out.
     echo      Desktop chat is ALSO down -- chat.html is served by this
     echo      server, so there is nothing for the browser to reach.
     echo.
@@ -2321,15 +2321,15 @@ if defined HAVE_CURL (
         curl.exe -s -L --fail --retry 3 -o "!_O!" "!_U!"
         if not errorlevel 1 set "_OK=1"
     ) else if /i "!_Q!"=="resume" (
-        :: -C - continues a partial file instead of starting over. Worth
-        :: having for a 22 GB model on a domestic connection, where losing
-        :: 90%% of a download to a dropped Wi-Fi link is a real event.
+        rem -C - continues a partial file instead of starting over. Worth
+        rem having for a 22 GB model on a domestic connection, where losing
+        rem 90%% of a download to a dropped Wi-Fi link is a real event.
         curl.exe -L --fail --retry 3 -C - --progress-bar -o "!_O!" "!_U!"
         if not errorlevel 1 set "_OK=1"
-        :: A server that does not honour range requests fails the resume
-        :: rather than ignoring it, and so does a .part left over from an
-        :: interrupted transfer of a DIFFERENT build of the same filename.
-        :: Both are fixed by starting clean, so try exactly once more.
+        rem A server that does not honour range requests fails the resume
+        rem rather than ignoring it, and so does a .part left over from an
+        rem interrupted transfer of a DIFFERENT build of the same filename.
+        rem Both are fixed by starting clean, so try exactly once more.
         if not "!_OK!"=="1" (
             echo       [..] resume refused -- restarting this download from the beginning...
             del /f /q "!_O!" >nul 2>&1
@@ -2424,8 +2424,8 @@ setlocal EnableDelayedExpansion
 set "_RC=1"
 set "_BODY=%TEMP%\gn_probe_%RANDOM%.txt"
 if defined HAVE_CURL (
-    :: -f makes curl fail on any status >= 400 instead of quietly saving the
-    :: error page and exiting 0.
+    rem -f makes curl fail on any status >= 400 instead of quietly saving the
+    rem error page and exiting 0.
     curl.exe -s -f -o "!_BODY!" "%~1" >nul 2>&1
     if not errorlevel 1 (
         findstr /i "status" "!_BODY!" >nul 2>&1
