@@ -239,7 +239,14 @@ if /i "%~1"=="reset-password" (
     echo  [..] Password reset requested -- you'll set a new one now.
 )
 
-if not exist "!SECRET_FILE!" call :setup_password
+:: setlocal inherits the caller's environment, so clear this before deciding it.
+set "SECRET_JUST_SET="
+:: Remember that a NEW salt was written this run, so STEP 5 knows not to adopt a
+:: file server that started before this point -- it is still holding the old one.
+if not exist "!SECRET_FILE!" (
+    call :setup_password
+    set "SECRET_JUST_SET=1"
+)
 if not exist "!SECRET_FILE!" (
     echo  [ERROR] No password was set. Cannot start securely. Exiting.
     pause
@@ -1837,10 +1844,29 @@ if not exist "%~dp0chat.html" (
 :: This lets your phone load chat.html over the network
 :: Lenient on purpose: / answers 401 when not logged in, which is our own
 :: auth layer and therefore proof the file server is up.
+:: Only reuse a running server if it can possibly know the current password.
+::
+:: The secret reaches the server by ENVIRONMENT at spawn time (GEMMA_ACCESS_SECRET,
+:: set further down) and is never re-read. So a server that was already running when
+:: a new salt was written re-hashes with the OLD salt and refuses the password the
+:: user just chose. Adopting it produces "the installer took my password but the
+:: browser will not" -- which survives deleting .gobbonet-secret, reinstalling and
+:: disabling antivirus, because none of those touch a running process. Only a reboot
+:: does, which is why it reads as magic rather than as a stale process.
+::
+:: Falling through lands in the port-holder check below, which already names the PID.
 call :http_probe "http://127.0.0.1:!WEB_PORT!/"
 if not errorlevel 1 (
-    echo  [OK] File server already running on :!WEB_PORT!
-    goto :get_lan_ip
+    if defined SECRET_JUST_SET (
+        echo.
+        echo  [*] Something is already listening on :!WEB_PORT!, and you just set a
+        echo      new password. A server that was already running received the OLD
+        echo      one when it started and never re-reads the file, so it would
+        echo      refuse the password you just chose. Not reusing it.
+    ) else (
+        echo  [OK] File server already running on :!WEB_PORT!
+        goto :get_lan_ip
+    )
 )
 
 :: ---------------------------------------------------------------
