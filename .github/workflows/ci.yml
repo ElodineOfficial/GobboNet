@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, go_go_gobbonet, dev ]
+  pull_request:
+    branches: [ main, go_go_gobbonet ]
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+
+      - name: Verify Go Dependencies
+        run: go mod verify
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Run Tests (with race detector)
+        run: go test -v -race ./...
+
+      - name: Build Binary
+        run: go build -o gobbonet ./cmd/gobbonet

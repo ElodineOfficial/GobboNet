@@ -540,7 +540,7 @@ function getCardSamplerParams(card) {
     dry_multiplier:     card.dryMultiplier !== undefined ? card.dryMultiplier : 0,
     dry_base:           card.dryBase !== undefined ? card.dryBase : 1.75,
     dry_allowed_length: card.dryAllowedLength !== undefined ? card.dryAllowedLength : 2,
-    dry_penalty_last_n: -1
+    dry_penalty_last_n: card.dryPenaltyLastN !== undefined && card.dryPenaltyLastN >= 0 ? card.dryPenaltyLastN : 0
   };
 }
 
