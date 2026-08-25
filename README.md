@@ -190,6 +190,59 @@ If you never set this up, the chat still works perfectly — you just won't have
 
 ---
 
+## Mods (optional) — showing pictures in the chat
+
+GobboNet can load small add-ons. Settings has an **Extensions** panel where you paste
+a web address for a script or a stylesheet, and it loads them next time the page opens.
+
+The one worth knowing about is an **image gallery**. GobboNet's chat is text; if
+something on your machine makes a picture — a local ComfyUI, or any tool you've wired
+up — there is nowhere for it to appear. This add-on gives it somewhere: a small panel
+that collects images, click to enlarge, clear when you're done.
+
+Paste these two into **Settings → Extensions**:
+
+```
+https://aitherium.com/gobbonet/image-renderer.js
+https://aitherium.com/gobbonet/image-renderer.css
+```
+
+Nothing about it phones home. It renders pictures that something else on your machine
+already made, and it holds them in the page only — nothing is uploaded and nothing is
+saved to disk.
+
+### Making your own thing send pictures to it
+
+This is the useful part if you're building a mod. The gallery does not care who made
+the image. Anything on the page can hand it one:
+
+```js
+window.dispatchEvent(new CustomEvent('gobbonet:image', { detail: { image: X } }));
+```
+
+`X` can be a `data:` URI, a `Blob`, a `blob:` URL, `{ b64, mime }`, or an
+`http://127.0.0.1/...` address — a self-hosted ComfyUI serving `/view?...` is exactly
+the case it was written for. Several at once go as `{ images: [...] }`. Anything it
+does not recognise is refused with a console warning instead of drawn as a broken
+image, because a broken `<img>` and a failed generation look identical and guessing
+between them wastes your afternoon.
+
+So if you have already vibe-coded something that talks to ComfyUI, you do not need to
+replace it. Have it dispatch that one event and the pictures show up.
+
+**Two things it deliberately does not do**, both of which show up as "it worked, then
+it broke after a few images":
+
+- It **revokes** `blob:` URLs when an image falls off the end of the list or you hit
+  clear. Holding live object URLs keeps every decoded picture in memory even if the
+  list itself is capped, and the tab gets heavier until it dies.
+- It **saves nothing**. Writing images into browser storage hits a quota error a few
+  pictures in, and that error lands inside whatever code was doing the saving — so the
+  thing that appears to break is never the thing that broke.
+
+---
+
+
 ## Keeping it private and safe
 
 This tool was built to be private, but a few honest notes:
@@ -380,25 +433,6 @@ Everything GobboNet can do, grouped so it's easy to scan.
 
 **Devices**
 - PC-to-phone connection — use the same chat from your phone or tablet over your home Wi-Fi.
-
----
-
-## Community mods
-
-The mod system above (Customization -> Internal "mod" controls) is a URL paste, no fork
-needed. A couple exist already:
-
-- **Image rendering** — `generate_image` is a real tool the model can call, but nothing
-  in the base app draws what comes back. This renders it: listens for a
-  `gobbonet:image` event (or a direct `window.__AITHER_IMAGE_MOD__.add(x)` call),
-  accepts a data: URI, a Blob, or a loopback URL (a local ComfyUI works fine), and makes
-  zero network requests of its own — self-tested on load, checks there's no
-  fetch/XHR/WebSocket reachable from the render path.
-  Add by URL: `https://aitherium.com/gobbonet/image-renderer.js` +
-  `https://aitherium.com/gobbonet/image-renderer.css`
-
-If you've built one, open a PR adding it here — worth keeping this list current rather
-than mods living only in a comment on some old PR.
 
 ---
 
