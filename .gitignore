@@ -70,3 +70,5 @@ hardware.ini
 /perf.toml
 /LOCAL_WORKFLOW.md
 /.dev_playbook.md
+/reports/
+/scripts/
