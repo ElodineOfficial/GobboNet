@@ -68,3 +68,5 @@ hardware.ini
 /state.json
 /.gobbonet-secret
 /perf.toml
+/LOCAL_WORKFLOW.md
+/.dev_playbook.md
