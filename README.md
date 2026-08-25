@@ -383,6 +383,25 @@ Everything GobboNet can do, grouped so it's easy to scan.
 
 ---
 
+## Community mods
+
+The mod system above (Customization -> Internal "mod" controls) is a URL paste, no fork
+needed. A couple exist already:
+
+- **Image rendering** — `generate_image` is a real tool the model can call, but nothing
+  in the base app draws what comes back. This renders it: listens for a
+  `gobbonet:image` event (or a direct `window.__AITHER_IMAGE_MOD__.add(x)` call),
+  accepts a data: URI, a Blob, or a loopback URL (a local ComfyUI works fine), and makes
+  zero network requests of its own — self-tested on load, checks there's no
+  fetch/XHR/WebSocket reachable from the render path.
+  Add by URL: `https://aitherium.com/gobbonet/image-renderer.js` +
+  `https://aitherium.com/gobbonet/image-renderer.css`
+
+If you've built one, open a PR adding it here — worth keeping this list current rather
+than mods living only in a comment on some old PR.
+
+---
+
 ## How I handle PRs. 
 
 I'm one highly paranoid goblin and I ship a .exe that non-technical people install, so I need to understand every line that goes out. In practice that means I often reimplement a fix in my own code rather than merging the patch **especially** for security issues. You'll be credited as co-author on the commit and named in the release notes. If I close your PR, it usually means it shipped, not that it was rejected. Bug reports and security findings are hugely welcome even if you don't write a line of code.
