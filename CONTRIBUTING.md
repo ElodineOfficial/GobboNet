@@ -30,16 +30,14 @@ All contributions must respect GobboNet's fundamental design principles:
 
 ---
 
-## 3. Contributor Macros & Commands
+## 3. Contributor Macros & Fast Shortcuts
 
-GobboNet includes pre-seeded macros to streamline AI-assisted development:
+GobboNet includes developer macros to accelerate pair-programming:
 
 - **`{{grill}}`**: Prompts the AI to interview you on requirements and edge cases before writing code.
 - **`{{adr}}`**: Formats a 1-paragraph Architectural Decision Record (Context, Decision, Consequences).
 - **`{{review}}`**: Audits a proposed diff against GobboNet invariants and load-order rules.
-- **`{{standup}}`**: Generates a daily engineering standup check-in.
-
-> 💡 **Daily Standup in Scheduler:** Open **`// SCHED`** in the chat and click **`➕ DAILY CONTRIBUTOR STANDUP`** to get an automated daily 09:00 check-in prompt!
+- **`{{standup}}`**: *(Optional)* Generates a quick status and task check-in for regular builders.
 
 ---
 
@@ -77,3 +75,17 @@ go test -v -race ./...
 - Keep discussions respectful, focused, and pragmatic.
 
 *GobboNet is built by and for the community. No venture capital, no telemetry, no masters.*
+
+---
+
+## 4. Dual-Mode Contributor Experience
+
+GobboNet supports two distinct, powerful development workflows:
+
+### A. Sovereign Offline Contributor Mode (Zero Cloud)
+- Run a full local install of GobboNet on your machine.
+- Chat with `ForgeGoblin` to ideate, explore, and "vibe-code" community contributions completely offline.
+- Run tests (`./stage-web.sh`, `go test -race ./...`) with zero internet connection until you are ready to `git push`.
+
+### B. Hybrid Cloud Agent Delegation
+- If you use cloud-based frontier AI agents (Claude Code, Cursor, Antigravity/Gemini), they can call GobboNet on `127.0.0.1:9066` as a high-speed, 0-token local subagent for AST linting, code drafting, and socket audits.
