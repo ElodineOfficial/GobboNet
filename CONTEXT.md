@@ -37,3 +37,15 @@ The flexible conversational and persona model (e.g., Llama 3.1 8B) kept in reser
 _Avoid_: `Primary Coding Engine`
 
 
+
+### OpenAPI Contract
+The single canonical source of truth specification (`gobbonet_openapi.yaml`) defining all REST endpoints, authentication flows, error payloads, and SSE streaming schemas for GobboNet across both Go and PowerShell implementations.
+_Avoid_: `Ad-hoc API Spec`, `Informal Endpoint Map`
+
+### Conformance Test Suite
+The automated Go test suite (`internal/server/conformance_test.go`) executed in multi-OS CI to assert route behavior, HTTP status codes, and header contracts against the OpenAPI specification with zero GUI dependencies.
+_Avoid_: `Manual Smoke Testing`, `Speculative Verification`
+
+### Yaak Pulse-Check
+The developer practice of importing the live `/openapi.yaml` endpoint directly into Yaak to perform interactive health verification, latency audits, and real-time request inspection across local AI services.
+_Avoid_: `Opaque REST Probing`, `Ad-hoc Curl Scripts`
