@@ -263,6 +263,22 @@ const DEFAULT_MACROS = [
   {
     trigger: 'fast_forward',
     text: 'Please fast-forward to a new scene that continues the storyline naturally and appropriately.'
+  },
+  {
+    trigger: 'grill',
+    text: 'Please interview me on my proposed feature or bugfix using the design tree frontier interview protocol before writing any code. Work in rounds on settled prerequisites, challenge assumptions, and keep changes surgical.'
+  },
+  {
+    trigger: 'adr',
+    text: 'Please formulate a 1-paragraph Architectural Decision Record (ADR) for our settled decision, noting Context, Decision, and Consequences.'
+  },
+  {
+    trigger: 'review',
+    text: 'Review my proposed changes against GobboNet invariants: (1) Zero-build plain JS/CSS, (2) Parallel runtime parity, (3) Single-file surgical focus, (4) Offline-only loopback.'
+  },
+  {
+    trigger: 'standup',
+    text: 'Good morning! Let\'s do our daily GobboNet standup. Review our current branch state, audit uncommitted diffs against single-file invariants, check open community backlog items, and set our top 2 high-signal coding goals for today.'
   }
 ];
 
