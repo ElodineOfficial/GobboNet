@@ -174,7 +174,15 @@ function safeImageUrl(value) {
   // rather than a bitmap, and while <img> blocks script inside one, widening a
   // security allowlist for a format nothing here produces is a bad trade.
   if (/^data:image\/(png|jpeg|jpg|gif|webp|bmp|avif);base64,[A-Za-z0-9+/=\s]*$/i.test(s)) return s;
-  if (/^blob:/i.test(s)) return s;
+  // Anchored at BOTH ends. /^blob:/ only asks how the string starts and then
+  // hands back the whole of it, so `blob:x" onerror="alert(1)` leaves a
+  // function named "safe" verbatim. Every caller escapes what it gets back
+  // today, which is why this is not currently exploitable -- but the workaround
+  // in 17-personas.js ("a permitted URL can still carry a quote") is patching
+  // the symptom at the sink. A blob: URL is minted by URL.createObjectURL and
+  // is scheme + origin + UUID; it never legitimately contains a quote,
+  // whitespace, or an angle bracket, so refusing those costs nothing real.
+  if (/^blob:[^"'\s<>]*$/i.test(s)) return s;
   if (/^https?:\/\//i.test(s)) {
     return (typeof state !== 'undefined' && state && state.settings && state.settings.allowRemoteImages) ? s : '';
   }
