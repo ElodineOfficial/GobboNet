@@ -460,6 +460,14 @@ exit /b 1
 :prompt_yn
 :: Usage: call :prompt_yn "Question?" RESULT_VAR
 :: Sets RESULT_VAR to Y or N
+::
+:: Clear the scratch var FIRST. `set /p` leaves its target at the previous
+:: value when stdin hands it nothing -- a bare Enter, a closed pipe, or EOF --
+:: it does not blank it. All six callers share _YN, so without this the second
+:: prompt silently re-uses the first prompt's answer. One "Y" to
+:: "Download llama.cpp now?" then answers "Extract and run this UNVERIFIED
+:: download?" without the question ever being seen.
+set "_YN="
 set "%~2=N"
 set /p "_YN=%~1 (Y/N): "
 if /i "!_YN!"=="Y" set "%~2=Y"
