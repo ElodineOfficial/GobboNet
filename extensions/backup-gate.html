@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Backup gate — the passphrase is the key</title>
+<style>
+  body { font-family: system-ui, sans-serif; background: #0A0F1E; color: #e8edf5;
+         margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+  .card { background: #121a2e; border: 1px solid #26314d; border-radius: 14px;
+          padding: 28px; width: min(540px, 92vw); }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: #8fa0c0; font-size: 13px; margin: 0 0 18px; }
+  label { display: block; font-size: 12px; color: #8fa0c0; margin: 12px 0 4px; }
+  input[type=password] { width: 100%; box-sizing: border-box; padding: 10px; border-radius: 8px;
+         border: 1px solid #33405e; background: #0d1424; color: #e8edf5; font-size: 15px; }
+  button { margin-top: 14px; width: 100%; padding: 11px; border-radius: 8px; border: 0;
+           background: #7fdbee; color: #0A0F1E; font-weight: 700; font-size: 15px; cursor: pointer; }
+  button:disabled { opacity: .5; cursor: wait; }
+  .files { margin-top: 14px; }
+  .file { display: flex; justify-content: space-between; padding: 8px 10px; border-radius: 8px;
+          background: #0d1424; margin-top: 6px; font-size: 13px; }
+  .file .n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-right: 10px; }
+  .file .s { color: #8fa0c0; white-space: nowrap; }
+  .status { margin-top: 12px; font-size: 13px; color: #8fa0c0; white-space: pre-wrap; }
+  .bad { color: #ff8fa3; }
+  .ok { color: #8fe3a8; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>🔐 Backup gate</h1>
+  <p class="sub">The passphrase is the key. Everything you see is ciphertext from a public
+     GitHub release — your passphrase decrypts it in your browser. Nothing is uploaded;
+     nothing is stored.</p>
+  <label>Passphrase</label>
+  <input type="password" id="pass" autocomplete="off">
+  <button id="go">Unlock &amp; download</button>
+  <div class="files" id="files"></div>
+  <div class="status" id="status"></div>
+</div>
+
+<script src="gobbonet-backup.js"></script>
+<script>
+(function () {
+  "use strict";
+  var params = new URLSearchParams(location.search);
+  var repo = params.get("repo") || "";
+  var tag = params.get("tag") || "";
+  var status = document.getElementById("status");
+  var filesEl = document.getElementById("files");
+  var passEl = document.getElementById("pass");
+  var goBtn = document.getElementById("go");
+
+  function setStatus(m, cls) {
+    status.textContent = m;
+    status.className = "status" + (cls ? " " + cls : "");
+  }
+  function fmt(n) { return n > 1e9 ? (n / 1e9).toFixed(2) + " GB" : n > 1e6 ? (n / 1e6).toFixed(1) + " MB" : Math.round(n / 1e3) + " KB"; }
+
+  if (!repo || !tag) { setStatus("This gate needs ?repo=owner/name&tag=backup-... in the URL.", "bad"); return; }
+
+  // Preview: fetch the manifest tokenless (public repo) and list the files.
+  fetch("https://api.github.com/repos/" + repo + "/releases/tags/" + tag, {
+    headers: { Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28" },
+  }).then(function (r) { if (!r.ok) throw new Error("release not found — is the repo public?"); return r.json(); })
+    .then(function (rel) {
+      return fetch("https://api.github.com/repos/" + repo + "/releases/" + rel.id + "/assets", {
+        headers: { Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28" },
+      }).then(function (r) { return r.json(); });
+    })
+    .then(function (assets) {
+      var man = assets.filter(function (a) { return a.name.indexOf(".backup.json") > 0; })[0];
+      if (!man) throw new Error("no backup manifest in this release");
+      return fetch(man.browser_download_url).then(function (r) { return r.json(); });
+    })
+    .then(function (manifest) {
+      filesEl.innerHTML = "";
+      manifest.files.forEach(function (f) {
+        var row = document.createElement("div");
+        row.className = "file";
+        var n = document.createElement("span"); n.className = "n"; n.textContent = f.name;
+        var s = document.createElement("span"); s.className = "s"; s.textContent = fmt(f.size);
+        row.appendChild(n); row.appendChild(s);
+        filesEl.appendChild(row);
+      });
+      setStatus("Found " + manifest.files.length + " encrypted file(s) in " + tag + ". Enter the passphrase to decrypt them.");
+    })
+    .catch(function (e) { setStatus("Cannot read the backup: " + e.message, "bad"); });
+
+  goBtn.onclick = function () {
+    var pass = passEl.value;
+    if (pass.length < 8) { setStatus("Passphrase must be 8+ characters.", "bad"); return; }
+    var core = window.__gobbonetBackup;
+    if (!core) { setStatus("mod not loaded — hard-refresh the page.", "bad"); return; }
+    goBtn.disabled = true;
+    setStatus("Downloading, verifying, decrypting…");
+    core.restoreBackup("", repo, tag, pass, function (name, i, n) {
+      setStatus("part " + i + "/" + n + " — " + name);
+    }).then(function (files) {
+      files.forEach(function (f) {
+        var a = document.createElement("a");
+        a.href = URL.createObjectURL(f.blob);
+        a.download = f.name;
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 5000);
+      });
+      setStatus("Decrypted and saved: " + files.map(function (f) { return f.name; }).join(", ") +
+                " — every byte verified against its sha256.", "ok");
+    }).catch(function (e) {
+      setStatus("Unlock failed: " + e.message + " (wrong passphrase, or the backup is corrupt).", "bad");
+    }).finally(function () { goBtn.disabled = false; });
+  };
+})();
+</script>
+</body>
+</html>
