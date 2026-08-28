@@ -1,4 +1,4 @@
-# 9. Visual Ergonomics, Accessibility Palettes, and Visual Documentation
+# 6. Visual Ergonomics, Accessibility Palettes, and Visual Documentation
 
 ## Context
 1. **Visual Fatigue & Contrast (PR #25)**: The default `GOBLIN_BIOS` palette operates at 18.8:1 chroma contrast on near-black backgrounds, causing blooming and eye strain during multi-hour sessions, while secondary cyan text was below WCAG AA thresholds (2.8:1). Users requested an opt-in subdued theme without losing the cyberpunk identity.

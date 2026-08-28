@@ -1,4 +1,4 @@
-# 8. Backend-Agnostic LLM Health Probing and Keyless Web Search Seam
+# 5. Backend-Agnostic LLM Health Probing and Keyless Web Search Seam
 
 ## Context
 GobboNet was originally coupled to `llama-server` on loopback and `ollama.com` for web search:

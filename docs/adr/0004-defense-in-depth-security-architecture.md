@@ -1,4 +1,4 @@
-# 7. Defense-in-Depth Security Architecture
+# 4. Defense-in-Depth Security Architecture
 
 ## Context
 Multiple independent security reviews and bug reports (PRs #4, #5, #6, #7, #24, #30) identified critical trust boundary issues across the web interface, state synchronization pipeline, authentication system, and Windows process lifecycle:

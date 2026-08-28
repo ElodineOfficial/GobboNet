@@ -24,7 +24,7 @@ All contributions must respect GobboNet's fundamental design principles:
 | Invariant | Principle |
 | :--- | :--- |
 | **Zero Build Step** | `chat.html`, `js/` (25 modules), and `css/` (15 stylesheets) run as plain, unbundled web assets. No npm, no webpack, no transpilers. |
-| **Parallel Runtime Parity** | The Go server (`cmd/gobbonet`) and the PowerShell server (`fileserver.ps1`) maintain HTTP wire compatibility across core endpoints on port 9066 (with minor lifecycle differences documented in `GO_MIGRATION_INVENTORY.md`). |
+| **Parallel Runtime Parity** | The Go server (`cmd/gobbonet`) and the PowerShell server (`fileserver.ps1`) maintain HTTP wire compatibility across core endpoints on port 9066 (with minor lifecycle differences documented in `docs/archived/GO_MIGRATION_INVENTORY.md`). |
 | **Single-File Focus** | Prefer surgical, single-concern micro-PRs (1–2 files modified) over massive, multi-file refactors. |
 | **Offline-First & Zero Telemetry** | GobboNet runs by default strictly on loopback (`127.0.0.1`). No telemetry, analytics, or user prompt tracking is EVER allowed into the public project. Features involving local profiling (e.g. private Echo mirroring) must remain strictly in private workspaces. |
 

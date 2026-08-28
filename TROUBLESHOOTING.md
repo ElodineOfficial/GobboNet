@@ -123,7 +123,7 @@ the new address. If the sidebar is empty after a moment, force it from the
 Data panel with **Restore from server**.
 
 The old `:8080` origin still holds a copy too. Clearing it is optional;
-see `PURGE.md` if you want it gone.
+see `docs/manual/PURGE.md` if you want it gone.
 
 ### Why the port moved
 

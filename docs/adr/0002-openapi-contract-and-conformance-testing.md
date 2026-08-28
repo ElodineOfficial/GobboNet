@@ -1,4 +1,4 @@
-# 5. OpenAPI 3.1 Canonical Contract and Automated Conformance Testing
+# 2. OpenAPI 3.1 Canonical Contract and Automated Conformance Testing
 
 ## Context
 GobboNet provides a rich HTTP API spanning session authentication, proxied LLM completions, detached job execution, cross-device state synchronization, and runtime performance tuning. Maintaining strict wire parity between the parallel Go and PowerShell runtimes requires an explicit, machine-readable contract. Developers need rapid, interactive API observability and pulse-checking (via Yaak), while CI requires automated, headless contract validation across all supported operating systems.

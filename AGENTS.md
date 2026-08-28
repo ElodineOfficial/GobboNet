@@ -48,9 +48,6 @@ gobbonet/
 │                           # (1.6.0 moved it out of an inline `powershell -Command`)
 ├── identify-model.ps1     # Model metadata extraction (family, max context, thinking format)
 ├── setup-lan.bat          # Firewall rule setup for LAN/phone access (one-time)
-├── fileserver.ps1         # Also used standalone for development
-│
-├── INDEX.md               # Structural index of chat.html — views, modals, functions, CSS classes
 │
 └── .gitignore (implied)
     ├── .gobbonet-secret   # Salt+hash of user password (never committed)
@@ -118,8 +115,6 @@ stylesheets; globals are shared across modules, so **load order is load-bearing*
   dashboard, scroll, cards, card I/O, personas, utils, extensions, macros, data,
   scheduler, card-code, skills, boot
 
-> **See `INDEX.md` for a complete line-numbered reference** of every view, modal, function, CSS class, and data structure.
-
 #### Key patterns in `chat.html` & `js/`:
 
 1. **Single render loop** — `render()` (in `js/13-render.js`) calls `renderSidebar()` and `renderMessages()`. Most state mutations call `render()` to refresh.
@@ -149,7 +144,7 @@ collision: the launcher saw Ollama answering, concluded llama-server was already
 up, skipped starting its own, then found nothing healthy and restarted.
 Resolution order for the web port is `GEMMA_LISTEN_PORT`, then `.gobbonet-port`,
 then 9066. The Go server uses the same numbers but takes them from
-`config.toml` — see `GO_SERVER.md`.
+`config.toml` — see `docs/archived/GO_SERVER.md`.
 
 ### `launch.bat` — Orchestrator (2,428 lines)
 
@@ -411,7 +406,7 @@ This is a non-profit project by the GoblinCorps. No corporate backing, no ventur
 2. Add HTML inside the appropriate modal or view
 3. Add JavaScript functions near related code
 4. Add CSS in the `<style>` block near related rules
-5. Update `INDEX.md` with new line numbers
+5. Run `./stage-web.sh` to stage static web assets
 
 ### Adding new default characters
 

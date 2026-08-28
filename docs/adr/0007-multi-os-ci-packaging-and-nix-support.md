@@ -1,4 +1,4 @@
-# 10. Multi-OS CI Packaging, Hermetic Builds, and Nix Ecosystem Support
+# 7. Multi-OS CI Packaging, Hermetic Builds, and Nix Ecosystem Support
 
 ## Context
 GobboNet's release pipeline relied on manual zip archives, and test coverage was limited to local developer machines (PRs #21, #22, #28). With the introduction of the cross-platform Go server, reproducible packaging across Linux, macOS, Windows, and container environments became essential. Furthermore, declarative home-server deployments (e.g. NixOS, systemd) required deterministic service declarations and sandbox isolation.

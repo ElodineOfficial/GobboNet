@@ -82,3 +82,5 @@ result-*
 /.obsidian/
 /skills/echo-user/
 /linux/
+/.agents/
+/pr-toggle.sh

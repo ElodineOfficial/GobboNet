@@ -1,4 +1,4 @@
-# 6. Substrate-Agnostic Filesystem Skills System and Automated Story Verification Engine
+# 3. Substrate-Agnostic Filesystem Skills System and Automated Story Verification Engine
 
 ## Context
 GobboNet's extensibility was previously confined to inline card codes (`js/23-card-code.js`) and global JS/CSS mods (`js/19-extensions.js`). Developers and operators needed a composable, substrate-agnostic, filesystem-based skill format that synthesizes standard YAML frontmatter, structured markdown prompt engineering, and native GobboNet template expansion (`{{char}}`, `{{user}}`, `{{current_DAT}}`) without introducing external build dependencies or vendor lock-in. Furthermore, automated regression testing required a reproducible user-story replay mechanism (`.story.md`) to verify prompt behavior and deterministic inference offline across any model family without manual UI clicking.
