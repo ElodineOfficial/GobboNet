@@ -29,3 +29,12 @@ active-model.json
 .embed-launch.cmd
 
 .gobbonet-port
+
+# Local Obsidian vault — authoring workspace, not deliverable
+GobboDocs/
+.obsidian/
+
+# Local developer workflow (machine-specific, not upstream)
+LOCAL_WORKFLOW.md
+config.toml
+drafts/

@@ -10,6 +10,49 @@ Not a bug report. Not an apology. Not a request for reinstatement.
 
 ---
 
+> [!IMPORTANT]
+> **Password Security:** Choose a strong password. It is the primary defense for your local instance on any network.
+
+> [!CAUTION]
+> **Character Card JavaScript:** Character cards can run JavaScript, and it executes entirely unsandboxed in your browser.
+> 
+> **LAN Access:** LAN access uses plaintext HTTP.
+> 
+> **Network Environment:** Never use on public or shared Wi-Fi networks.
+
+### Security Posture Quick-Reference
+
+| Component | Default State |
+|-----------|---------------|
+| Authentication | Password (Argon2id) |
+| Encryption | None (HTTP) |
+| Telemetry | None |
+| Data Storage | Local only |
+| Network Exposure | Localhost by default |
+| Character Card JS | Unsandboxed |
+
+### Network Trust Boundary
+
+```mermaid
+flowchart TD
+    subgraph Public["Public Internet"]
+        World["The Web"]
+    end
+
+    subgraph LAN["Home LAN"]
+        Phone["Phone Browser"]
+    end
+
+    subgraph PC["Local PC"]
+        Browser["Browser"] <--> Engine["GobboNet Engine"]
+        Engine <--> Llama["llama.cpp"]
+        Engine -.-> Secret[".gobbonet-secret"]
+    end
+
+    Phone --"Plaintext HTTP + Password"--> Engine
+    World --"X (No Connection)"--> Engine
+```
+
 ## // doc.001 — the verdict
 
 Windows Defender quarantined GobboNet. GobboNet is a one-click, fully local, fully private front end for running language models on your own computer. No account. No API key. No telemetry. It phones home to nobody, because there is no home to phone. It is, by any behavioral definition, one of the least dangerous things you can install on a Windows machine.
