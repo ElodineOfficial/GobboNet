@@ -14,9 +14,11 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
+	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -25,6 +27,7 @@ import (
 
 	"github.com/jmccardle/gobbonet/internal/auth"
 	"github.com/jmccardle/gobbonet/internal/config"
+	"github.com/jmccardle/gobbonet/internal/mock"
 	"github.com/jmccardle/gobbonet/internal/models"
 	"github.com/jmccardle/gobbonet/internal/server"
 	"github.com/jmccardle/gobbonet/internal/supervisor"
@@ -78,6 +81,8 @@ func run(argv []string) error {
 		return cmdCheck(argv)
 	case "config":
 		return cmdConfig(argv)
+	case "mock":
+		return cmdMock(argv)
 	case "version", "-v", "--version":
 		fmt.Println(version.Full())
 		return nil
@@ -96,6 +101,7 @@ func usage() {
   gobbonet [serve] [--config PATH] [--no-auth] [--host H] [--port N]
   gobbonet set-password [--config PATH]
   gobbonet check [--config PATH]
+  gobbonet mock list|run [--config PATH] [story_id]
   gobbonet config get [--config PATH] <key>
   gobbonet config set [--config PATH] <key> <value>
   gobbonet config keys
@@ -122,9 +128,17 @@ func loadConfig(flagPath string) (config.Config, error) {
 		}
 		return cfg, fmt.Errorf("no config file found, so a commented default was written to:\n"+
 			"      %s\n\n"+
-			"    Review it -- in particular llm_url and server_exe -- then run gobbonet again.", path)
+			"    Review it -- in particular llm_url and server_exe -- then run gobbonet again", path)
 	}
 	return cfg, err
+}
+
+func isLoopbackHost(host string) bool {
+	if host == "" || host == "localhost" || host == "127.0.0.1" || host == "::1" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func stringFlag(fs *flag.FlagSet, name, usage string) *string {
@@ -160,7 +174,14 @@ func cmdServe(argv []string) error {
 	if *llmURL != "" {
 		cfg.LLMURL = *llmURL
 	}
-	cfg.RequireAuth = !*noAuth
+	if *noAuth {
+		if !isLoopbackHost(cfg.ListenHost) {
+			return fmt.Errorf("--no-auth is only permitted on loopback addresses (got host %q)", cfg.ListenHost)
+		}
+		cfg.RequireAuth = false
+	} else {
+		cfg.RequireAuth = true
+	}
 
 	// Mode is resolved before anything else starts, because a misconfigured
 	// server_exe must stop the launch rather than silently demote us to remote
@@ -191,8 +212,8 @@ func cmdServe(argv []string) error {
 	// Serving is the one command that genuinely needs the web assets, so this is
 	// where a missing web root becomes an error.
 	if cfg.WebRoot == "" {
-		return fmt.Errorf("could not find chat.html next to the binary or in the current directory.\n" +
-			"    Set web_root in the config file to the directory holding it.")
+		return fmt.Errorf("could not find chat.html next to the binary or in the current directory\n" +
+			"    Set web_root in the config file to the directory holding it")
 	}
 	if _, err := os.Stat(filepath.Join(cfg.WebRoot, "chat.html")); err != nil {
 		return fmt.Errorf("chat.html not found in %s", cfg.WebRoot)
@@ -476,7 +497,7 @@ func cmdCheck(argv []string) error {
 
 func cmdConfig(argv []string) error {
 	if len(argv) == 0 {
-		return errors.New("usage: gobbonet config get|set|keys ...")
+		return errors.New("usage: gobbonet config get|set|keys <args>")
 	}
 
 	// --config is accepted here for the same reason serve, check and
@@ -558,4 +579,97 @@ func extractConfigFlag(argv []string) (rest []string, path string, err error) {
 		}
 	}
 	return rest, path, nil
+}
+
+// --- mock ------------------------------------------------------------------
+
+func cmdMock(argv []string) error {
+	if len(argv) == 0 {
+		return errors.New("usage: gobbonet mock list|run [--config PATH] [story_id]")
+	}
+
+	sub := argv[0]
+	rest, configPath, err := extractConfigFlag(argv[1:])
+	if err != nil {
+		return err
+	}
+
+	cfg, err := loadConfig(configPath)
+	if err != nil {
+		return err
+	}
+
+	engine := mock.NewEngine(cfg.StoriesDir, cfg.LLMURL, cfg.LLMAPIKey)
+
+	switch sub {
+	case "list":
+		stories, err := engine.DiscoverStories()
+		if err != nil {
+			return err
+		}
+		fmt.Printf(" [OK] discovered %d user stor(ies) in %s\n", len(stories), cfg.StoriesDir)
+		for _, s := range stories {
+			fmt.Printf("   - %s (%s) — %d step(s)\n", s.ID, s.Name, len(s.Steps))
+			if s.Description != "" {
+				fmt.Printf("     %s\n", s.Description)
+			}
+		}
+		return nil
+
+	case "run":
+		stories, err := engine.DiscoverStories()
+		if err != nil {
+			return err
+		}
+		targetStoryID := ""
+		if len(rest) > 0 {
+			targetStoryID = rest[0]
+		}
+
+		var toRun []mock.Story
+		for _, s := range stories {
+			if targetStoryID == "" || s.ID == targetStoryID || s.Path == targetStoryID {
+				toRun = append(toRun, s)
+			}
+		}
+		if len(toRun) == 0 {
+			if targetStoryID != "" {
+				return fmt.Errorf("story %q not found", targetStoryID)
+			}
+			fmt.Printf(" [*] no stories found in %s\n", cfg.StoriesDir)
+			return nil
+		}
+
+		fmt.Printf(" [..] running %d stor(ies) against %s ...\n", len(toRun), cfg.LLMURL)
+		failedCount := 0
+		for _, s := range toRun {
+			fmt.Printf(" [..] story: %s (%s)\n", s.ID, s.Name)
+			res, err := engine.RunStory(context.Background(), s)
+			if err != nil {
+				fmt.Printf(" [!]  error running %s: %v\n", s.ID, err)
+				failedCount++
+				continue
+			}
+			if res.Status == "passed" {
+				fmt.Printf(" [OK] passed (%v)\n", res.Duration)
+			} else {
+				fmt.Printf(" [FAIL] failed (%v)\n", res.Duration)
+				for _, step := range res.StepResults {
+					if !step.Passed {
+						fmt.Printf("      step %d: %s\n", step.StepIndex, strings.Join(step.Errors, "; "))
+					}
+				}
+				failedCount++
+			}
+		}
+
+		if failedCount > 0 {
+			return fmt.Errorf("%d/%d stories failed", failedCount, len(toRun))
+		}
+		fmt.Printf(" [OK] all %d stories passed!\n", len(toRun))
+		return nil
+
+	default:
+		return fmt.Errorf("unknown mock subcommand %q (expected list or run)", sub)
+	}
 }

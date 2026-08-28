@@ -72,3 +72,13 @@ hardware.ini
 /.dev_playbook.md
 /reports/
 /scripts/
+/datasets/
+/recordings/
+*.jsonl
+result
+result-*
+/drafts/
+/GobboDocs/
+/.obsidian/
+/skills/echo-user/
+/linux/

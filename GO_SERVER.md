@@ -308,8 +308,9 @@ miss means the model's turn markers get rendered to the user as content.
 
 `/search/*` goes straight to `search_url` — `https://ollama.com/api` by default
 — carrying the browser's own `Authorization` header and nothing of ours. It is
-the only route that leaves the machine, and only when a user switches search on
-and supplies a key.
+the only route that leaves the machine in local mode, and only when a user switches
+search on and supplies a key. (In remote mode, `/llm/*` can also leave the machine
+if `llm_url` is configured with a LAN or cloud inference endpoint.)
 
 Upstream ran a relay for this until 1.6.0: a hidden-window PowerShell started
 from `launch.bat` with `-EncodedCommand` and 4,656 characters of base64, binding

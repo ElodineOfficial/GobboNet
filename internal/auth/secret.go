@@ -112,11 +112,11 @@ func verifyArgon2(secret, password string) (bool, error) {
 	}
 
 	salt, err := base64.RawStdEncoding.DecodeString(parts[4])
-	if err != nil {
+	if err != nil || len(salt) == 0 {
 		return false, ErrMalformedSecret
 	}
 	want, err := base64.RawStdEncoding.DecodeString(parts[5])
-	if err != nil {
+	if err != nil || len(want) < 4 {
 		return false, ErrMalformedSecret
 	}
 

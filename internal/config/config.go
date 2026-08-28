@@ -121,9 +121,11 @@ type Config struct {
 	KVCacheType string `toml:"kv_cache_type"`
 
 	// --- Directories -------------------------------------------------------
-	ModelDir string `toml:"model_dir"`
-	WebRoot  string `toml:"web_root"`
-	DataDir  string `toml:"data_dir"`
+	ModelDir   string `toml:"model_dir"`
+	WebRoot    string `toml:"web_root"`
+	DataDir    string `toml:"data_dir"`
+	SkillsDir  string `toml:"skills_dir"`
+	StoriesDir string `toml:"stories_dir"`
 
 	// --- Access control ----------------------------------------------------
 	// AccessSecret is either a legacy "salt:hash" SHA-256 pair or an Argon2id
@@ -311,24 +313,26 @@ func Load(path string) (Config, error) {
 // an existing Windows-side setup carries over, but each one warns once.
 func (c *Config) applyEnv() {
 	envStr := func(key string, dst *string) {
-		if v := os.Getenv("GOBBONET_" + key); v != "" {
+		if v, ok := os.LookupEnv("GOBBONET_" + key); ok {
 			*dst = v
 			return
 		}
-		if v := os.Getenv("GEMMA_" + key); v != "" {
+		if v, ok := os.LookupEnv("GEMMA_" + key); ok {
 			warnDeprecated("GEMMA_"+key, "GOBBONET_"+key)
 			*dst = v
 		}
 	}
 	envInt := func(key string, dst *int) {
-		var raw string
-		if v := os.Getenv("GOBBONET_" + key); v != "" {
-			raw = v
-		} else if v := os.Getenv("GEMMA_" + key); v != "" {
-			warnDeprecated("GEMMA_"+key, "GOBBONET_"+key)
-			raw = v
+		var (
+			raw string
+			ok  bool
+		)
+		if raw, ok = os.LookupEnv("GOBBONET_" + key); !ok {
+			if raw, ok = os.LookupEnv("GEMMA_" + key); ok {
+				warnDeprecated("GEMMA_"+key, "GOBBONET_"+key)
+			}
 		}
-		if raw == "" {
+		if !ok {
 			return
 		}
 		// A malformed number is a mistake worth surfacing, but the environment
@@ -352,6 +356,8 @@ func (c *Config) applyEnv() {
 	envStr("MODEL_DIR", &c.ModelDir)
 	envStr("WEB_ROOT", &c.WebRoot)
 	envStr("DATA_DIR", &c.DataDir)
+	envStr("SKILLS_DIR", &c.SkillsDir)
+	envStr("STORIES_DIR", &c.StoriesDir)
 	envInt("CTX_SIZE", &c.CtxSize)
 	envInt("GPU_LAYERS", &c.GPULayers)
 	envStr("KV_CACHE_TYPE", &c.KVCacheType)
@@ -388,6 +394,24 @@ func (c *Config) normalise() error {
 		c.ModelDir = filepath.Join(c.DataDir, "models")
 	}
 	c.ModelDir = resolveAgainst(base, c.ModelDir)
+
+	if c.SkillsDir == "" {
+		if isDir("skills") {
+			c.SkillsDir = "skills"
+		} else {
+			c.SkillsDir = filepath.Join(c.DataDir, "skills")
+		}
+	}
+	c.SkillsDir = resolveAgainst(base, c.SkillsDir)
+
+	if c.StoriesDir == "" {
+		if isDir("stories") {
+			c.StoriesDir = "stories"
+		} else {
+			c.StoriesDir = filepath.Join(c.DataDir, "stories")
+		}
+	}
+	c.StoriesDir = resolveAgainst(base, c.StoriesDir)
 
 	if c.WebRoot == "" {
 		// Auto-detection failing is not a load error. `config get`, `config set`

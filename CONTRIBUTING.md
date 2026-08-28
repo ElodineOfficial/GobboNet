@@ -23,10 +23,10 @@ All contributions must respect GobboNet's fundamental design principles:
 
 | Invariant | Principle |
 | :--- | :--- |
-| **Zero Build Step** | `chat.html`, `js/` (24 modules), and `css/` (15 stylesheets) run as plain, unbundled web assets. No npm, no webpack, no transpilers. |
-| **Parallel Runtime Parity** | The Go server (`cmd/gobbonet`) and the PowerShell server (`fileserver.ps1`) must maintain 100% identical HTTP wire contracts on port 9066. |
+| **Zero Build Step** | `chat.html`, `js/` (25 modules), and `css/` (15 stylesheets) run as plain, unbundled web assets. No npm, no webpack, no transpilers. |
+| **Parallel Runtime Parity** | The Go server (`cmd/gobbonet`) and the PowerShell server (`fileserver.ps1`) maintain HTTP wire compatibility across core endpoints on port 9066 (with minor lifecycle differences documented in `GO_MIGRATION_INVENTORY.md`). |
 | **Single-File Focus** | Prefer surgical, single-concern micro-PRs (1–2 files modified) over massive, multi-file refactors. |
-| **Offline-First & Private** | GobboNet runs strictly on loopback (`127.0.0.1`). No user data, telemetry, or prompt content ever leaves the local machine. |
+| **Offline-First & Zero Telemetry** | GobboNet runs by default strictly on loopback (`127.0.0.1`). No telemetry, analytics, or user prompt tracking is EVER allowed into the public project. Features involving local profiling (e.g. private Echo mirroring) must remain strictly in private workspaces. |
 
 ---
 
@@ -55,17 +55,33 @@ Run the Go test suite with the race detector enabled across all packages:
 go test -v -race ./...
 ```
 
-### Git Branching (Micro-PR Model)
-1. Fork the repository and clone locally.
-2. Create a clean feature branch:
-   ```bash
-   git checkout -b feat/my-surgical-feature
-   ```
-3. Author your change, verify with tests and `./stage-web.sh`, and commit with a clear message:
-   ```bash
-   git commit -m "feat(ui): add syntax highlighting for card code blocks"
-   ```
-4. Open a Pull Request on GitHub.
+### Running Automated User Stories
+Verify deterministic story execution using the CLI test runner:
+```bash
+./gobbonet mock list
+./gobbonet mock run story-01-character-swap
+```
+
+### Git Branching & Upstream PR Bundling Strategy
+To make your contributions effortless for the upstream maintainers to review, split large architectural improvements into cohesive, surgical pull request bundles:
+
+1. **Bundle 1: Composable Skills System** (`feat/skills-engine`)
+   - Backend: `internal/skills/` (`GET/PUT /skills/*` discovery & parser)
+   - Frontend: `js/25-skills.js`, `// SKILLS` modal editor in `chat.html`
+   - Zero telemetry, pure filesystem discovery.
+
+2. **Bundle 2: Automated Story Verification Engine** (`feat/mock-story-verifier`)
+   - Backend: `internal/mock/` (`/mock/*` routes and `gobbonet mock [list|run]` CLI)
+   - Sample stories in `stories/*.story.md`
+   - Deterministic test replay and regression defense.
+
+3. **Bundle 3: CI/CD & Cross-Platform Conformance Hardening** (`feat/ci-conformance-hardening`)
+   - `.github/workflows/ci.yml` multi-OS matrix testing (Linux/macOS/Windows) with `-race` detection
+   - Conformance contract tests in `internal/server/conformance_test.go`.
+
+> [!CAUTION]
+> **Private Workspace Isolation:**
+> Experimental user profiling, tone telemetry counters, and personal prompt mirrors (`skills/echo-user/`) are for **local private use only**. Keep them in your private fork and do **not** export them to public upstream branches.
 
 ---
 
@@ -78,14 +94,12 @@ go test -v -race ./...
 
 ---
 
-## 4. Dual-Mode Contributor Experience
-
-GobboNet supports two distinct, powerful development workflows:
+## 6. Dual-Mode Contributor Experience
 
 ### A. Sovereign Offline Contributor Mode (Zero Cloud)
 - Run a full local install of GobboNet on your machine.
 - Chat with `ForgeGoblin` to ideate, explore, and "vibe-code" community contributions completely offline.
-- Run tests (`./stage-web.sh`, `go test -race ./...`) with zero internet connection until you are ready to `git push`.
+- Run tests (`nix develop`, `./stage-web.sh`, `go test -race ./...`, `./gobbonet mock list`) with zero internet connection until you are ready to `git push`.
 
-### B. Hybrid Cloud Agent Delegation
-- If you use cloud-based frontier AI agents (Claude Code, Cursor, Antigravity/Gemini), they can call GobboNet on `127.0.0.1:9066` as a high-speed, 0-token local subagent for AST linting, code drafting, and socket audits.
+### B. Hybrid Agent Delegation
+- If you use external AI coding assistants, they can query GobboNet on `127.0.0.1:9066` as a high-speed, 0-token local inference subagent for offline code drafting, AST checks, and prompt experiments.

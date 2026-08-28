@@ -12,8 +12,8 @@ The Go server runs in **one of two modes**, determined entirely by config:
 
 | Mode | How it's used | `server_exe` in config | Hot-swap | Upstream control |
 |---|---|---|---|---|
-| **Local** | `launch.bat` / `launch.sh` install llama.cpp and run it on this machine | Set to the llama-server binary path | ✅ Full — swap GGUF files on-the-fly | Go manages the llama.cpp process lifecycle |
-| **Remote** | Point at any existing llama.cpp server (LAN, other machine, cloud) | Empty or pointing to a missing file | ❌ Disabled — upstream is not local | Go only proxies; it never spawns or controls llama.cpp |
+| **Local** | `launch.bat` / `launch.sh` install llama.cpp and run it on this machine | Set to the llama-server binary path (must exist on disk; missing binary is a fatal error) | ✅ Full — swap GGUF files on-the-fly | Go manages the llama.cpp process lifecycle |
+| **Remote** | Point at any existing llama.cpp server (LAN, other machine, cloud) | Empty (`""`) | ❌ Disabled — upstream is not local | Go only proxies; it never spawns or controls llama.cpp |
 
 **Both modes get full feature parity** for everything *except* hot-swap: auth, state sync, generation jobs, web search, RAG, characters, personas, lore, scheduler, extensions, macros, variants/rerolls, data export/import — all identical. The Go server reports its capabilities (via `/health-fileserver`) and the frontend adapts automatically.
 
@@ -60,22 +60,18 @@ This keeps the Windows behavior identical (config lives next to `launch.bat`) wh
 
 # --- Upstream llama.cpp server ------------------------------------------
 # Base URL of the llama-server process. This can be:
-#   http://127.0.0.1:11434      — local llama.cpp server
-#   http://192.168.1.100:8080   — remote machine on your LAN
-#   https://your-server.com      — remote with TLS
+#   http://127.0.0.1:11437/v1   — local llama.cpp server
+#   http://192.168.1.100:11437/v1 — remote machine on your LAN
+#   https://your-server.com/v1   — remote with TLS
 #
 # The UI and chat state are served by this program (the Go "gobbonet"
 # binary). The llama.cpp server handles model inference. They talk
 # over HTTP.
-llm_url = "http://127.0.0.1:11434"
+llm_url = "http://127.0.0.1:11437/v1"
 
 # --- Optional upstream services -----------------------------------------
-# These were separate loopback llama-server processes on Windows.
-# If nothing answers, features degrade gracefully (web search off,
-# RAG falls back to tag-only retrieval).
-
-# Web search relay (Ollama-based or compatible). Leave empty to disable.
-search_url = "http://127.0.0.1:11435"
+# Web search relay / Ollama API endpoint. Leave empty to disable.
+search_url = "https://ollama.com/api"
 
 # Embedding server for RAG. Leave empty to disable.
 embed_url = "http://127.0.0.1:11436"
@@ -89,16 +85,16 @@ llm_api_key = ""
 
 # --- Listener -----------------------------------------------------------
 # What address and port the gobbonet server binds to.
+# 127.0.0.1 = loopback only (default, private and secure).
 # 0.0.0.0 = accept connections on all network interfaces (LAN access).
-# 127.0.0.1 = loopback only (no LAN access).
-listen_host = "0.0.0.0"
-listen_port = 8080
+listen_host = "127.0.0.1"
+listen_port = 9066
 
 # --- Local-backend (hot-swap) settings ----------------------------------
 # These settings are only active when this machine runs the llama.cpp
 # server itself ("local mode"). To use local mode, set server_exe below
 # to the path of the llama-server binary and point llm_url at the local
-# port (default 11434).
+# port (default 11437).
 #
 # If you point llm_url at a remote server ("remote mode"), these can be
 # left at their defaults — they won't be used. The Go server proxies
@@ -125,14 +121,14 @@ kv_cache_type = "q8_0"
 # --- Model directory ----------------------------------------------------
 # Directory containing .gguf model files. These appear in the model
 # selector dropdown (in addition to whatever the upstream /props
-# reports).
+# reports). Defaults to <data_dir>/models.
 #
 # This is where launch.bat / launch.sh download models to.
 model_dir = "./models"
 
 # --- Access control -----------------------------------------------------
 # The server can be password-protected. If this is set, the value is
-# a salted SHA-256 hash in "salt:hash" format (lowercase hex).
+# a salted SHA-256 hash in "salt:hash" format or an Argon2id PHC string.
 # MIGRATION: on first login after upgrade, passwords are rehashed as Argon2.
 # If empty, no password is required.
 #
@@ -154,10 +150,10 @@ access_secret = ""
 session_ttl_hours = 12
 
 # Maximum concurrent detached-generation workers.
-job_max_concurrent = 4
+job_max_concurrent = 1
 
 # Generation jobs are held in memory (no disk spooling). At ~150 tok/s,
-# 4 concurrent jobs for 30 minutes is tens of MB — trivial for modern systems.
+# concurrent jobs for 30 minutes is tens of MB — trivial for modern systems.
 # job_max_age_hours is retained as a soft limit for memory management.
 ```
 
@@ -260,7 +256,7 @@ Key reasons:
 - Exposes structured Go types: `ModelInfo` with `General`, `Architecture`, `ContextLength`, `ChatTemplate`, etc. — exactly the fields `identify-model.ps1` extracts
 - Also provides memory-usage estimation and TPS calculation (useful later for `launch.sh`'s hardware-aware model recommendation)
 
-The Go server calls it during `launch.sh` setup to scan the `models/` directory and build the initial `models-list.json`, and on hot-swap to verify a newly-selected model's metadata.
+The Go server uses it to scan the `models/` directory on-demand and on hot-swap to verify a newly-selected model's metadata.
 
 ### Model metadata — primary/fallback strategy
 
@@ -293,14 +289,13 @@ After this design, both scripts are thin wrappers. They operate differently depe
 
 **Local mode (default for both scripts):**
 1. **One-time setup** — hardware probe → recommend model → download llama.cpp → download GGUF → set password → write `config.toml` with `server_exe` set
-2. **Start llama-server** as a background process (managed by `gobbonet serve` supervisor)
-3. **Start the Go server** as a single process that also supervises llama-server
-4. **Health monitor loop** — handled by `gobbonet serve` with exponential backoff
+2. **Start the Go server** (`gobbonet serve`), which starts and supervises `llama-server` directly
+3. **Health monitor loop** — handled by `gobbonet serve` with exponential backoff
 
 > **Review note — Collapse launch.sh health monitor into Go:** The health monitor loop, swap coordination, and process supervision should be inside the Go binary, not duplicated in `launch.sh`. This eliminates the drift on the hot path. Use `gobbonet serve` as a proper supervisor with exponential backoff. The setup scripts (hardware probe + model download) can remain as thin wrappers for now — they're one-time interactive flows, not drift-prone hot paths. `gobbonet setup` consolidation is a v2 goal.
 
 **Remote mode (manual setup, no scripts involved):**
-1. User edits `config.toml` — points `llm_url` at remote, clears `server_exe`
+1. User edits `config.toml` — points `llm_url` at remote, clears `server_exe` (`server_exe = ""`)
 2. Runs `launch.sh` or `gobbonet serve` directly — no llama.cpp management needed
 3. No health monitor loop (nothing to monitor — the upstream is managed elsewhere)
 
@@ -309,8 +304,8 @@ The config file is the single source of truth. Everything that was scattered acr
 **Remote-mode setup** — point at an existing llama.cpp server:
 
 The user edits `config.toml` to:
-1. Set `llm_url` to the remote llama.cpp endpoint (e.g., `http://192.168.1.100:8080`)
-2. Optionally clear `server_exe` (set to `""`)
+1. Set `llm_url` to the remote llama.cpp endpoint (e.g., `http://192.168.1.100:11437/v1`)
+2. Clear `server_exe` (set to `""`)
 3. Set `search_url` / `embed_url` if the remote also provides those
 4. Optionally set `llm_api_key` if the remote requires auth
 
@@ -318,4 +313,4 @@ Then runs `launch.sh` (or `gobbonet serve` directly). The same binary, same conf
 
 **Hybrid setup** — local chat, remote inference:
 
-A common pattern: run `gobbonet serve` on your laptop (local mode for auth + state sync), but point `llm_url` at a desktop PC or cloud server running llama.cpp. The chat UI is served from your laptop, the model inference runs on the remote machine. State sync still works across devices on the LAN. This is the primary use case for the remote mode — a centralized model server with thin clients.
+A common pattern: run `gobbonet serve` on your laptop in remote mode (`server_exe = ""`), but point `llm_url` at a desktop PC or cloud server running llama.cpp. The chat UI is served from your laptop, the model inference runs on the remote machine. State sync still works across devices on the LAN. This is the primary use case for the remote mode — a centralized model server with thin clients.

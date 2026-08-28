@@ -385,6 +385,9 @@ Function ProbePageCreate
     GetDlgItem $0 $HWNDPARENT 1
     EnableWindow $0 0                       ; disable Next during the probe
     ${NSD_CreateTimer} RunProbe 200
+  ${Else}
+    ${NSD_SetText} $Lbl "GPU:  $HwGpuName$\r$\nVRAM: $HwVram GB$\r$\n\
+RAM:  $HwRam GB$\r$\nFree disk: $HwDiskFree GB$\r$\n$\r$\nSuggested tier: $HwTier"
   ${EndIf}
 
   nsDialogs::Show
@@ -739,7 +742,7 @@ Section "GobboNet" SecMain
         Pop $R4
         ${If} $R4 == ""
           DetailPrint "  [WARN] certutil produced no hash; relying on the size check."
-        ${ElseIf} $R4 S!= $R3
+        ${ElseIf} $R4 != $R3
           Delete "$R0"
           DetailPrint "  [ERROR] expected: $R3"
           DetailPrint "  [ERROR] actual:   $R4"

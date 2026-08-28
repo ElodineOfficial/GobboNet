@@ -1,8 +1,12 @@
 package config
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -87,7 +91,7 @@ func TestLoadRejectsUnknownKeys(t *testing.T) {
 
 func TestLoadMissingFile(t *testing.T) {
 	_, err := Load(filepath.Join(t.TempDir(), "absent.toml"))
-	if err != ErrNotFound {
+	if !errors.Is(err, ErrNotFound) {
 		t.Errorf("got %v, want ErrNotFound", err)
 	}
 }
@@ -237,10 +241,10 @@ func TestXDGDirectoriesAreSeparate(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", "/tmp/cfg")
 	t.Setenv("XDG_DATA_HOME", "/tmp/data")
 
-	if got, want := ConfigDir(), "/tmp/cfg/gobbonet"; got != want {
+	if got, want := ConfigDir(), filepath.Join("/tmp/cfg", "gobbonet"); got != want {
 		t.Errorf("ConfigDir: got %q, want %q", got, want)
 	}
-	if got, want := DataDir(), "/tmp/data/gobbonet"; got != want {
+	if got, want := DataDir(), filepath.Join("/tmp/data", "gobbonet"); got != want {
 		t.Errorf("DataDir: got %q, want %q", got, want)
 	}
 	if ConfigDir() == DataDir() {
@@ -260,9 +264,12 @@ func TestDefaultTOMLMatchesDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The file holds access_secret and llm_api_key.
-	if perm := info.Mode().Perm(); perm != 0o600 {
-		t.Errorf("permissions: got %o, want 600", perm)
+	// The file holds access_secret and llm_api_key. Windows does not carry
+	// POSIX permission bits, so the check is meaningless there.
+	if runtime.GOOS != "windows" {
+		if perm := info.Mode().Perm(); perm != 0o600 {
+			t.Errorf("permissions: got %o, want 600", perm)
+		}
 	}
 
 	cfg, err := Load(path)
@@ -383,7 +390,8 @@ func TestAPIKeyFileWins(t *testing.T) {
 // broken key path is no reason they cannot ask for the port — or repair the
 // setting with `config set`.
 func TestMissingAPIKeyFileIsFatalToServeButNotToRead(t *testing.T) {
-	path := writeConfig(t, "llm_url = \"http://x:1\"\nllm_api_key_file = \"/nonexistent/key\"\n")
+	missing := filepath.Join(t.TempDir(), "nonexistent", "key")
+	path := writeConfig(t, fmt.Sprintf("llm_url = \"http://x:1\"\nllm_api_key_file = %s\n", strconv.Quote(missing)))
 
 	cfg, err := Load(path)
 	if err != nil {
@@ -394,7 +402,7 @@ func TestMissingAPIKeyFileIsFatalToServeButNotToRead(t *testing.T) {
 	}
 	if err := cfg.Runnable(); err == nil {
 		t.Error("a missing llm_api_key_file was silently ignored; serve would run unauthenticated")
-	} else if !strings.Contains(err.Error(), "/nonexistent/key") {
+	} else if !strings.Contains(err.Error(), missing) {
 		t.Errorf("error should name the missing file, got %v", err)
 	}
 	// It must never be mistaken for a usable key.
@@ -410,7 +418,7 @@ func TestAPIKeyFileWinsOverInlineKey(t *testing.T) {
 	if err := os.WriteFile(keyPath, []byte("  file-key\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	path := writeConfig(t, "llm_api_key = \"inline-key\"\nllm_api_key_file = \""+keyPath+"\"\n")
+	path := writeConfig(t, fmt.Sprintf("llm_api_key = \"inline-key\"\nllm_api_key_file = %s\n", strconv.Quote(keyPath)))
 
 	cfg, err := Load(path)
 	if err != nil {
@@ -512,7 +520,8 @@ func TestSetUncommentsDefaultWithoutDuplicating(t *testing.T) {
 	if err := WriteDefault(path); err != nil {
 		t.Fatal(err)
 	}
-	if err := Set(path, "model_dir", "/srv/models"); err != nil {
+	modelPath := filepath.Join(dir, "models")
+	if err := Set(path, "model_dir", modelPath); err != nil {
 		t.Fatal(err)
 	}
 	raw, err := os.ReadFile(path)
@@ -532,7 +541,7 @@ func TestSetUncommentsDefaultWithoutDuplicating(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.ModelDir != "/srv/models" {
-		t.Errorf("model_dir = %q", cfg.ModelDir)
+	if cfg.ModelDir != modelPath {
+		t.Errorf("model_dir = %q, want %q", cfg.ModelDir, modelPath)
 	}
 }

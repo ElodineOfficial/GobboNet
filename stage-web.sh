@@ -42,8 +42,8 @@ done
 # chat.html loads every module by name, so a partial js/ or css/ is a blank
 # page with console errors rather than a build failure. Check the counts match
 # what chat.html actually asks for.
-want_js=$(grep -c 'src="js/' chat.html)
-want_css=$(grep -c 'href="css/' chat.html)
+want_js=$( (grep -o 'src="js/' chat.html || true) | wc -l)
+want_css=$( (grep -o 'href="css/' chat.html || true) | wc -l)
 have_js=$(find js -maxdepth 1 -name '*.js' | wc -l)
 have_css=$(find css -maxdepth 1 -name '*.css' | wc -l)
 if [ "$want_js" -ne "$have_js" ] || [ "$want_css" -ne "$have_css" ]; then

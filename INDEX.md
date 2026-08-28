@@ -46,6 +46,7 @@ shell below line 1394 stayed in `chat.html`).
 | `js/21-data.js` | 11703–11915 | 218 |
 | `js/22-scheduler.js` | 11916–12143 | 233 |
 | `js/23-card-code.js` | — | 313 |
+| `js/25-skills.js` | — | 290 |
 | `js/24-boot.js` | 12144–12289 | 154 |
 
 ## Stylesheets

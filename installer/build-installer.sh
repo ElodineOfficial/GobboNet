@@ -71,7 +71,9 @@ mkdir -p "$PAYLOAD"
 # gobbonet.exe -- newest windows/amd64 build produced by build-release.sh
 GOBBONET_EXE="${GOBBONET_EXE:-}"
 if [ -z "$GOBBONET_EXE" ]; then
-    GOBBONET_EXE="$(find "$ROOT/dist" -name 'gobbonet.exe' -print 2>/dev/null | head -1 || true)"
+    GOBBONET_EXE="$(find "$ROOT/dist" -name 'gobbonet.exe' -printf '%T@ %p\n' 2>/dev/null \
+                    | sort -rn | head -1 | cut -d' ' -f2- || true)"
+    [ -z "$GOBBONET_EXE" ] || echo "  binary:   $GOBBONET_EXE"
 fi
 if [ -z "$GOBBONET_EXE" ] || [ ! -f "$GOBBONET_EXE" ]; then
     echo "ERROR: no gobbonet.exe found." >&2
