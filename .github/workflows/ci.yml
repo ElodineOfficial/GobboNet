@@ -93,4 +93,9 @@ jobs:
 
       - name: Verify Skills & Headless Mock Story Replay Engine
         shell: bash
-        run: ./gobbonet mock list
+        run: |
+          BIN="./gobbonet"
+          if [ -f "./gobbonet.exe" ]; then
+            BIN="./gobbonet.exe"
+          fi
+          $BIN mock list

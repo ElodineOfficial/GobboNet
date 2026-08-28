@@ -596,7 +596,12 @@ func cmdMock(argv []string) error {
 
 	cfg, err := loadConfig(configPath)
 	if err != nil {
-		return err
+		path, _ := config.Discover(configPath)
+		if loadedCfg, loadErr := config.Load(path); loadErr == nil {
+			cfg = loadedCfg
+		} else {
+			return err
+		}
 	}
 
 	engine := mock.NewEngine(cfg.StoriesDir, cfg.LLMURL, cfg.LLMAPIKey)
