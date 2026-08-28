@@ -10,6 +10,21 @@ Not a bug report. Not an apology. Not a request for reinstatement.
 
 ---
 
+## Contents
+
+- [The verdict](#-doc001--the-verdict)
+- [Yes. It is malware-shaped.](#-doc002--yes-it-is-malware-shaped)
+- [Detection accounting](#-doc003--detection-accounting)
+- [The three things the shape can't carry](#-doc004--the-three-things-the-shape-cant-carry)
+- [Why a private AI launcher has a RAT's résumé](#-doc005--why-a-private-ai-launcher-has-a-rats-résumé)
+- [The transparency tax](#-doc006--the-transparency-tax)
+- [The performance of safety](#-doc007--the-performance-of-safety)
+- [What actual safety reads](#-doc008--what-actual-safety-reads)
+- ["Just buy a certificate"](#-doc009--just-buy-a-certificate)
+- [The refusal](#-doc010--the-refusal)
+
+---
+
 > [!IMPORTANT]
 > **Password Security:** Choose a strong password. It is the primary defense for your local instance on any network.
 

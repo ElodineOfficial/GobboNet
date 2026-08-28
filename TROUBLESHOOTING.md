@@ -4,6 +4,7 @@ Most problems land in one of four buckets. Work down in order — the first
 one is far more common than people expect.
 
 ## Table of Contents
+- [Error Triage](#error-triage)
 - [A custom port did not take, or "I rebooted and it started working"](#a-custom-port-did-not-take-or-i-rebooted-and-it-started-working)
 - ["My character's picture disappeared after updating"](#my-characters-picture-disappeared-after-updating)
 - ["My chats vanished after updating"](#my-chats-vanished-after-updating)

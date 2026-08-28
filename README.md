@@ -12,15 +12,18 @@ This guide assumes you've never set up anything like this before. Take it one st
 - [What you're actually setting up](#what-youre-actually-setting-up)
 - [What you need before you start](#what-you-need-before-you-start)
 - [Step 1 — Install it](#step-1--install-it)
+- [Alternative Download Method](#alternative-download-method-step-1--get-the-files)
 - [Step 2 — Run the launcher](#step-2--run-the-launcher)
-- [Step 3 — Use it from your phone](#step-3-optional--use-it-from-your-phone)
+- [Step 3 (optional) — Use it from your phone](#step-3-optional--use-it-from-your-phone)
 - [Using the chat](#using-the-chat)
 - [Keeping it private and safe](#keeping-it-private-and-safe)
+- [Shutting it down](#shutting-it-down)
 - [Troubleshooting](#troubleshooting)
 - [Known bugs](#known-bugs)
 - [Upcoming changes](#upcoming-changes)
 - [Quick reference](#quick-reference)
 - [Full feature list](#full-feature-list)
+- [How I handle PRs](#how-i-handle-prs)
 
 ---
 
@@ -187,6 +190,8 @@ It runs on your processor rather than your graphics card, so it won't take memor
 
 Once the model loads, your **web browser opens automatically** to the chat screen. You can start typing.
 
+![GobboNet chat interface](docs/screenshots/live_web_ui.png)
+
 Every time you want to use it in the future, you just open GobboNet again. After the first setup, it starts in well under a minute and **never needs the internet**.
 
 ---
@@ -199,7 +204,7 @@ You can chat from your phone or tablet **as long as it's on the same Wi-Fi** as 
 2. Look at the launcher window. When it starts, it prints the exact web address to use on your phone, something like:
 
    ```
-   On your phone: http://your-pc-name.local:8080
+   On your phone: http://your-pc-name.local:9066
    ```
 
 3. On your phone's browser, type that address. Enter the password you chose. Done.
@@ -211,6 +216,8 @@ You can chat from your phone or tablet **as long as it's on the same Wi-Fi** as 
 ## Using the chat
 
 Gobbonet is more than a plain chatbox. Here are the parts you'll actually use, in plain terms:
+
+![Character and lorebook workbench](docs/screenshots/live_workbench_ui.png)
 
 - **Just type and chat.** Type in the box at the bottom, press Enter. That's the basics.
 - **Characters.** It comes with a few built-in personalities (a terse coder, a wordy lore-keeper, a riddle-speaking oracle). You can switch between them or make your own — give it a name, a description, and a style, and the AI will play that role. You can also **bring in character cards you already have, and send yours back out** (the common `.png` cards used by other AI chat apps), so your existing collection works here too. Most cards carry over cleanly, though a few may need small tweaks after importing.
@@ -364,7 +371,7 @@ Everything GobboNet can do, grouped so it's easy to scan.
 - Copy button on code blocks — grab code in one tap.
 - Token counter — see how much of the AI's "memory" you're using.
 - Chain-of-thought (reasoning) view — on models that support it, you can watch the AI's step-by-step thinking.
-- Output token limitations + smart cutoff cutoff feature
+- Output token limitations + smart cutoff feature
 - Auto-stop on stuck reasoning — if the AI's thinking gets caught in an endless loop, it's cut off automatically instead of running forever.
 
 **Conversations & organizing**

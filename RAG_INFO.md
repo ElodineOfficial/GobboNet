@@ -1,4 +1,4 @@
-# RAG System Info
+# GobboNet RAG Storybook — How to Use It
 
 - **Dump this file into an AI, have it re-write your notes to be optimized for GobboNet. Or alternatively, just dump plain text into the RAG field and it'll work just fine!**
 
@@ -12,7 +12,16 @@
 > | Lore Storage | Embedded in character card PNG/JSON |
 > | External DB | None required (no Chroma, no Pinecone) |
 
-# Gobbonet RAG Storybook — How to Use It
+## Contents
+
+- [The short version](#the-short-version)
+- [Where it lives, and what goes where](#where-it-lives-and-what-goes-where)
+- [Writing structured entries](#writing-structured-entries)
+- [The weight system](#the-weight-system--the-part-youll-actually-tune)
+- [What the model actually receives](#what-the-model-actually-receives-so-the-brackets-dont-worry-you)
+- [The two global knobs](#the-two-global-knobs-settings-not-per-tag)
+- [Tuning in practice](#tuning-in-practice)
+- [One-page cheat sheet](#one-page-cheat-sheet)
 
 A plain guide for the person *authoring* a storybook. (The design doc this is drawn
 from is an engineering spec; this is just the part you actually touch.)

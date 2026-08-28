@@ -9,6 +9,14 @@
 > | 🟡 **Medium** | Delete password + cache | ✅ Yes | ⚠️ Export first |
 > | 🔴 **Nuclear** | Delete everything | ❌ Re-download | ❌ Gone |
 
+## Contents
+
+- [Where the data actually is](#where-the-data-actually-is)
+- [Clearing this PC](#clearing-this-pc)
+- [Clearing a phone or tablet](#clearing-a-phone-or-tablet)
+- [What cannot be cleared](#what-cannot-be-cleared)
+- [Verifying](#verifying)
+
 Conversations live in more than one place, and only some of them can be
 reached by the app. This is the complete list, what clears each, and what
 nothing can clear.
