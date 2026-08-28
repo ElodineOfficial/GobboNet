@@ -1,9 +1,27 @@
-# RAG System Info
+# GobboNet RAG Storybook — How to Use It
 
 - **Dump this file into an AI, have it re-write your notes to be optimized for GobboNet. Or alternatively, just dump plain text into the RAG field and it'll work just fine!**
 
+> [!NOTE]
+> **System Specifications**
+> | Component | Detail |
+> |---|---|
+> | Embedding Model | ~146 MB, runs on CPU (no GPU VRAM used) |
+> | Retrieval Method | Hybrid: semantic vectors + weighted tags |
+> | Fallback | Tag-only matching (automatic, no config needed) |
+> | Lore Storage | Embedded in character card PNG/JSON |
+> | External DB | None required (no Chroma, no Pinecone) |
 
-# Gobbonet RAG Storybook — How to Use It
+## Contents
+
+- [The short version](#the-short-version)
+- [Where it lives, and what goes where](#where-it-lives-and-what-goes-where)
+- [Writing structured entries](#writing-structured-entries)
+- [The weight system](#the-weight-system--the-part-youll-actually-tune)
+- [What the model actually receives](#what-the-model-actually-receives-so-the-brackets-dont-worry-you)
+- [The two global knobs](#the-two-global-knobs-settings-not-per-tag)
+- [Tuning in practice](#tuning-in-practice)
+- [One-page cheat sheet](#one-page-cheat-sheet)
 
 A plain guide for the person *authoring* a storybook. (The design doc this is drawn
 from is an engineering spec; this is just the part you actually touch.)
@@ -24,6 +42,31 @@ and routes it automatically:
 Only the slice the current scene actually needs gets injected into the prompt. So you
 can write a 40KB cast once and never pay 40KB of budget per turn — you pay only for the
 entity or sub-thread the scene touches.
+
+> [!NOTE]
+> **Context Window Token Budget**
+> 
+> **Static Lore Injection:**
+> `[████████████████████████████████░░░░░░░░]` 80% Lore, 20% Conversation
+> 
+> **RAG Dynamic Injection:**
+> `[████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░]` 10% Relevant Lore, 90% Conversation
+
+```mermaid
+graph TD
+    UM["User Message"] --> RE["Retrieval Engine"]
+    RE --> SP["Semantic Path"]
+    RE --> KP["Keyword Path"]
+    SP --> CEM["CPU Embedding Model"]
+    CEM --> VSS["Vector Similarity Scoring"]
+    KP --> TRM["Tag/Regex Matcher"]
+    TRM --> TWC["Tag Weight Calculation"]
+    VSS --> HR["Hybrid Ranker"]
+    TWC --> HR
+    HR --> TKL["Top-K Lore Chunks"]
+    TKL --> ICW["Inject into Context Window"]
+    ICW --> MGL["Main GPU LLM"]
+```
 
 ---
 
@@ -194,6 +237,10 @@ the threshold is your coarse one.
 4. **Remember the reliable path.** If the embedding server is ever down, semantic
    retrieval quietly switches off but **weighted-tag retrieval keeps working**. Tags are
    your dependable trigger; prose-only entities depend on embeddings being available.
+
+> [!TIP]
+> **Graceful Degradation**
+> If the CPU embedding model fails or cannot run, the system automatically falls back to tag-only keyword matching. No configuration changes are required — your story continues uninterrupted.
 
 ---
 
