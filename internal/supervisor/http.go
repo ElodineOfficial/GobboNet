@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"path/filepath"
+	"strings"
 
 	"github.com/jmccardle/gobbonet/internal/httpx"
 )
@@ -50,6 +52,13 @@ func (h Handlers) HandleSwapModel(w http.ResponseWriter, r *http.Request) {
 	if err := json.Unmarshal(body, &req); err != nil || req.File == "" {
 		httpx.WriteJSON(w, r, http.StatusBadRequest, map[string]string{
 			"phase": PhaseError, "message": `expected {"file":"<name>.gguf"}`,
+		})
+		return
+	}
+	req.File = filepath.Base(req.File)
+	if !strings.HasSuffix(strings.ToLower(req.File), ".gguf") {
+		httpx.WriteJSON(w, r, http.StatusBadRequest, map[string]string{
+			"phase": PhaseError, "message": "file must have a .gguf extension",
 		})
 		return
 	}

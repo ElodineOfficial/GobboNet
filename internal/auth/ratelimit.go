@@ -59,6 +59,14 @@ func (l *LoginLimiter) Allow(r *http.Request) bool {
 					delete(l.buckets, k)
 				}
 			}
+			if len(l.buckets) > 4096 {
+				for k := range l.buckets {
+					delete(l.buckets, k)
+					if len(l.buckets) <= 2048 {
+						break
+					}
+				}
+			}
 		}
 		b = &bucket{tokens: l.burst, last: now}
 		l.buckets[ip] = b

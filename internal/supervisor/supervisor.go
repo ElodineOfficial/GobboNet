@@ -601,6 +601,10 @@ var ErrSwapInFlight = fmt.Errorf("a swap is already in progress")
 // Swap changes the loaded model. It returns as soon as the swap is dispatched;
 // the client polls /swap-status for the outcome.
 func (s *Supervisor) Swap(file string) error {
+	file = filepath.Base(file)
+	if !strings.HasSuffix(strings.ToLower(file), ".gguf") {
+		return fmt.Errorf("model %q must be a .gguf file", file)
+	}
 	modelPath := filepath.Join(s.opts.ModelDir, file)
 	info, err := os.Stat(modelPath)
 	if err != nil || !info.Mode().IsRegular() {

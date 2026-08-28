@@ -251,6 +251,9 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Bound request body to prevent memory exhaustion DoS
+	r.Body = http.MaxBytesReader(w, r.Body, 64*1024)
+
 	// Rate limit before doing any work. Constant-time comparison stops an
 	// attacker learning the password a byte at a time; it does nothing about
 	// simply trying a lot of passwords quickly.
