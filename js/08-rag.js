@@ -902,6 +902,12 @@ async function buildContextMessages(thread, card, opts) {
   // system blocks so it sits freshest right before the conversation. ----
   apiMessages.push({ role: 'system', content: translateTemplates(card.writingStyle, charName, userName) });
 
+  // Append active skills system prompt contributions
+  const skillPrompts = (typeof getActiveSkillSystemPrompts === 'function') ? getActiveSkillSystemPrompts() : '';
+  if (skillPrompts) {
+    apiMessages.push({ role: 'system', content: '[Active Skills Instructions]\n' + translateTemplates(skillPrompts, charName, userName) });
+  }
+
   // Pick a carousel line once per context build (mutates card index for sequential mode)
   const carouselLine = pickCarouselLine(card);
   if (carouselLine) {

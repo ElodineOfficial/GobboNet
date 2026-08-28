@@ -3,6 +3,40 @@
 Most problems land in one of four buckets. Work down in order — the first
 one is far more common than people expect.
 
+## Table of Contents
+- [Error Triage](#error-triage)
+- [A custom port did not take, or "I rebooted and it started working"](#a-custom-port-did-not-take-or-i-rebooted-and-it-started-working)
+- ["My character's picture disappeared after updating"](#my-characters-picture-disappeared-after-updating)
+- ["My chats vanished after updating"](#my-chats-vanished-after-updating)
+- [The chat page will not load (nothing on :9066)](#the-chat-page-will-not-load-nothing-on-9066)
+- [Password problems](#password-problems)
+- [The console says "Waiting for server to come back up..." forever](#the-console-says-waiting-for-server-to-come-back-up-forever)
+- ["llama-server already running" but nothing works](#llama-server-already-running-but-nothing-works)
+- [The model will not load](#the-model-will-not-load)
+- [Windows Defender, and how to stop it interfering](#windows-defender-and-how-to-stop-it-interfering)
+- [Linux / macOS](#linux--macos)
+- [Still stuck](#still-stuck)
+
+## Error Triage
+
+```mermaid
+flowchart TD
+    Start["What is the issue?"]
+    Start --> Blank["Blank/broken page"]
+    Start --> Error500["500 error"]
+    Start --> Error502["502 error"]
+    Start --> Slow["AI is slow"]
+    Start --> Connect["Phone can't connect"]
+    Start --> Chats["Saved chats disappeared"]
+    
+    Blank --> FixBlank["Check css/js folders"]
+    Error500 --> Fix500["Lower CTX_SIZE or smaller model"]
+    Error502 --> Fix502["Check if Ollama is running"]
+    Slow --> FixSlow["Check GPU acceleration"]
+    Connect --> FixConnect["Run setup-lan.bat"]
+    Chats --> FixChats["Bookmark .local address"]
+```
+
 ---
 
 ## A custom port did not take, or "I rebooted and it started working"
@@ -34,6 +68,9 @@ old reservation pointing at the wrong number. The server falls back to this
 PC only and the launcher now says so. Fix: right-click **setup-lan.bat** →
 Run as administrator. It reads the same port the launcher is using and
 cleans up the stale reservation.
+
+> [!TIP]
+> Use your computer's `.local` address (e.g., `http://mycomputer.local:9066`) on your phone instead of the raw IP address. This ensures your bookmarks and saved chats continue working even if your router assigns your PC a new IP.
 
 To set a port for one run only:
 
@@ -86,7 +123,7 @@ the new address. If the sidebar is empty after a moment, force it from the
 Data panel with **Restore from server**.
 
 The old `:8080` origin still holds a copy too. Clearing it is optional;
-see `PURGE.md` if you want it gone.
+see `docs/manual/PURGE.md` if you want it gone.
 
 ### Why the port moved
 
@@ -205,6 +242,9 @@ port specifically.
 
 ## "llama-server already running" but nothing works
 
+> [!WARNING]
+> Ollama processes running in the background are a common source of port conflicts. If you use Ollama, verify its background service is fully stopped before starting GobboNet, or explicitly configure distinct ports.
+
 If you have **Ollama** installed, older versions of GobboNet mistook it for
 llama.cpp. Both used port 11434, and the launcher accepted any HTTP answer
 as proof its own server was up -- including Ollama's 404. It then skipped
@@ -230,12 +270,26 @@ launch.bat
 The launcher stops and shows `llama-server.log`. Two common causes:
 
 - **Not enough VRAM.** Pick a smaller model or a heavier quantisation.
+
+  > [!TIP]
+  > **VRAM Sizing Guide**
+  > | VRAM | Safe Model Size | Max CTX_SIZE | Quantization |
+  > |---|---|---|---|
+  > | 4GB | 3B - 4B | 4096 | Q4_K_M |
+  > | 8GB | 7B - 8B | 8192 | Q4_K_M |
+  > | 12GB | 11B - 14B | 8192 | Q5_K_M |
+  > | 16GB | 14B - 32B | 16384 | Q5_K_M |
+  > | 24GB+ | 32B - 70B | 32768 | Q6_K / Q8_0 |
+
 - **Stale server.** Closing the window without stopping the servers can
   leave `llama-server.exe` holding the port. Check with
   `netstat -ano | findstr "11437 11436 9066"` and end those PIDs.
 
 If a model downloaded but never loads, check for a leftover `.part` file in
 `models\` — that is an aborted download and is safe to delete.
+
+> [!CAUTION]
+> Do not delete `.gguf` model files manually while the server is running, as it may crash the backend. Only delete `.part` files safely.
 
 ---
 
@@ -285,13 +339,16 @@ exclusion is narrower and reversible.
 
 ---
 
-## Linux / Wine
+## Linux / macOS
 
-Not supported yet. `fileserver.ps1` **is** the web server, and with the
-hardware probe and model identifier that is roughly 4,000 lines of
-PowerShell, which Wine does not implement. The launcher detects Wine, says
-so, and continues anyway — people have got it running by patching around
-the gaps, and nothing here will stop you trying.
+GobboNet runs natively on Linux and macOS using the compiled Go server (`./gobbonet serve`). No Wine, PowerShell, or emulation is needed.
+
+- **Linux & macOS start**:
+  ```bash
+  ./gobbonet serve
+  ```
+- **Configuration**: On Linux and macOS, settings are read from `~/.config/gobbonet/config.toml` (or `$XDG_CONFIG_HOME/gobbonet/config.toml`).
+- **Windows compatibility**: On Windows, both the compiled Go server (`gobbonet.exe`) and the original PowerShell orchestrator (`launch.bat` + `fileserver.ps1`) remain fully supported.
 
 ---
 

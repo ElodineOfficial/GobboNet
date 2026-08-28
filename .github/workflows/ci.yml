@@ -1,0 +1,101 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: ['**']
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint-and-syntax:
+    name: Syntax & Schema Validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Validate JavaScript Modules Syntax
+        run: |
+          for file in js/*.js; do
+            node --check "$file"
+          done
+
+      - name: Validate JSON Presets & Schemas
+        run: |
+          node -e '
+            const fs = require("fs");
+            ["default-characters.json"].forEach(file => {
+              if (fs.existsSync(file)) {
+                JSON.parse(fs.readFileSync(file, "utf8"));
+                console.log(`PASS: ${file} parsed successfully`);
+              }
+            });
+          '
+
+      - name: Verify Web Asset Staging Cleanliness
+        shell: bash
+        run: |
+          ./stage-web.sh
+          if [ -n "$(git status --porcelain web/)" ]; then
+            echo "ERROR: web/ assets are out of sync with root source files. Run ./stage-web.sh and commit the changes."
+            git status --porcelain web/
+            exit 1
+          fi
+
+  test-matrix:
+    name: Test Matrix (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+
+      - name: Stage Frontend Assets
+        shell: bash
+        run: ./stage-web.sh
+
+      - name: Verify Go Dependencies
+        run: go mod verify
+
+      - name: Vet Codebase
+        run: go vet ./...
+
+      - name: Run Tests (with race detector & OpenAPI conformance)
+        run: go test -v -race ./...
+
+      - name: Compile GobboNet Binary
+        run: go build -v -o gobbonet ./cmd/gobbonet
+
+      - name: Verify Skills & Headless Mock Story Replay Engine
+        shell: bash
+        run: |
+          BIN="./gobbonet"
+          if [ -f "./gobbonet.exe" ]; then
+            BIN="./gobbonet.exe"
+          fi
+          $BIN mock list

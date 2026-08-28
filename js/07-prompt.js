@@ -48,10 +48,18 @@ function resetCarouselIndex() {
  * Returns the chosen line string, or null if carousel is off/empty.
  */
 function pickCarouselLine(card) {
-  if (!card || !card.carouselEnabled) return null;
+  const skillLines = (typeof getActiveSkillCarouselLines === 'function') ? getActiveSkillCarouselLines() : [];
+  if (!card || !card.carouselEnabled) {
+    if (skillLines.length > 0) {
+      return skillLines[Math.floor(Math.random() * skillLines.length)];
+    }
+    return null;
+  }
   const raw = (card.carouselPrompts || '').trim();
-  if (!raw) return null;
-  const lines = raw.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+  let lines = raw ? raw.split('\n').map(l => l.trim()).filter(l => l.length > 0) : [];
+  if (skillLines.length > 0) {
+    lines = lines.concat(skillLines);
+  }
   if (lines.length === 0) return null;
 
   let chosen;
