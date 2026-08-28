@@ -1,0 +1,326 @@
+openapi: 3.1.0
+info:
+  title: GobboNet Go Server API
+  version: 1.5.8
+  description: API specification for the GobboNet standalone Go backend, supervisor,
+    detached job runner, and llama.cpp proxy.
+servers:
+- url: http://127.0.0.1:9066
+  description: Local GobboNet Go Server
+tags:
+- name: 01. Auth & Security
+  description: Argon2id authentication gate and session handling
+- name: 02. Health & Models
+  description: Fileserver health, active model identity, and GGUF catalog
+- name: 03. Performance Tuning
+  description: Runtime parameter overrides (ctx_size, gpu_layers, kv_cache_type)
+- name: 04. Proxied Inference
+  description: Direct and streaming completions forwarded to llama.cpp
+- name: 05. Detached Jobs
+  description: Background generation jobs with byte-level SSE polling
+- name: 06. State Sync
+  description: Cross-device chat, character, and persona synchronization
+- name: 07. Hot-Swap
+  description: Supervised model switching between GGUF files
+- name: 08. Search Gateway
+  description: Web search and embedding reverse proxies
+- name: 09. Web UI Assets
+  description: Static HTML, JS, CSS, and favicon
+paths:
+  /login:
+    post:
+      tags:
+      - 01. Auth & Security
+      summary: Authenticate session
+      description: Validates the password against the Argon2id hash and issues a gobbonet_session
+        cookie.
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                password:
+                  type: string
+                  example: gobbonet
+              required:
+              - password
+      responses:
+        '302':
+          description: Authentication successful, redirect with Set-Cookie
+        '401':
+          description: Invalid password
+        '429':
+          description: Too many failed attempts (rate limited)
+  /logout:
+    post:
+      tags:
+      - 01. Auth & Security
+      summary: End session
+      description: Clears the active session cookie.
+      responses:
+        '302':
+          description: Logged out
+  /health-fileserver:
+    get:
+      tags:
+      - 02. Health & Models
+      summary: Fileserver & Upstream Health
+      description: Reports server status, execution mode (local/remote), hot-swap
+        capability, and upstream llama-server health.
+      responses:
+        '200':
+          description: Server health status
+          content:
+            application/json:
+              example:
+                status: ok
+                mode: local
+                hotswap: true
+                pid: 395271
+                upstream: http://127.0.0.1:11437
+                upstream_ok: true
+                version: dev
+        '401':
+          description: Unauthorized
+  /active-model.json:
+    get:
+      tags:
+      - 02. Health & Models
+      summary: Active Model Metadata
+      description: Returns metadata for the currently active GGUF model including
+        family, default and max context window.
+      responses:
+        '200':
+          description: Active model info
+          content:
+            application/json:
+              example:
+                name: qwen2.5-coder-7b-instruct-q4_k_m
+                id: qwen
+                family: qwen
+                defaultCtx: 8192
+                maxCtx: 131072
+                thinkingFormat: none
+  /models-list.json:
+    get:
+      tags:
+      - 02. Health & Models
+      summary: Models Catalog
+      description: Scans the models directory and returns metadata for all detected
+        GGUF files.
+      responses:
+        '200':
+          description: List of available models
+  /perf:
+    get:
+      tags:
+      - 03. Performance Tuning
+      summary: Get Performance Settings
+      description: Retrieves the current runtime tuning, auto baseline, and override
+        status.
+      responses:
+        '200':
+          description: Performance settings object
+    post:
+      tags:
+      - 03. Performance Tuning
+      summary: Update or Reset Tuning
+      description: 'Saves overrides to perf.toml or resets to auto baseline when reset:
+        true.'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                ctxSize:
+                  type: integer
+                  example: 8192
+                gpuLayers:
+                  type: integer
+                  example: 99
+                kvCacheType:
+                  type: string
+                  example: q8_0
+                reset:
+                  type: boolean
+                  example: false
+      responses:
+        '200':
+          description: Settings updated
+  /llm/v1/chat/completions:
+    post:
+      tags:
+      - 04. Proxied Inference
+      summary: Chat Completions (OpenAI Compatible)
+      description: Proxies chat completions to upstream llama-server with streaming
+        support.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            example:
+              messages:
+              - role: system
+                content: You are a concise assistant.
+              - role: user
+                content: Hello!
+              max_tokens: 50
+              temperature: 0.7
+              stream: false
+      responses:
+        '200':
+          description: Completion response or SSE stream
+  /llm/health:
+    get:
+      tags:
+      - 04. Proxied Inference
+      summary: Upstream LLM Health
+      responses:
+        '200':
+          description: Upstream status ok
+  /llm/jobs:
+    post:
+      tags:
+      - 05. Detached Jobs
+      summary: Submit Detached Job
+      description: Starts an asynchronous in-memory generation job that survives browser
+        navigation.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            example:
+              messages:
+              - role: user
+                content: Write a short poem.
+              max_tokens: 100
+              stream: true
+      responses:
+        '200':
+          description: Job created
+          content:
+            application/json:
+              example:
+                id: 57ed3dd29a1b4c3e8f0a1b2c3d4e5f60
+  /llm/jobs/{job_id}:
+    get:
+      tags:
+      - 05. Detached Jobs
+      summary: Poll Job Chunks
+      description: Fetches incremental base64-encoded SSE chunks from offset 'from'.
+      parameters:
+      - name: job_id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: from
+        in: query
+        required: false
+        schema:
+          type: integer
+          default: 0
+      responses:
+        '200':
+          description: Job status and chunk payload
+    delete:
+      tags:
+      - 05. Detached Jobs
+      summary: Acknowledge / Drop Job
+      description: Frees memory buffer after the client finishes reading.
+      parameters:
+      - name: job_id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Job deleted
+  /state/info:
+    get:
+      tags:
+      - 06. State Sync
+      summary: State Metadata & MTime
+      description: Returns modification timestamp and file size for conflict detection
+        without downloading the full body.
+      responses:
+        '200':
+          description: State info
+        '404':
+          description: No state stored yet
+  /state:
+    get:
+      tags:
+      - 06. State Sync
+      summary: Download Full Chat State
+      responses:
+        '200':
+          description: Full JSON state document
+    post:
+      tags:
+      - 06. State Sync
+      summary: Upload / Sync Chat State
+      requestBody:
+        required: true
+        content:
+          application/json:
+            example:
+              threads: []
+              characterCards: []
+              personaCards: []
+      responses:
+        '200':
+          description: State saved
+  /swap-status:
+    get:
+      tags:
+      - 07. Hot-Swap
+      summary: Check Model Swap Status
+      description: Polls current supervisor phase (idle, loading, ready, error).
+      responses:
+        '200':
+          description: Supervisor status
+  /swap-model:
+    post:
+      tags:
+      - 07. Hot-Swap
+      summary: Trigger Model Switch
+      description: Instructs the supervisor to hot-swap to another GGUF file.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            example:
+              file: qwen2.5-coder-7b-instruct-q4_k_m.gguf
+      responses:
+        '202':
+          description: Swap initiated
+  /search/health:
+    get:
+      tags:
+      - 08. Search Gateway
+      summary: Web Search Proxy Health
+      responses:
+        '200':
+          description: Search gateway available
+  /:
+    get:
+      tags:
+      - 09. Web UI Assets
+      summary: Chat UI (chat.html)
+      responses:
+        '200':
+          description: Serves frontend chat application
+  /favicon.ico:
+    get:
+      tags:
+      - 09. Web UI Assets
+      summary: Favicon (Unauthenticated)
+      responses:
+        '200':
+          description: Favicon image

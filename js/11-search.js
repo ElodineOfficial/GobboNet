@@ -207,6 +207,20 @@ async function checkConnection() {
       label.style.color = ready ? '' : 'var(--magenta)';
       return;
     }
+    // Remote / Ollama fallback: Ollama does not implement /health (returns 404),
+    // but implements /v1/models. If /v1/models answers 200, connection is healthy.
+    if (resp.status === 404) {
+      try {
+        const modelResp = await privacyFetch(LLAMA_URL + '/v1/models');
+        if (modelResp.ok) {
+          serverConnected = true;
+          dot.classList.add('connected');
+          label.textContent = 'Connected (Ollama)';
+          label.style.color = 'var(--neon-green)';
+          return;
+        }
+      } catch (_) {}
+    }
     serverConnected = false;
     dot.classList.remove('connected');
     label.textContent = `Error: HTTP ${resp.status}`;
