@@ -34,8 +34,10 @@ import (
 	"github.com/jmccardle/gobbonet/internal/config"
 	"github.com/jmccardle/gobbonet/internal/httpx"
 	"github.com/jmccardle/gobbonet/internal/jobs"
+	"github.com/jmccardle/gobbonet/internal/mock"
 	"github.com/jmccardle/gobbonet/internal/models"
 	"github.com/jmccardle/gobbonet/internal/proxy"
+	"github.com/jmccardle/gobbonet/internal/skills"
 	"github.com/jmccardle/gobbonet/internal/state"
 	"github.com/jmccardle/gobbonet/internal/static"
 	"github.com/jmccardle/gobbonet/internal/supervisor"
@@ -51,6 +53,8 @@ type Server struct {
 	limiter  *auth.LoginLimiter
 	info     *models.Info
 	jobs     *jobs.Manager
+	skills   *skills.Manager
+	mock     *mock.Engine
 	sup      *supervisor.Supervisor
 	// tuning is the live ctx/gpu-layers/kv-cache triple. Held here rather than
 	// read off cfg because /perf changes it while the server runs.
@@ -89,6 +93,8 @@ func New(cfg config.Config, mode config.Mode, sup *supervisor.Supervisor) (*Serv
 	}
 
 	s.jobs = jobs.NewManager(cfg.LLMURL, cfg.LLMAPIKey, cfg.JobMaxConcurrent, cfg.JobMaxAgeHours)
+	s.skills = skills.NewManager(cfg.SkillsDir)
+	s.mock = mock.NewEngine(cfg.StoriesDir, cfg.LLMURL, cfg.LLMAPIKey)
 
 	var err error
 	// Only the LLM upstream gets the API key: it is the one we authenticate to.
@@ -203,6 +209,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case path == "/perf":
 		s.handlePerf(w, r)
 
+	case path == "/skills" || strings.HasPrefix(path, "/skills/"):
+		s.skills.Handle(w, r)
+
+	case path == "/mock" || strings.HasPrefix(path, "/mock/"):
+		s.mock.Handle(w, r)
+
 	case path == "/swap-model":
 		supervisor.Handlers{Sup: s.sup}.HandleSwapModel(w, r)
 
@@ -238,6 +250,9 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteText(w, r, http.StatusOK, "text/html; charset=utf-8", auth.LoginPage(false))
 		return
 	}
+
+	// Bound request body to prevent memory exhaustion DoS
+	r.Body = http.MaxBytesReader(w, r.Body, 64*1024)
 
 	// Rate limit before doing any work. Constant-time comparison stops an
 	// attacker learning the password a byte at a time; it does nothing about

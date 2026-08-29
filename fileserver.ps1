@@ -1312,7 +1312,8 @@ function Build-LaunchScript {
         '--n-gpu-layers', "$GpuLayers",
         '--cache-type-k', (ConvertTo-CmdArgSafe $KvCacheType),
         '--cache-type-v', (ConvertTo-CmdArgSafe $KvCacheType),
-        '--parallel',  '1'
+        '--parallel',  '1',
+        '-lv',         '4'
     )
     
     if ($useJinja) { $argList += '--jinja' }

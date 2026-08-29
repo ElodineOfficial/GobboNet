@@ -1,6 +1,6 @@
 # Gobbonet — Developer Guide
 
-> A self-hosted, offline AI chat frontend for local GGUF models, running entirely on Windows via PowerShell + batch scripts. No build step, no external dependencies, no accounts.
+> A self-hosted, offline AI chat frontend for local GGUF models, running on Windows (via PowerShell + batch scripts) and cross-platform via the compiled Go server. No build step, no external dependencies, no accounts.
 
 ---
 
@@ -11,9 +11,12 @@
 # All files run as-is — no npm, no bundler, no transpiler
 
 # To run:
-.\launch.bat              # Start the full app
-.\setup-lan.bat           # One-time: open firewall for phone access
-.\fileserver.ps1          # Manual server start (rarely needed — launch.bat handles this)
+.\launch.bat              # Start the full app on Windows
+./gobbonet serve          # Start cross-platform Go server (Linux / macOS / Windows)
+nix run .                 # Instant 0-install run with Nix
+nix develop               # Drop into reproducible dev shell with Go & llama.cpp
+.\setup-lan.bat           # One-time: open firewall for phone access on Windows
+.\fileserver.ps1          # Manual PowerShell server start
 ```
 
 ---
@@ -22,10 +25,12 @@
 
 ```
 gobbonet/
-├── chat.html              # Frontend shell — 959 lines; loads the modules below
-├── js/                    # 24 modules, 01-config.js .. 24-boot.js, load-order dependent
+├── chat.html              # Frontend shell — 980 lines; loads the modules below
+├── js/                    # 25 modules, 01-config.js .. 25-skills.js, load-order dependent
 ├── css/                   # 15 stylesheets, 01-tokens.css .. 15-lore-view.css
-├── default-characters.json # 4 built-in character presets (CodeGoblin, Informant, DM, Storyteller)
+├── skills/                # Substrate-agnostic markdown skills (YAML frontmatter + prompt bodies)
+├── stories/               # Automated user stories (.story.md) for mock verification
+├── default-characters.json # 6 built-in character presets (CodeGoblin, Informant, DM, ForgeGoblin, The Echo)
 │                           # (v1.5 split the former 11,402-line chat.html and
 │                           #  2,943-line style.css into js/ and css/. There is
 │                           #  still no build step and no module system -- plain
@@ -43,13 +48,10 @@ gobbonet/
 │                           # (1.6.0 moved it out of an inline `powershell -Command`)
 ├── identify-model.ps1     # Model metadata extraction (family, max context, thinking format)
 ├── setup-lan.bat          # Firewall rule setup for LAN/phone access (one-time)
-├── fileserver.ps1         # Also used standalone for development
-│
-├── INDEX.md               # Structural index of chat.html — views, modals, functions, CSS classes
 │
 └── .gitignore (implied)
     ├── .gobbonet-secret   # Salt+hash of user password (never committed)
-    ├── .gobbonet-state.json  # Runtime state sync file
+    ├── .gobbonet-state.json  # Runtime state sync file (PowerShell) / state.json (Go)
     ├── .swap-in-progress  # Sentinel for model hot-swap coordination
     └── models/            # User-downloaded .gguf model files
 ```
@@ -100,28 +102,26 @@ gobbonet/
 
 ### The frontend — `chat.html` + `js/` + `css/`
 
-No build step, no module system, no framework. `chat.html` is a 959-line shell
-that `<script>`-tags 24 JS modules in dependency order and `<link>`s 15
+No build step, no module system, no framework. `chat.html` is a ~980-line shell
+that `<script>`-tags 25 JS modules in dependency order and `<link>`s 15
 stylesheets; globals are shared across modules, so **load order is load-bearing**
 (`01-config.js` first, `24-boot.js` last).
 
 - **`chat.html`**: layout shell, modals, inline SVG, the asset manifest
 - **`css/01..15`**: design tokens, layout, threads, chat, modals, cards, pickers,
   dashboard, responsive, panels, organisation, components, card-code, lore view
-- **`js/01..24`**: config, model, generation (incl. the `/llm/jobs` client),
+- **`js/01..25`**: config, model, generation (incl. the `/llm/jobs` client),
   state, persistence, state-sync, prompt, RAG, threads, chat, search, render,
   dashboard, scroll, cards, card I/O, personas, utils, extensions, macros, data,
-  scheduler, card-code, boot
+  scheduler, card-code, skills, boot
 
-> **See `INDEX.md` for a complete line-numbered reference** of every view, modal, function, CSS class, and data structure.
+#### Key patterns in `chat.html` & `js/`:
 
-#### Key patterns in `chat.html`:
-
-1. **Single render loop** — `render()` at line 7263 calls `renderSidebar()` and `renderMessages()`. Most state mutations call `render()` to refresh.
-2. **SSE streaming** — `renderStreamingUpdate()` at 8569 does surgical DOM updates per token (avoids full re-render flicker during streaming).
+1. **Single render loop** — `render()` (in `js/13-render.js`) calls `renderSidebar()` and `renderMessages()`. Most state mutations call `render()` to refresh.
+2. **SSE streaming** — `renderStreamingUpdate()` (in `js/13-render.js`) does surgical DOM updates per token (avoids full re-render flicker during streaming).
 3. **Modal sub-views** — The characters modal (`#char-modal`) contains 3 sub-views toggled via `display: none/block`: card list, card editor, persona editor.
 4. **State object** — A single `state` object lives in JS, persisted to `localStorage`, and synced to the server via `/state` endpoint for cross-device access.
-5. **No routing** — `goHome()` (8505) clears the active thread and the main render loop shows the landing page. Selecting a thread from the sidebar sets `state.activeThreadId` and shows the chat view.
+5. **No routing** — `goHome()` (in `js/13-render.js`) clears the active thread and the main render loop shows the landing page. Selecting a thread from the sidebar sets `state.activeThreadId` and shows the chat view.
 6. **Character template system** — Characters define system prompts, sampler settings, lore, RAG storybooks, carousel prompts, greetings, alt greetings, and visual themes. The template engine expands `{{char}}`, `{{user}}`, `{{current_DAT}}`, and custom macros before sending to the model.
 
 ### `fileserver.ps1` — Web server + proxy (2,055 lines)
@@ -144,7 +144,7 @@ collision: the launcher saw Ollama answering, concluded llama-server was already
 up, skipped starting its own, then found nothing healthy and restarted.
 Resolution order for the web port is `GEMMA_LISTEN_PORT`, then `.gobbonet-port`,
 then 9066. The Go server uses the same numbers but takes them from
-`config.toml` — see `GO_SERVER.md`.
+`config.toml` — see `docs/archived/GO_SERVER.md`.
 
 ### `launch.bat` — Orchestrator (2,428 lines)
 
@@ -160,7 +160,7 @@ Windows batch script — the entry point for end users and the coordination laye
 
 ### `default-characters.json`
 
-4 built-in character presets with full definitions (name, description, personality, sampler settings, colors). These are installable from the landing page as user character cards.
+5 built-in character presets with full definitions (name, description, personality, sampler settings, colors). These are installable from the landing page as user character cards.
 
 ### `granite.jinja`
 
@@ -285,6 +285,29 @@ This is the one route that leaves the machine, and only when search is
 switched on and a key is set. The Go port's `search_url` names the API
 directly; point it at your own relay to interpose one.
 
+### Skills & Extensibility
+
+```
+GET /skills         → { skills: [...] }  (discovered from ./skills/ and data dir)
+GET /skills/:name   → { name, description, system_prompt, personality, ... }
+PUT /skills/:name   → { raw_markdown: "..." }  (persists changes to disk)
+```
+
+### Mocking & User Story Replay
+
+```
+GET  /mock/stories           → { stories: [...] }  (discovered .story.md files)
+GET  /mock/stories/:id       → { id, name, steps: [...] }
+POST /mock/replay            → { story_id: "...", raw_markdown?: "..." } → RunResult
+GET  /mock/status/:run_id    → { run_id, status: "running"|"passed"|"failed", ... }
+```
+
+CLI execution:
+```bash
+gobbonet mock list
+gobbonet mock run <story-id>
+```
+
 ---
 
 ## Development conventions
@@ -312,14 +335,15 @@ directly; point it at your own relay to interpose one.
 - **Password reset** — `launch.bat reset-password` deletes `.gobbonet-secret` and re-prompts
 - **Model metadata** — written to `active-model.json` for the frontend to read
 
-### Security model
+### Security & Privacy model
 
 | Layer | Mechanism |
 |---|---|
 | **llama-server** | Bound to `127.0.0.1` — not reachable from LAN |
 | **fileserver** | Bound to `+:9066` — reachable from LAN |
-| **auth** | Password-gated login (salted SHA-256, plaintext never stored) |
+| **auth** | Password-gated login (Argon2id / salted SHA-256, plaintext never stored) |
 | **encryption** | None (HTTP only). Fine for trusted home networks, never use on public Wi-Fi |
+| **privacy & telemetry** | **STRICT ZERO TELEMETRY INVARIANT**: No usage analytics or prompt telemetry in public code. Private user profiling experiments must remain isolated in local/private development. |
 
 ### Known issues
 
@@ -382,7 +406,7 @@ This is a non-profit project by the GoblinCorps. No corporate backing, no ventur
 2. Add HTML inside the appropriate modal or view
 3. Add JavaScript functions near related code
 4. Add CSS in the `<style>` block near related rules
-5. Update `INDEX.md` with new line numbers
+5. Run `./stage-web.sh` to stage static web assets
 
 ### Adding new default characters
 

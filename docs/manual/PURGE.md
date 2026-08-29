@@ -1,5 +1,22 @@
 # Removing your GobboNet data
 
+> [!IMPORTANT]
+> **Three levels of reset — pick the lightest one that fixes your problem:**
+>
+> | Level | What It Does | Keeps Models? | Keeps Chats? |
+> |---|---|---|---|
+> | 🟢 **Soft** | Reset settings via UI | ✅ Yes | ✅ Yes |
+> | 🟡 **Medium** | Delete password + cache | ✅ Yes | ⚠️ Export first |
+> | 🔴 **Nuclear** | Delete everything | ❌ Re-download | ❌ Gone |
+
+## Contents
+
+- [Where the data actually is](#where-the-data-actually-is)
+- [Clearing this PC](#clearing-this-pc)
+- [Clearing a phone or tablet](#clearing-a-phone-or-tablet)
+- [What cannot be cleared](#what-cannot-be-cleared)
+- [Verifying](#verifying)
+
 Conversations live in more than one place, and only some of them can be
 reached by the app. This is the complete list, what clears each, and what
 nothing can clear.
@@ -18,6 +35,17 @@ nothing can clear.
 The important one: **browser storage is keyed to the exact address you
 opened**, so `127.0.0.1:9066`, `localhost:9066`, `pcname.local:9066` and a
 LAN IP are four separate buckets. Clearing one does not touch the others.
+
+### Data Component Matrix
+
+| Component | Location | In-App Purge? | Safe to Keep? |
+|---|---|---|---|
+| Chat History | Browser Storage / `.gobbonet-state.json` | Yes | Depends |
+| Password Hash | `.gobbonet-secret` | No | Yes |
+| Character Cards | Browser Storage | Yes | Yes |
+| AI Model Files | `models/` directory | No | Yes |
+| Engine Binaries | Install folder | No | Yes |
+| UI Settings | Browser Storage | Yes | Yes |
 
 ---
 
@@ -42,6 +70,9 @@ PURGE ALL clears **this browser only**. It does not touch the server-side
 mirror or any other device.
 
 ### 2. The server-side mirror
+
+> [!CAUTION]
+> When manually deleting files, keep in mind that the `models/` folder contains multi-GB AI model files. Deleting it will require you to re-download them.
 
 Uninstalling removes `.gobbonet-state.json` and the job spool. If you are
 not uninstalling and want it gone now, stop GobboNet and delete it:

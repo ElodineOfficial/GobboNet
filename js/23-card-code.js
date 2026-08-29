@@ -227,6 +227,9 @@ function applyCardCode() {
  * line should cost you that hook, not the conversation.
  */
 function runCardHook(name, ctx) {
+  if (typeof runSkillHooks === 'function') {
+    runSkillHooks(name, ctx);
+  }
   if (!_cardHooks || !_cardHooks[name]) return undefined;
   let result;
   const list = _cardHooks[name];
@@ -264,13 +267,13 @@ function cardCodeActive() {
  * non-string return rather than letting it poison the thread.
  */
 function transformViaCardHook(name, text, extra) {
-  if (!_cardHooks || !_cardHooks[name]) return text;
-  const out = runCardHook(name, Object.assign({ text: text }, extra || {}));
-  if (out === undefined || out === null) return text;
-  if (typeof out !== 'string') {
-    console.warn('[card-code] hook "' + name + '" returned ' + typeof out +
-                 ', expected a string - ignoring it');
-    return text;
+  let out = text;
+  if (_cardHooks && _cardHooks[name]) {
+    const r = runCardHook(name, Object.assign({ text: out }, extra || {}));
+    if (typeof r === 'string') out = r;
+  }
+  if (typeof transformViaSkillHook === 'function') {
+    out = transformViaSkillHook(name, out, extra);
   }
   return out;
 }

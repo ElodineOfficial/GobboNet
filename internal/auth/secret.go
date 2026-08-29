@@ -47,6 +47,9 @@ var ErrMalformedSecret = errors.New("access_secret is neither a legacy salt:hash
 
 // NewSecret hashes a password for storage.
 func NewSecret(password string) (string, error) {
+	if len(password) > 1024 {
+		return "", errors.New("password exceeds maximum length of 1024 bytes")
+	}
 	salt := make([]byte, argonSaltLen)
 	if _, err := rand.Read(salt); err != nil {
 		return "", err
@@ -64,6 +67,9 @@ func NewSecret(password string) (string, error) {
 // needsRehash is true when the secret verified but is in the legacy format, and
 // the caller should persist NewSecret(password) to complete the migration.
 func Verify(secret, password string) (ok bool, needsRehash bool, err error) {
+	if len(password) > 1024 {
+		return false, false, nil
+	}
 	secret = strings.TrimSpace(secret)
 	if secret == "" {
 		return false, false, nil
@@ -112,11 +118,11 @@ func verifyArgon2(secret, password string) (bool, error) {
 	}
 
 	salt, err := base64.RawStdEncoding.DecodeString(parts[4])
-	if err != nil {
+	if err != nil || len(salt) == 0 {
 		return false, ErrMalformedSecret
 	}
 	want, err := base64.RawStdEncoding.DecodeString(parts[5])
-	if err != nil {
+	if err != nil || len(want) < 4 {
 		return false, ErrMalformedSecret
 	}
 

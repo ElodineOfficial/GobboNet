@@ -50,12 +50,21 @@ func (l *LoginLimiter) Allow(r *http.Request) bool {
 	b, ok := l.buckets[ip]
 	if !ok {
 		// Bound the table so a flood from spoofed or churning source addresses
-		// can't grow it without limit. Full buckets are the ones doing no harm,
-		// so they are the safe ones to forget.
+		// can't grow it without limit. A bucket idle long enough has refilled
+		// to burst, so forgetting it is equivalent to keeping it.
 		if len(l.buckets) > 4096 {
+			idle := time.Duration(l.burst/l.refill) * time.Second
 			for k, v := range l.buckets {
-				if v.tokens >= l.burst {
+				if v.tokens >= l.burst || now.Sub(v.last) >= idle {
 					delete(l.buckets, k)
+				}
+			}
+			if len(l.buckets) > 4096 {
+				for k := range l.buckets {
+					delete(l.buckets, k)
+					if len(l.buckets) <= 2048 {
+						break
+					}
 				}
 			}
 		}

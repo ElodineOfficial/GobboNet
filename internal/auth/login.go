@@ -10,7 +10,7 @@ package auth
 func LoginPage(failed bool) string {
 	errBlock := ""
 	if failed {
-		errBlock = `<p class="err">Wrong password. Try again.</p>`
+		errBlock = `<p class="err" role="alert">Wrong password. Try again.</p>`
 	}
 	return `<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8">
@@ -38,8 +38,8 @@ func LoginPage(failed bool) string {
   <p class="sub">This server is password-protected. Sign in to continue.</p>
   <label for="pw">Password</label>
   <input type="password" id="pw" name="password" autofocus autocomplete="current-password">
-  <button type="submit">Sign in</button>
   ` + errBlock + `
+  <button type="submit">Sign in</button>
   <p class="note">This connection is over your local network in plain text
   (not encrypted). It's fine for a home network you trust. Avoid using it on
   shared or public Wi-Fi, and don't reuse a password that matters elsewhere.</p>

@@ -63,6 +63,13 @@ function createSched() {
   document.getElementById('sched-footer').style.display = 'none';
 }
 
+function subscribeToContributorStandup() {
+  createSched();
+  document.getElementById('sched-time').value = '09:00';
+  document.getElementById('sched-recurring').value = 'daily';
+  document.getElementById('sched-prompt').value = "Good morning! Let's run our daily GobboNet engineering standup:\n1. Audit active branch state and diffs against single-file invariants.\n2. Review any open contributor backlog items.\n3. Outline our top 2 high-signal coding goals for today.";
+}
+
 function editSchedItem(id) {
   const s = state.schedules.find(x => x.id === id);
   if (!s) return;

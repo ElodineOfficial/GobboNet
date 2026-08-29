@@ -61,6 +61,8 @@ func newTestServer(t *testing.T) (*Server, config.Config) {
 	cfg.WebRoot = webRoot
 	cfg.DataDir = dataDir
 	cfg.ModelDir = filepath.Join(dir, "models")
+	cfg.SkillsDir = filepath.Join(dir, "skills")
+	cfg.StoriesDir = filepath.Join(dir, "stories")
 	cfg.LLMURL = "http://127.0.0.1:1" // nothing listens; proxy tests expect 502
 	cfg.SearchURL = "http://127.0.0.1:1"
 	cfg.EmbedURL = "http://127.0.0.1:1"
@@ -1213,3 +1215,121 @@ func TestSearchHealthReportsDisabled(t *testing.T) {
 		t.Errorf("GET /search/health with search_url empty = %d, want 502", rec.Code)
 	}
 }
+
+// --- Skills ----------------------------------------------------------------
+
+func TestSkillsRoutesConformance(t *testing.T) {
+	srv, cfg := newTestServer(t)
+	defer srv.Shutdown()
+
+	// Initial empty list
+	rec := do(t, srv, http.MethodGet, "/skills", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /skills = %d, want 200", rec.Code)
+	}
+	resp := decode(t, rec)
+	skillsList, ok := resp["skills"].([]any)
+	if !ok || len(skillsList) != 0 {
+		t.Errorf("expected empty skills array, got %v", resp["skills"])
+	}
+
+	// Create skill via PUT /skills/test-skill
+	skillMarkdown := "---\nname: test-skill\nversion: 1.0.0\ndescription: Test skill\nscope: global\ntags: [unit, test]\n---\n# Test\n## System Prompt\nYou are a helpful test skill.\n"
+	putRec := do(t, srv, http.MethodPut, "/skills/test-skill", strings.NewReader(fmt.Sprintf(`{"raw_markdown": %q}`, skillMarkdown)))
+	if putRec.Code != http.StatusOK {
+		t.Fatalf("PUT /skills/test-skill = %d, want 200 (body: %s)", putRec.Code, putRec.Body.String())
+	}
+	created := decode(t, putRec)
+	if created["name"] != "test-skill" || created["version"] != "1.0.0" {
+		t.Errorf("unexpected created skill payload: %+v", created)
+	}
+
+	// GET /skills should now list the skill
+	rec = do(t, srv, http.MethodGet, "/skills", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /skills = %d, want 200", rec.Code)
+	}
+	resp = decode(t, rec)
+	skillsList = resp["skills"].([]any)
+	if len(skillsList) != 1 {
+		t.Fatalf("expected 1 skill in list, got %d", len(skillsList))
+	}
+
+	// GET /skills/test-skill should return full detail
+	rec = do(t, srv, http.MethodGet, "/skills/test-skill", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /skills/test-skill = %d, want 200", rec.Code)
+	}
+	skillDetail := decode(t, rec)
+	if skillDetail["name"] != "test-skill" || skillDetail["system_prompt"] != "You are a helpful test skill." {
+		t.Errorf("unexpected skill detail: %+v", skillDetail)
+	}
+
+	// Check file actually exists in cfg.SkillsDir
+	onDisk, err := os.ReadFile(filepath.Join(cfg.SkillsDir, "test-skill", "SKILL.md"))
+	if err != nil {
+		t.Fatalf("SKILL.md missing from disk: %v", err)
+	}
+	if string(onDisk) != skillMarkdown {
+		t.Errorf("content on disk did not match submitted markdown")
+	}
+}
+
+// --- Mocking & Stories -----------------------------------------------------
+
+func TestMockRoutesConformance(t *testing.T) {
+	srv, cfg := newTestServer(t)
+	defer srv.Shutdown()
+
+	// Initial empty list
+	rec := do(t, srv, http.MethodGet, "/mock/stories", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /mock/stories = %d, want 200", rec.Code)
+	}
+	resp := decode(t, rec)
+	storiesList, ok := resp["stories"].([]any)
+	if !ok || len(storiesList) != 0 {
+		t.Errorf("expected empty stories array, got %v", resp["stories"])
+	}
+
+	// Write a test story to disk
+	storyMarkdown := "---\nid: conformance-story\nname: Conformance Story\n---\n## Step 1\nTest prompt\n- TextAssertion: test\n"
+	_ = os.MkdirAll(cfg.StoriesDir, 0o755)
+	if err := os.WriteFile(filepath.Join(cfg.StoriesDir, "conformance-story.story.md"), []byte(storyMarkdown), 0o644); err != nil {
+		t.Fatalf("write story file failed: %v", err)
+	}
+
+	// GET /mock/stories should now list the story
+	rec = do(t, srv, http.MethodGet, "/mock/stories", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /mock/stories = %d, want 200", rec.Code)
+	}
+	resp = decode(t, rec)
+	storiesList = resp["stories"].([]any)
+	if len(storiesList) != 1 {
+		t.Fatalf("expected 1 story in list, got %d", len(storiesList))
+	}
+
+	// GET /mock/stories/conformance-story
+	rec = do(t, srv, http.MethodGet, "/mock/stories/conformance-story", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /mock/stories/conformance-story = %d, want 200", rec.Code)
+	}
+	storyDetail := decode(t, rec)
+	if storyDetail["id"] != "conformance-story" || storyDetail["name"] != "Conformance Story" {
+		t.Errorf("unexpected story detail: %+v", storyDetail)
+	}
+
+	// POST /mock/replay with raw markdown
+	replayReq := `{"raw_markdown": "---\nid: direct-story\nname: Direct Story\n---\n## Step 1\nDirect prompt\n"}`
+	rec = do(t, srv, http.MethodPost, "/mock/replay", strings.NewReader(replayReq))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /mock/replay = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+	runResult := decode(t, rec)
+	if runResult["run_id"] == "" || runResult["status"] == "" {
+		t.Errorf("expected valid run_id and status, got %+v", runResult)
+	}
+}
+
+

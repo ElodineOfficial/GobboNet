@@ -44,6 +44,7 @@
   // Load the active character's own code, if it has any and it is
   // switched on. Must come after state is restored and before render.
   try { applyCardCode(); } catch (e) { console.error('[card-code] boot:', e); }
+  try { if (typeof fetchSkills === 'function') fetchSkills(); } catch (e) { console.error('[skills] boot:', e); }
   applyAvatarScale(); // restore saved avatar size preference
 
   // Load default characters from JSON, then render the landing page.

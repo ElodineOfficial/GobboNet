@@ -62,6 +62,7 @@ func New(prefix, upstreamBase, apiKey string) (*Proxy, error) {
 
 	transport := &http.Transport{
 		DialContext:           (&net.Dialer{Timeout: dialTimeout, KeepAlive: 30 * time.Second}).DialContext,
+		TLSHandshakeTimeout:   10 * time.Second,
 		ResponseHeaderTimeout: responseHeaderTimeout,
 		IdleConnTimeout:       90 * time.Second,
 		// SSE is uncompressed; asking for gzip would only add work and defeat

@@ -48,25 +48,16 @@ removed — and `launch.bat` already invokes it exactly this way.
 
 ## The catalogue is generated, not copied
 
-`launch.bat` holds the model catalogue in three places: the menu `echo`
-lines (display name, size), the inline PowerShell at ~line 617 (the `$min`
-VRAM table and the recommendation ladder), and the `if "!MODEL_CHOICE!"=="N"`
-download blocks (repo, file, ctx, kv cache).
+The model catalogue is defined across `launch.bat` (menu lines and download blocks)
+and `hw-recommend.ps1` (the `$min` VRAM table and recommendation ladder).
 
-`gen-catalog.py` parses all three into `models.ini`, which NSIS reads with
+`gen-catalog.py` parses these sources into `models.ini`, which NSIS reads with
 native `ReadINIStr`. Hand-copying them into the wizard would fork the
 catalogue the first time a quant is bumped. `build-installer.sh` regenerates
 it on every build, and the generator fails loudly rather than emitting a
 catalogue with holes in it.
 
-**`models.ini` is generated — do not edit it.** Change `launch.bat`.
-
-> While writing the generator: the `$min` table in the recommendation
-> PowerShell covers models 1–10, but the `PICK_MIN` VRAM safety net in the
-> batch ladder only sets 1–8. Choices 9 and 10 skip the "this wants more
-> VRAM than you have" warning. The installer uses the `$min` table, so it
-> warns on all ten — worth mentioning to Elodine as a `launch.bat` bug
-> rather than silently diverging.
+**`models.ini` is generated — do not edit it.** Change `launch.bat` and `hw-recommend.ps1`.
 
 ## Download integrity
 

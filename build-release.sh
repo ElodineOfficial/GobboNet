@@ -92,7 +92,17 @@ for target in linux/amd64 linux/arm64 windows/amd64 darwin/arm64 darwin/amd64; d
     printf '  %-28s %s\n' "$GOOS/$GOARCH" "$(du -h "$DIST/$archive" | cut -f1)"
 done
 
-(cd "$DIST" && sha256sum ./*.tar.gz ./*.zip > SHA256SUMS 2>/dev/null || true)
+(
+    cd "$DIST"
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum ./*.tar.gz ./*.zip
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 ./*.tar.gz ./*.zip
+    else
+        echo "ERROR: no SHA-256 command found" >&2
+        exit 1
+    fi
+) > "$DIST/SHA256SUMS"
 
 echo
 echo "$DIST:"

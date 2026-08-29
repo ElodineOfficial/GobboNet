@@ -531,7 +531,7 @@ function getCardSamplerParams(card) {
     top_k:       card.topK !== undefined ? card.topK : 40,
     top_p:       card.topP !== undefined ? card.topP : 0.95,
     repeat_penalty:  card.repeatPenalty !== undefined ? card.repeatPenalty : 1.1,
-    repeat_last_n:   card.repeatLastN !== undefined ? card.repeatLastN : 64,
+    repeat_last_n:   (card.repeatLastN !== undefined && card.repeatLastN >= 0) ? card.repeatLastN : 64,
     // XTC — off by default
     xtc_probability: card.xtcProbability !== undefined ? card.xtcProbability : 0,
     xtc_threshold:   card.xtcThreshold !== undefined ? card.xtcThreshold : 0.1,
@@ -540,7 +540,7 @@ function getCardSamplerParams(card) {
     dry_multiplier:     card.dryMultiplier !== undefined ? card.dryMultiplier : 0,
     dry_base:           card.dryBase !== undefined ? card.dryBase : 1.75,
     dry_allowed_length: card.dryAllowedLength !== undefined ? card.dryAllowedLength : 2,
-    dry_penalty_last_n: -1
+    dry_penalty_last_n: (card.dryPenaltyLastN !== undefined && card.dryPenaltyLastN >= 0) ? card.dryPenaltyLastN : 0
   };
 }
 

@@ -26,8 +26,8 @@
 
 | Mode | Trigger | Response |
 |---|---|---|
-| **Local** | `server_exe` is set in config + file exists + `model_dir` is a directory | `{"status":"ok","pid":<go-pid>,"hotswap":true,"mode":"local","upstream":"http://127.0.0.1:11434"}` |
-| **Remote** | `server_exe` is empty or file not found | `{"status":"ok","pid":<go-pid>,"hotswap":false,"mode":"remote","upstream":"http://192.168.1.100:8080"}` |
+| **Local** | `server_exe` is set in config and exists on disk | `{"status":"ok","pid":<go-pid>,"hotswap":true,"mode":"local","upstream":"http://127.0.0.1:11437/v1"}` |
+| **Remote** | `server_exe` is empty (`""`) | `{"status":"ok","pid":<go-pid>,"hotswap":false,"mode":"remote","upstream":"http://192.168.1.100:11437/v1"}` |
 
 The `pid` field is **always present** — it's the Go server's own PID (useful for log correlation, not for the client). The `mode` and `hotswap` fields tell the client what the Go server is capable of. The `upstream` field shows where the Go server is proxying requests to.
 
@@ -273,9 +273,9 @@ lives in a `perf.toml` beside `config.toml` instead of upstream's
 
 #### Precondition: Write a conformance test suite
 
-**Status: DO FIRST — budget 1 week.** Write a pytest + httpx suite parameterized on `BASE_URL`, run it against the PowerShell server to capture golden responses. Then Go is done when the suite is green.
+**Status: COMPLETE.** Implemented in Go test suite (`internal/server/conformance_test.go`), executed with `go test -race ./...` in CI.
 
-This prevents the exact `/state/info` regression described above: the wildcard route swallowed it, the client parsed the body fine, and boot conflict detection silently never fired. Prose can't catch that a second time. The suite must assert on:
+This prevents the exact `/state/info` regression described above: the wildcard route swallowed it, the client parsed the body fine, and boot conflict detection silently never fired. Prose can't catch that a second time. The suite asserts on:
 - Field names (`mtime`, `size`) on all `/state*` responses
 - `X-State-Mtime` header on all `/state*` responses
 - 405 on `POST /state/info`

@@ -51,8 +51,11 @@
         <button class="btn btn-block ext-btn" onclick="openExtensions()" id="ext-btn" title="Custom stylesheets and JS extensions">// MODS <span id="ext-status-dot"></span></button>
         <button class="btn btn-block" onclick="openDataManager()" id="data-btn" title="Export, import, and purge your data">// DATA</button>
       </div>
-      <div class="sidebar-footer-btns">
+      <div class="sidebar-footer-btns" style="margin-bottom:6px;">
+        <button class="btn btn-block" onclick="openSkillsModal()" id="skills-btn" title="Inspect, enable, and edit skills">// SKILLS <span id="skills-count"></span></button>
         <button class="btn btn-block" onclick="openScheduler()" id="sched-btn">// SCHED <span id="sched-count"></span></button>
+      </div>
+      <div class="sidebar-footer-btns">
         <button class="btn btn-block" onclick="openAbout()" title="About Gobbonet">// ABOUT</button>
       </div>
     </div>
@@ -931,6 +934,30 @@ gobbo.every(5, async () =&gt; {
     </div>
   </div>
 
+<!-- SKILLS MODAL -->
+  <div class="modal-backdrop" id="skills-modal" onclick="if(event.target===this)closeSkillsModal()">
+    <div class="modal modal-lg" style="max-width:880px;width:95vw;height:85vh;display:flex;flex-direction:column;">
+      <div class="modal-header" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+        <h2 style="margin:0;font-size:18px;letter-spacing:1px;">&#9874; SKILLS &amp; EXTENSIBILITY</h2>
+        <button class="btn btn-sm" onclick="createNewSkill()">+ NEW SKILL</button>
+      </div>
+      <div style="display:flex;flex:1;gap:16px;min-height:0;">
+        <!-- Left column: Skills list -->
+        <div style="width:280px;display:flex;flex-direction:column;border-right:1px solid rgba(255,255,255,0.08);padding-right:12px;overflow-y:auto;" id="skills-list">
+          <!-- Populated by renderSkillsList() -->
+        </div>
+        <!-- Right column: Skill Editor / Detail -->
+        <div style="flex:1;display:flex;flex-direction:column;min-height:0;" id="skills-detail">
+          <!-- Populated by selectSkill() -->
+        </div>
+      </div>
+      <div class="modal-actions" style="margin-top:12px;display:flex;justify-content:space-between;align-items:center;">
+        <span id="skills-status-msg" style="font-size:12px;color:rgba(255,255,255,0.5);"></span>
+        <button class="btn btn-fill" onclick="closeSkillsModal()">DONE</button>
+      </div>
+    </div>
+  </div>
+
 <script src="js/01-config.js"></script>
 <script src="js/02-model.js"></script>
 <script src="js/03-generation.js"></script>
@@ -954,6 +981,7 @@ gobbo.every(5, async () =&gt; {
 <script src="js/21-data.js"></script>
 <script src="js/22-scheduler.js"></script>
 <script src="js/23-card-code.js"></script>
+<script src="js/25-skills.js"></script>
 <script src="js/24-boot.js"></script>
 </body>
 </html>

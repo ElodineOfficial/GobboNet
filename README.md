@@ -1,8 +1,30 @@
-# GobboNet — Your Own Private AI Front End, Now With An Easily Downloaded .exe
+# GobboNet — Your Own Private AI Front End
 
 GobboNet lets you run an AI chatbot **on your own computer**, with no accounts, no monthly fees, and nothing sent to the internet. The AI lives on your machine. When you talk to it, your words never leave your home.
 
 This guide assumes you've never set up anything like this before. Take it one step at a time and you'll be chatting in about 20–30 minutes (most of that is just waiting for files to download).
+
+**Cross-Platform Support:** Native single-binary Go server and standalone distributions are available for **Linux (Ubuntu/Debian, Fedora, Arch, NixOS)**, **macOS (Apple Silicon & Intel)**, and **Windows (installer, portable, or PowerShell launcher)**. Thank you to everyone testing and reporting!
+
+## Contents
+
+- [Working models](#working-models)
+- [What you're actually setting up](#what-youre-actually-setting-up)
+- [What you need before you start](#what-you-need-before-you-start)
+- [Step 1 — Install it](#step-1--install-it)
+- [Alternative Download Method](#alternative-download-method-step-1--get-the-files)
+- [Nix / NixOS Quickstart](#nix--nixos-quickstart)
+- [Step 2 — Run the launcher](#step-2--run-the-launcher)
+- [Step 3 (optional) — Use it from your phone](#step-3-optional--use-it-from-your-phone)
+- [Using the chat](#using-the-chat)
+- [Keeping it private and safe](#keeping-it-private-and-safe)
+- [Shutting it down](#shutting-it-down)
+- [Troubleshooting](#troubleshooting)
+- [Known bugs](#known-bugs)
+- [Upcoming changes](#upcoming-changes)
+- [Quick reference](#quick-reference)
+- [Full feature list](#full-feature-list)
+- [How I handle PRs](#how-i-handle-prs)
 
 ---
 
@@ -22,7 +44,7 @@ This guide assumes you've never set up anything like this before. Take it one st
 
 ## What you're actually setting up
 
-- There's a small **launcher** (`launch.exe`) that starts everything for you.
+- There's a small **launcher** (`launch.exe` on Windows or `./gobbonet` on Linux/macOS) that starts everything for you.
 - There's the **AI engine** — the program that does the actual thinking. It's about 300 MB and downloads once.
 - There's the **AI model** — this is the "brain." It's a big file (usually 4–16 GB). You pick one from a menu and it downloads once.
 - There's a second, much smaller **retrieval model** (~146 MB) that also downloads once. It's what lets a character pull the relevant parts of its own notes and lore into a conversation instead of re-reading all of it every turn.
@@ -30,11 +52,23 @@ This guide assumes you've never set up anything like this before. Take it one st
 
 You download the engine and a model **one time**. After that, everything runs offline, forever.
 
+```mermaid
+%%{init: {'theme': 'dark'}}%%
+graph TD
+    Launcher["Launcher"] --> Engine["Engine"]
+    Launcher --> Server["Server"]
+    Engine --> Model["Model"]
+    Engine --> RetrievalModel["Retrieval Model"]
+    Server --> ChatHTML["Chat HTML"]
+    ChatHTML --> BrowserUI["Browser UI"]
+    Server -.-> Phone["Phone (optional, same Wi-Fi)"]
+```
+
 ---
 
 ## What you need before you start
 
-- **A Windows 10 or Windows 11 PC.** (This doesn't work on Mac or Linux as written.)
+- **A Windows 10/11, Linux, or macOS computer.** (Runs natively as a single binary on Linux/macOS and as an installer/launcher on Windows.)
 - **A graphics card (GPU) helps a lot.** The AI runs *much* faster on a graphics card. It will still run without a good one, just slowly. The setup checks your hardware and recommends a model that fits.
 - **Free hard-drive space.** At least 10–20 GB free, ideally more. The AI models are large.
 - **An internet connection for the first setup only.** After the one-time downloads, you can unplug from the internet and it still works.
@@ -45,9 +79,24 @@ You do **not** need to be technical, create any account, enter a credit card, or
 
 ## Step 1 — Install it
 
+| Platform | Recommended Method | How to Run |
+|:---|:---|:---|
+| 🪟 **Windows** | One-Click Installer | Download [`GobboNetSetup.exe`](https://github.com/ElodineOfficial/gobbonet/releases) (or ZIP below) |
+| ❄️ **Nix / NixOS** | **Instant 0-Install Run** | `nix run github:sam-henry-dev/GobboNet` |
+| 🐧 **Linux** | Native Single Binary | Download `./gobbonet` → run `./gobbonet serve` |
+| 🍎 **macOS** | Native Single Binary | Download `./gobbonet` → run `./gobbonet serve` |
+
+### Windows Installer Setup
+
 Go to the [Releases page](https://github.com/ElodineOfficial/gobbonet/releases) and download **`GobboNetSetup.exe`**. It's small (660 KB), it installs just for you, and it doesn't need admin rights.
 
 Double-click it. Windows will probably say **"Windows protected your PC"** — click **More info**, then **Run anyway**. That warning appears because the installer isn't signed with a paid certificate, not because anything is wrong with it.
+
+> [!TIP]
+> The SmartScreen warning looks scary but is completely normal for unsigned software.
+> Click **"More info"** first — a "Run anyway" button appears. That warning shows up
+> because GobboNet doesn't pay for a code-signing certificate, not because there's
+> anything wrong with it.
 
 When it finishes you'll have GobboNet in your Start Menu and on your desktop, along with an uninstaller that asks before it goes anywhere near your downloaded models.
 
@@ -80,6 +129,22 @@ Gobbonet\
 A `models` folder and a few small bookkeeping files (`models-list.json`, `active-model.json`) get created for you on the first run — that's normal, you don't need to make them yourself.
 
 Going this route, run `launch.bat` and `setup-lan.bat` wherever the rest of this guide says `launch.exe` and **LAN Setup**. Everything else works the same.
+
+---
+
+## Nix / NixOS Quickstart
+
+For Linux and macOS users with [Nix](https://nixos.org/), you can launch GobboNet immediately with zero installation:
+
+```bash
+# Run the standalone Go server directly
+nix run github:sam-henry-dev/GobboNet
+
+# Or run with bundled llama.cpp engine
+nix run github:sam-henry-dev/GobboNet#gobbonet-with-llama
+```
+
+For full declarative NixOS systemd home server deployment, see [`docs/NIX_HOME_SERVER.md`](docs/NIX_HOME_SERVER.md).
 
 ---
 
@@ -132,6 +197,15 @@ One option is marked **`[ RECOMMENDED FOR YOUR PC ]`** — that's the best fit f
 
 If a model needs more graphics memory than you have, it warns you and asks if you want it anyway. When in doubt, pick the recommended one.
 
+> [!TIP]
+> | VRAM | Recommended Model | Download Size | Expected Speed |
+> |---|---|---|---|
+> | 4-6GB | 8B Q4 | ~5GB | Fast |
+> | 8GB | 8B Q6 | ~7GB | Fast |
+> | 10-12GB | 14B Q5 | ~10GB | Medium |
+> | 16GB+ | 26B Q4 | ~16GB | Medium |
+> | 24GB+ | 33B Q4 | ~20GB | Medium |
+
 ### It will grab one more small download
 
 Once your model is sorted, the launcher fetches the retrieval model (~146 MB, one time). This is what lets a character pull the relevant pieces of its lorebook into a conversation instead of trying to hold everything at once.
@@ -141,6 +215,8 @@ It runs on your processor rather than your graphics card, so it won't take memor
 ### That's it
 
 Once the model loads, your **web browser opens automatically** to the chat screen. You can start typing.
+
+![GobboNet chat interface](docs/screenshots/live_web_ui.png)
 
 Every time you want to use it in the future, you just open GobboNet again. After the first setup, it starts in well under a minute and **never needs the internet**.
 
@@ -154,7 +230,7 @@ You can chat from your phone or tablet **as long as it's on the same Wi-Fi** as 
 2. Look at the launcher window. When it starts, it prints the exact web address to use on your phone, something like:
 
    ```
-   On your phone: http://your-pc-name.local:8080
+   On your phone: http://your-pc-name.local:9066
    ```
 
 3. On your phone's browser, type that address. Enter the password you chose. Done.
@@ -166,6 +242,8 @@ You can chat from your phone or tablet **as long as it's on the same Wi-Fi** as 
 ## Using the chat
 
 Gobbonet is more than a plain chatbox. Here are the parts you'll actually use, in plain terms:
+
+![Character and lorebook workbench](docs/screenshots/live_workbench_ui.png)
 
 - **Just type and chat.** Type in the box at the bottom, press Enter. That's the basics.
 - **Characters.** It comes with a few built-in personalities (a terse coder, a wordy lore-keeper, a riddle-speaking oracle). You can switch between them or make your own — give it a name, a description, and a style, and the AI will play that role. You can also **bring in character cards you already have, and send yours back out** (the common `.png` cards used by other AI chat apps), so your existing collection works here too. Most cards carry over cleanly, though a few may need small tweaks after importing.
@@ -273,9 +351,9 @@ A handful of models are built on the Tekken tokenizer, and those don't run corre
 
 Same honesty policy as the bug list: here's what's actually queued, and roughly when we expect it to land. No dates promised — this is a list of intent, not a contract.
 
-Between 1.5.8 and 1.6
+Between 1.5.8 and 1.6+
+- Cross-platform server — Native Go server (`./gobbonet`) with full Linux (Ubuntu/Debian, Fedora, Arch, NixOS), macOS, and Windows parity.
 - PDF handling — attach a PDF and have the AI actually read it, rather than being limited to plain text.
-- Mac / Linux / Android port — GobboNet is Windows-only today. This is the work that changes that.
 - Model list moves to a GoblinCorps web call — the download menu currently ships with a fixed list baked into the files. Pulling it from our site instead means new and better models can show up in your menu without you reinstalling anything. We’ll be using an ‘add model’ button in the config menu that’ll let you download more models directly from huggingface.
 
 Between 1.6 and v2.0
@@ -319,7 +397,7 @@ Everything GobboNet can do, grouped so it's easy to scan.
 - Copy button on code blocks — grab code in one tap.
 - Token counter — see how much of the AI's "memory" you're using.
 - Chain-of-thought (reasoning) view — on models that support it, you can watch the AI's step-by-step thinking.
-- Output token limitations + smart cutoff cutoff feature
+- Output token limitations + smart cutoff feature
 - Auto-stop on stuck reasoning — if the AI's thinking gets caught in an endless loop, it's cut off automatically instead of running forever.
 
 **Conversations & organizing**

@@ -174,11 +174,14 @@ func WriteDefault(path string) error {
 
 // fieldByTOMLKey finds the struct field carrying a given toml tag.
 func fieldByTOMLKey(c *Config, key string) (reflect.Value, bool) {
+	if key == "" || key == "-" {
+		return reflect.Value{}, false
+	}
 	v := reflect.ValueOf(c).Elem()
 	t := v.Type()
 	for i := 0; i < t.NumField(); i++ {
 		tag := t.Field(i).Tag.Get("toml")
-		if tag == key {
+		if tag != "" && tag != "-" && tag == key {
 			return v.Field(i), true
 		}
 	}

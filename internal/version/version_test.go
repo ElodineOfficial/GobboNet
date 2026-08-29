@@ -1,11 +1,13 @@
 package version
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 )
 
 // upstreamTagRe is the release-tag shape upstream uses: v1.5.8, v1.5, v1.0.
@@ -76,7 +78,9 @@ func versionFile(t *testing.T) string {
 // (1.3-go-ea58be5 and friends) out of the answer -- they carry a sha and would
 // make this compare a build identity against a release number.
 func nearestUpstreamTag() (string, error) {
-	out, err := exec.Command("git", "describe", "--tags", "--abbrev=0",
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "git", "describe", "--tags", "--abbrev=0",
 		"--match", "v[0-9]*", "HEAD").Output()
 	if err != nil {
 		return "", err

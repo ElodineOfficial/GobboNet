@@ -1590,7 +1590,7 @@ if not "!MODEL_CHAT_TEMPLATE_FILE!"=="" (
 :: new model.
 > "!LAUNCH_SCRIPT!" (
     echo @echo off
-    echo "!SERVER_EXE!" --model "!GGUF_PATH!" --port !SERVER_PORT! --host 127.0.0.1 --ctx-size !CTX_SIZE! --n-gpu-layers !GPU_LAYERS! --cache-type-k !KV_CACHE_TYPE! --cache-type-v !KV_CACHE_TYPE! --parallel 1 !JINJA_FLAG! !CHAT_TEMPLATE_FLAG! --reasoning-format auto ^> "!LOG_FILE!" 2^>^&1
+    echo "!SERVER_EXE!" --model "!GGUF_PATH!" --port !SERVER_PORT! --host 127.0.0.1 --ctx-size !CTX_SIZE! --n-gpu-layers !GPU_LAYERS! --cache-type-k !KV_CACHE_TYPE! --cache-type-v !KV_CACHE_TYPE! --parallel 1 -lv 4 !JINJA_FLAG! !CHAT_TEMPLATE_FLAG! --reasoning-format auto ^> "!LOG_FILE!" 2^>^&1
 )
 
 start /min "llama-server" "!LAUNCH_SCRIPT!"
