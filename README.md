@@ -4,7 +4,7 @@ GobboNet lets you run an AI chatbot **on your own computer**, with no accounts, 
 
 This guide assumes you've never set up anything like this before. Take it one step at a time and you'll be chatting in about 20–30 minutes (most of that is just waiting for files to download).
 
-**Note: 8/23/26:** Temporary Linux deb is available in the release files. Out this week for real life. Fedora support, Mac support should all be wrapped up before 9/7/26. Thank you to the amazing folks both testing and sending in reports. You've been a blessing to getting quality fixes implemented quickly! See ya' in a few days!
+**Note: 8/30/26:** Am back, updates starting again beep beep
 
 ---
 
