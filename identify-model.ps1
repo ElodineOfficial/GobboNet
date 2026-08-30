@@ -243,30 +243,14 @@ function Get-ModelInfo {
         # --- HARD OVERRIDES ---
         # 1. Mistral variants (Cydonia, Nemo, Lotus)
         #
-        # Mistral Small 24B and its mergekit merges (Asmodeus, Cydonia, ...) ship
-        # an embedded v7-tekken template, but on mergekit children the embedded
-        # template can be malformed (mergekit copies tokenizer_config from one
-        # parent at random). The reliable path is llama.cpp's built-in C++
-        # Mistral v7 template -- same pattern Nemo uses with mistral-v3-tekken
-        # below.
-        #
-        # IMPORTANT: we use the name "mistral-v7" here, NOT "mistral-v7-tekken".
-        # The "-tekken" v7 variant was added to llama.cpp's built-in name table
-        # much later than the v3 variants (which landed in PR #10572). On builds
-        # that predate it (e.g. b8941, the one this project ships), llama-server
-        # does NOT recognise "mistral-v7-tekken" as a built-in name. Because the
-        # string still begins with "mistral", llama-server's content-detector
-        # treats the literal text "mistral-v7-tekken" as the template body, which
-        # renders to that constant ~8-token string for EVERY request -- the model
-        # then never sees the conversation and just talks about "tekken". Using
-        # "mistral-v7" resolves to the real C++ template and renders correctly.
-        # The only difference from true tekken is a trailing space after [INST] /
-        # [SYSTEM_PROMPT]; harmless for inference. If you upgrade to a llama.cpp
-        # build whose built-in table includes "mistral-v7-tekken", you can switch
-        # this back for byte-exact tekken spacing.
+        # Mistral Small 24B and modern merges (Cydonia v4+, Asmodeus):
+        # Modern fine-tunes ship clean embedded Jinja templates. Because GobboNet's
+        # frontend (js/07-prompt.js) already normalizes messages into single leading
+        # system prompts, embedded Jinja evaluates with 100% fidelity without hitting
+        # the C++ mistral-v7 delimiter mismatch (which causes Mistral base completion in French).
         if ($name -match 'cydonia|asmodeus|mistral[-_.]?small') {
             $rec.family = 'mistral'; $rec.id = 'mistral-small'
-            $rec.useJinja = 0; $rec.chatTemplate = 'mistral-v7'
+            $rec.useJinja = 1; $rec.chatTemplate = ''
             return $rec
         }
         if ($name -match 'nemo|violet[-_]?lotus|rocinante|magnum') {

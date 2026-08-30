@@ -1287,9 +1287,11 @@ function Build-LaunchScript {
         }
         if (($nameForMatch -match 'cydonia|asmodeus|mistral[-_.]?small') -or
             ($fileForMatch -match 'cydonia|asmodeus|mistral[-_.]?small')) {
-            if ($useJinja -or -not $chatTemplate) {
-                $useJinja = $false
-                if (-not $chatTemplate) { $chatTemplate = 'mistral-v7' }
+            # Modern Cydonia and Mistral Small merges ship valid embedded templates
+            # and require Jinja to avoid C++ delimiter mismatch (speaking French).
+            if (-not $useJinja -or $chatTemplate) {
+                $useJinja = $true
+                $chatTemplate = ''
             }
         }
     }
