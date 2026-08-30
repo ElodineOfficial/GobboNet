@@ -194,6 +194,19 @@ function modelDisplayName(filename, detected) {
 
 /* ================================================================
    MODELS LIST — fetch models-list.json written by launch.bat
+
+   The three fallback paths below (file:// mode, empty list, fetch
+   failure) build their <option> by string interpolation, so every
+   value in them is escaped. The happy path a few lines down does not
+   need it: it uses createElement + textContent, which cannot produce
+   markup at all.
+
+   The values are not user-typed, but they are not ours either.
+   activeModel is populated from active-model.json, which launch.bat
+   and identify-model.ps1 write out of GGUF header metadata -- a
+   filename and a name field that came from whoever built the model.
+   That is the same trust boundary the PowerShell side already treats
+   as hostile, and it ends here, at the last hop before innerHTML.
 ================================================================ */
 async function loadModelsList() {
   const sel = document.getElementById('header-model-select');
@@ -201,7 +214,7 @@ async function loadModelsList() {
 
   if (!IS_SERVED) {
     // Running as file:// — can't fetch. Just show active model name.
-    sel.innerHTML = `<option value="${activeModel.id || 'custom'}">${activeModel.name}</option>`;
+    sel.innerHTML = `<option value="${escapeHtml(activeModel.id || 'custom')}">${escapeHtml(activeModel.name)}</option>`;
     return;
   }
 
@@ -213,7 +226,7 @@ async function loadModelsList() {
     sel.innerHTML = '';
     const models = data.models || [];
     if (models.length === 0) {
-      sel.innerHTML = `<option value="custom">${activeModel.name || 'Unknown'}</option>`;
+      sel.innerHTML = `<option value="custom">${escapeHtml(activeModel.name || 'Unknown')}</option>`;
       return;
     }
 
@@ -239,7 +252,7 @@ async function loadModelsList() {
     if (!_currentModelFile) _currentModelFile = sel.value || null;
   } catch (e) {
     // Fallback — just show what we already know is loaded
-    sel.innerHTML = `<option value="${activeModel.id || 'custom'}">${activeModel.name || 'Model'}</option>`;
+    sel.innerHTML = `<option value="${escapeHtml(activeModel.id || 'custom')}">${escapeHtml(activeModel.name || 'Model')}</option>`;
   }
 }
 
@@ -332,6 +345,43 @@ async function onHeaderModelChange(sel) {
     _swapInFlight = false;
     sel.disabled = false;
     if (wrap) wrap.classList.remove('swapping');
+  }
+}
+
+/**
+ * Swap the loaded GGUF, without the header dropdown's UI bookkeeping.
+ *
+ * Same protocol onHeaderModelChange uses -- POST /swap-model, poll
+ * /swap-status, refresh active-model.json -- factored out so lore
+ * compression can borrow the server for a pass and hand it back. Throws on
+ * failure; callers decide what that means.
+ *
+ * Sets _swapInFlight for the duration so a header swap started mid-pass is
+ * rejected rather than racing us into two llama-servers fighting for a port.
+ */
+async function swapToModelFile(file) {
+  if (!IS_SERVED) throw new Error('hot-swap needs the file server');
+  if (_swapInFlight) throw new Error('a model swap is already running');
+  _swapInFlight = true;
+  try {
+    const r = await fetch('/swap-model', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ file: file })
+    });
+    if (!r.ok) {
+      let msg = 'HTTP ' + r.status;
+      try { const b = await r.json(); if (b && b.message) msg = b.message; } catch (_) {}
+      throw new Error(msg);
+    }
+    const result = await pollSwapStatus(180000);
+    if (!result || result.phase !== 'ready') {
+      throw new Error((result && result.message) || 'swap did not complete');
+    }
+    await loadActiveModel();
+    _currentModelFile = file;
+  } finally {
+    _swapInFlight = false;
   }
 }
 
@@ -610,5 +660,381 @@ async function _restartModelForPerf() {
     _perfStatus('Restart failed: ' + e.message, 'error');
   } finally {
     _swapInFlight = false;
+  }
+}
+
+/* ================================================================
+   MODEL CATALOGUE — download a new model from inside the app
+
+   Three routes on the Go server, all behind the same auth as
+   everything else:
+
+     GET  /catalog.json     the download list, parsed server-side
+     POST /model-download   start one   (body: {index})
+     GET  /model-download   poll progress
+
+   The browser never talks to HuggingFace. It cannot write a 12 GB
+   file into the models folder, a cross-origin fetch would need CORS
+   on someone else's host, and routing through Go keeps the
+   third-party origin out of the page.
+
+   We submit an *index*, never a URL or a filename. The server
+   resolves it against the catalogue, so nothing the page sends can
+   name an arbitrary thing to fetch or an arbitrary path to write.
+
+   Progress is polled, not streamed. The first-run wizard polls
+   /api/download every 700ms and it works; the same shape here is
+   proven and boring. No SSE, no websocket.
+
+   Nothing invalidates the installed-model list, because nothing has
+   to: the server's directory scan keys on the models folder's mtime
+   and entry count, and a finished download changes both when it
+   renames the .part file. The header dropdown picks it up on its own.
+================================================================ */
+
+let _catalogPoll = null;
+let _catalogDownloadedFile = null;
+
+/* TEMPORARY HOLD — the download/swap path is known-bugged and is being fixed
+   in a later patch. Until then the button is shown disabled and labelled as
+   not working, rather than left live to fail in the user's hands.
+
+   This is deliberately ONE flag and nothing else. The modal, the catalogue
+   fetch, the progress polling and the swap are all left exactly as they are,
+   so the fix patch flips this to `true` and the feature comes back whole. Do
+   not start deleting the code path it gates.
+
+   `let` rather than `const` so the test suite can drive both states and prove
+   the flip is all that is needed. */
+let MODEL_CATALOG_ENABLED = false;
+
+function openModelCatalog() {
+  // The button that calls this is disabled while the hold flag is off, so
+  // this is belt and braces -- but a dead route that silently half-works is
+  // worse than one that does not open at all.
+  if (!MODEL_CATALOG_ENABLED) return;
+  const modal = document.getElementById('model-catalog-modal');
+  if (!modal) return;
+  modal.classList.add('open');
+  document.getElementById('model-catalog-progress').style.display = 'none';
+  document.getElementById('model-catalog-swap-row').style.display = 'none';
+  _catalogDownloadedFile = null;
+  loadModelCatalog();
+  // A download may already be running -- from another tab, or from before
+  // this modal was closed. Show it rather than presenting an idle list.
+  pollModelDownload({ silent: true });
+}
+
+function closeModelCatalog() {
+  const modal = document.getElementById('model-catalog-modal');
+  if (modal) modal.classList.remove('open');
+  // Stop polling, but do NOT cancel the download: it lives on the server and
+  // survives the modal, the tab, and a reload. Reopening picks it back up.
+  if (_catalogPoll) { clearInterval(_catalogPoll); _catalogPoll = null; }
+  // Let the server forget a download that has already finished, so the next
+  // open shows the list rather than the last transfer's result. A running one
+  // is refused server-side and keeps going, which is the point.
+  if (IS_SERVED) {
+    fetch('/model-download', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clear: true })
+    }).catch(() => {});
+  }
+}
+
+async function loadModelCatalog() {
+  const box = document.getElementById('model-catalog-list');
+  const freeEl = document.getElementById('model-catalog-free');
+  if (!box) return;
+  box.textContent = 'Loading the catalogue...';
+  freeEl.textContent = '';
+
+  try {
+    /* refresh=1 says "the user asked for this list, go and look". Without it
+       the server answered from one resolution per process, so opening this
+       offline and reconnecting a minute later still showed the bundled list
+       until GobboNet was restarted. The server rate-limits the network hop, so
+       reopening this repeatedly does not repeatedly wait on a dead endpoint. */
+    const r = await fetch('/catalog.json?refresh=1', { cache: 'no-store' });
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}));
+      /* Say what actually went wrong. "The catalogue is not available" on its
+         own is not something anyone can act on; the notes name the step that
+         failed -- endpoint unreachable, client too old, no bundled list
+         found. */
+      box.textContent = '';
+      const head = document.createElement('div');
+      head.textContent = j.error || ('The catalogue is unavailable (HTTP ' + r.status + ').');
+      box.appendChild(head);
+      const reasons = (j.notes || []).slice();
+      if (j.detail) reasons.push(j.detail);
+      reasons.forEach(n => {
+        const li = document.createElement('div');
+        li.className = 'form-hint';
+        li.style.marginTop = '4px';
+        li.textContent = '\u2022 ' + n;
+        box.appendChild(li);
+      });
+      return;
+    }
+    const data = await r.json();
+    const models = data.models || [];
+
+    /* Say which list this is. A user staring at a stale catalogue needs to
+       know it is the shipped one rather than the live one, and it makes a bug
+       report actionable without asking them to dig through logs. */
+    const bits = [];
+    if (typeof data.freeGB === 'number' && data.freeGB > 0) {
+      bits.push('About ' + data.freeGB.toFixed(1) + ' GB free on this disk.');
+    }
+    if (data.source === 'bundled') {
+      bits.push('Showing the list that shipped with GobboNet \u2014 the online ' +
+                'catalogue could not be reached.');
+    } else if (data.source === 'cache') {
+      bits.push('Showing the last catalogue downloaded.');
+    }
+    freeEl.textContent = bits.join(' ');
+
+    box.innerHTML = '';
+    if (models.length === 0) {
+      box.textContent = 'The catalogue is empty.';
+      return;
+    }
+
+    /* createElement + textContent throughout. These values come from
+       models.ini, which is ours, but this is still the last hop before the
+       DOM and the file is user-editable on disk -- the same trust boundary
+       loadModelsList() treats as hostile a few hundred lines up. */
+    models.forEach(m => {
+      const row = document.createElement('div');
+      row.className = 'catalog-entry' + (m.installed ? ' installed' : '');
+
+      const name = document.createElement('div');
+      name.className = 'catalog-entry-name';
+      name.textContent = m.display;
+      row.appendChild(name);
+
+      const meta = document.createElement('div');
+      meta.className = 'catalog-entry-meta';
+      let desc = m.sizeGB.toFixed(1) + ' GB download';
+      if (m.minVRAM) desc += ' \u00b7 suits ' + m.minVRAM + ' GB VRAM or more';
+      if (m.ctx) desc += ' \u00b7 ' + m.ctx.toLocaleString() + ' token context';
+      meta.textContent = desc;
+      row.appendChild(meta);
+
+      const btn = document.createElement('button');
+      btn.className = 'btn btn-sm';
+      btn.type = 'button';
+      if (m.installed) {
+        btn.textContent = 'ALREADY INSTALLED';
+        btn.disabled = true;
+      } else {
+        btn.textContent = 'DOWNLOAD';
+        btn.onclick = () => startModelDownload(m.index, m.display, m.file);
+      }
+      row.appendChild(btn);
+
+      box.appendChild(row);
+    });
+  } catch (e) {
+    box.textContent = 'Could not reach the server: ' + e.message;
+  }
+}
+
+async function startModelDownload(index, display, file) {
+  const log = document.getElementById('model-catalog-log');
+  document.getElementById('model-catalog-progress').style.display = '';
+  document.getElementById('model-catalog-swap-row').style.display = 'none';
+  document.getElementById('model-catalog-dl-title').textContent = 'Downloading ' + display;
+  document.getElementById('model-catalog-bar').style.width = '0%';
+  log.textContent = 'starting...';
+  catalogNote('');
+  _catalogDownloadedFile = file;
+
+  try {
+    const r = await fetch('/model-download', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ index: index })
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      log.textContent = j.error || ('Could not start the download (HTTP ' + r.status + ').');
+      return;
+    }
+    if (j.started === false && j.status && j.status.display) {
+      // Something else is already downloading -- another tab, or a click the
+      // user forgot. Follow that instead of pretending this click started
+      // anything. The explanation goes in the note line, not the log: the log
+      // is rewritten by every poll tick and would swallow it within 700ms.
+      document.getElementById('model-catalog-dl-title').textContent =
+        'Downloading ' + j.status.display;
+      catalogNote('Only one download runs at a time, so this is the one already ' +
+                  'in progress. Your pick was not started.');
+      _catalogDownloadedFile = null;
+    }
+    if (_catalogPoll) clearInterval(_catalogPoll);
+    _catalogPoll = setInterval(pollModelDownload, 700);
+    pollModelDownload();
+  } catch (e) {
+    log.textContent = 'Could not reach the server: ' + e.message;
+  }
+}
+
+/* The note line carries anything that must outlive a poll tick. Passing an
+   empty string hides it again. */
+function catalogNote(text) {
+  const el = document.getElementById('model-catalog-note');
+  if (!el) return;
+  el.textContent = text || '';
+  el.style.display = text ? '' : 'none';
+}
+
+async function pollModelDownload(opts) {
+  const silent = opts && opts.silent;
+  const bar = document.getElementById('model-catalog-bar');
+  const log = document.getElementById('model-catalog-log');
+  if (!bar || !log) return;
+
+  let d;
+  try {
+    const r = await fetch('/model-download', { cache: 'no-store' });
+    if (!r.ok) return;
+    d = await r.json();
+  } catch (e) {
+    return; // a blip; the next tick tries again
+  }
+
+  if (d.state === 'idle') return;
+
+  /* The open-time poll only cares about a transfer still going. A finished or
+     failed one belongs to a session the user has already left: reacting to it
+     wrote into a hidden panel and kicked off a second loadModelCatalog() that
+     raced the one openModelCatalog() had just started, both writing the same
+     list into the same element. */
+  if (silent && d.state !== 'running') return;
+
+  // A download found already in flight on open: reveal the progress view.
+  if (silent) {
+    document.getElementById('model-catalog-progress').style.display = '';
+    document.getElementById('model-catalog-dl-title').textContent =
+      'Downloading ' + (d.display || 'a model');
+    if (_catalogPoll) clearInterval(_catalogPoll);
+    _catalogPoll = setInterval(pollModelDownload, 700);
+  }
+
+  const GB = 1073741824;
+  if (d.state === 'running') {
+    bar.style.width = (d.percent || 0) + '%';
+    log.textContent = (d.done / GB).toFixed(2) + ' GB of ' +
+      (d.total / GB).toFixed(2) + ' GB \u2014 ' + (d.percent || 0).toFixed(1) + '%';
+  } else if (d.state === 'done') {
+    if (_catalogPoll) { clearInterval(_catalogPoll); _catalogPoll = null; }
+    bar.style.width = '100%';
+    document.getElementById('model-catalog-dl-title').textContent = 'Downloaded';
+    log.textContent = d.message || 'Done.';
+    // The picker sees it on its own -- refresh so the user does not have to
+    // reload to find it in the header dropdown.
+    if (typeof loadModelsList === 'function') { try { loadModelsList(); } catch (e) {} }
+    loadModelCatalog();
+    // Offer the swap, do not force it: switching changes the context window
+    // mid-conversation.
+    if (_catalogDownloadedFile) {
+      document.getElementById('model-catalog-swap-row').style.display = '';
+      catalogNote('The file is in your models folder and in the header dropdown. ' +
+                  'Switching to it below loads it now, with the context size the ' +
+                  'catalogue lists for it. Restarting GobboNet also picks it up.');
+    } else {
+      catalogNote('The file is in your models folder. Pick it from the header ' +
+                  'dropdown, or restart GobboNet.');
+    }
+  } else if (d.state === 'error') {
+    if (_catalogPoll) { clearInterval(_catalogPoll); _catalogPoll = null; }
+    document.getElementById('model-catalog-dl-title').textContent = 'Download failed';
+    log.textContent = d.message || 'The download failed.';
+  }
+}
+
+async function swapToDownloadedModel() {
+  const log = document.getElementById('model-catalog-log');
+  const row = document.getElementById('model-catalog-swap-row');
+  if (!_catalogDownloadedFile) return;
+  row.style.display = 'none';
+  log.textContent = 'Switching to the new model...';
+  catalogNote('');
+  try {
+    await swapToModelFile(_catalogDownloadedFile);
+    log.textContent = 'Now running the new model.';
+    catalogNote('');
+    if (typeof loadModelsList === 'function') { try { loadModelsList(); } catch (e) {} }
+  } catch (e) {
+    /* The download itself succeeded -- say so first, because "could not
+       switch" on its own reads as though the whole thing failed. Restarting is
+       the honest fallback: it reloads the backend from config, which is
+       exactly what the swap was going to do. */
+    log.textContent = 'Could not switch: ' + e.message;
+    catalogNote('The model itself downloaded fine and is in your models folder. ' +
+                'Pick it from the header dropdown, or restart GobboNet and it ' +
+                'will be there.');
+    row.style.display = '';
+  }
+}
+
+/* Three states, applied fresh on every open of the settings panel.
+
+     held      -- MODEL_CATALOG_ENABLED is off. The button says so and does
+                  nothing. Checked FIRST: a broken feature is broken whether
+                  or not there is a server behind it, and telling a served
+                  user "this needs a server" would send them hunting a fault
+                  that is ours.
+     file://   -- no server to download with, so nothing to offer.
+     served    -- normal operation.
+
+   IS_SERVED is the same flag the rest of this file gates on. */
+function applyModelCatalogAvailability() {
+  const block = document.getElementById('add-model-block');
+  if (!block) return;
+  const btn = block.querySelector('button');
+  const note = document.getElementById('add-model-unavailable');
+
+  if (!MODEL_CATALOG_ENABLED) {
+    if (btn) {
+      btn.disabled = true;
+      btn.style.display = '';
+      btn.textContent = 'NOT WORKING YET';
+      btn.title = 'Model downloads are being repaired in a later patch.';
+    }
+    if (note) {
+      note.style.display = '';
+      note.textContent = 'Downloading from the catalogue is not working right now '
+        + 'and is being fixed in a later patch. To add a model in the meantime, '
+        + 'put the .gguf file into your models folder yourself and pick it from '
+        + 'the header dropdown.';
+    }
+    return;
+  }
+
+  if (IS_SERVED) {
+    // Restore explicitly rather than trusting the markup's initial state.
+    // This used to `return` here, so the function could only ever turn the
+    // button OFF -- which is also what makes the hold above safe to lift:
+    // flipping the flag genuinely puts everything back.
+    if (btn) {
+      btn.disabled = false;
+      btn.style.display = '';
+      btn.textContent = 'BROWSE CATALOGUE';
+      btn.title = '';
+    }
+    if (note) { note.style.display = 'none'; note.textContent = ''; }
+    return;
+  }
+
+  if (btn) btn.style.display = 'none';
+  if (note) {
+    note.style.display = '';
+    note.textContent = 'Downloading models needs the GobboNet server. ' +
+      'This page was opened directly from disk, so there is nothing running ' +
+      'to fetch the file. Start GobboNet normally to use this.';
   }
 }

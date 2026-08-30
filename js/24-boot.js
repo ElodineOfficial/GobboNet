@@ -88,11 +88,33 @@
   updateSchedCount();
   checkConnection().then(() => {
     // Re-render landing page after connection check so status pill updates.
+    // Same transient-input guard as the interval below — this one-shot is not
+    // instant (it awaits a /health fetch that can hang when llama-server is
+    // down), so a fast click on +FOLDER can land inside the pending window and
+    // get wiped when it resolves. Narrow, but the identical bug.
+    if (document.querySelector('.new-folder-input, .rename-input')) return;
     const title = document.getElementById('thread-title');
     if (title.textContent === 'GOBBONET') render();
   });
   setInterval(() => {
     checkConnection().then(() => {
+      // Yield to an in-progress sidebar edit. startNewFolder() (js/12-render.js)
+      // and the two rename paths build a REAL <input> and parent it inside
+      // #thread-list; renderSidebar() rebuilds that container wholesale from a
+      // template string (js/12-render.js:345). Re-rendering underneath the user
+      // therefore deletes the box they are typing into, mid-keystroke — nothing
+      // to do with focus or blur, it is a DOM teardown.
+      //
+      // This bites only on a clean install because the GOBBONET title check
+      // below is what gates the re-render: with no threads you never leave the
+      // landing page, so it stays true and this fires every 5s forever.
+      //
+      // The guard sits AFTER the await, not around it, on purpose: the poll
+      // itself must keep running. checkConnection() writes the header status
+      // dot and label directly (js/11-search.js:195-219), so the pill still
+      // updates live while you type. The only thing deferred is the landing
+      // page repaint, which is cosmetic and lands on the next tick.
+      if (document.querySelector('.new-folder-input, .rename-input')) return;
       const title = document.getElementById('thread-title');
       if (title.textContent === 'GOBBONET') render();
     });

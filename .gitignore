@@ -27,5 +27,49 @@ conversations/
 active-model.json
 .llama-launch.cmd
 .embed-launch.cmd
-
+# The web-UI port, chosen at install time. Per-machine, like the secret.
 .gobbonet-port
+# Generation job spool — holds model reply transcripts
+# (written by fileserver.ps1 only; the Go server keeps job spools in memory,
+# so the ignore is for the PowerShell server and stays needed either way)
+.jobs/
+# hardware-probe.ps1 writes these next to itself; they describe the machine
+# that ran it and mean nothing on any other one.
+hardware.json
+hardware.ini
+
+# Built binary
+/gobbonet
+/gobbonet.exe
+
+# The served web root, assembled from the repo-root frontend by stage-web.sh.
+# Generated, never committed: a committed copy of chat.html + js/ + css/ goes
+# stale the moment upstream touches one of the 40 files, and serves the stale
+# copy without complaining.
+/web/
+
+# Release bundles from build-release.sh
+/dist/
+
+# Installer build artifacts. models.ini IS committed -- it is generated, but
+# committing it means makensis works without running the generator first.
+/installer/payload/
+/installer/GobboNetSetup-*.exe
+
+# Bundled llama.cpp for the installer payload (fetched by hand).
+# NOT /vendor/ -- that path at the module root is reserved by the Go
+# toolchain, and a non-Go directory there breaks `go build`.
+/installer/vendor/
+
+# Runtime state written next to the config on a portable install
+/config.toml
+/models/
+/llama-server.log
+/state.json
+/.gobbonet-secret
+/perf.toml
+
+# installer-linux build artefacts
+installer-linux/vendor/
+installer-linux/stage/
+installer-linux/dist/

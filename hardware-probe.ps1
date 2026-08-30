@@ -129,13 +129,16 @@
 # EXIT CODES:
 #   0 = a usable hardware.json was written (a machine with no GPU
 #       is a SUCCESS: cpu_only is a real answer)
-#   1 = could not write the file anywhere at all
+#   1 = could not write the file anywhere at all, OR -IniPath was
+#       requested and could not be written (see that block for why
+#       that one is fatal where -EmitEnv's failure is not)
 #
 # USAGE:
 #   powershell -NoProfile -ExecutionPolicy Bypass -File hardware-probe.ps1
 #   ... -File hardware-probe.ps1 -Quiet
 #   ... -File hardware-probe.ps1 -LlamaServer "C:\...\llama-server.exe"
 #   ... -File hardware-probe.ps1 -EmitEnv ".hw-parsed.env"
+#   ... -File hardware-probe.ps1 -IniPath "hardware.ini"
 #   ... -File hardware-probe.ps1 -SelfTest      (no hardware needed)
 #
 # Windows PowerShell 5.1 compatible (Win10 1607+ / Win11, stock).
@@ -159,6 +162,14 @@ param(
     # Optional: also write KEY=VALUE lines here for launch.bat to
     # read with for/f, so it needs no inline PowerShell JSON parser.
     [string]$EmitEnv,
+
+    # Optional: also write a flat [hardware] INI here for callers that
+    # have neither a JSON parser nor a for/f loop. The NSIS installer
+    # reads this with ReadINIStr; -EmitEnv does not serve it, because
+    # GetPrivateProfileString needs a [section] header and bare
+    # KEY=VALUE lines have none. hardware.json is written either way --
+    # this is an addition, not a mode.
+    [string]$IniPath,
 
     # Per-external-tool timeout. Nothing may hang the launcher.
     [int]$TimeoutSec = 12,
@@ -1434,6 +1445,45 @@ function Write-EnvFile {
     }
 }
 
+# [hardware] INI for NSIS's ReadINIStr.
+#
+# Different hazards from the env file, so a different sanitiser. Batch's
+# ! and % mean nothing to GetPrivateProfileString, and stripping them
+# would mangle GPU names for no reason; what DOES break the read is a
+# newline (splits the value into a junk key), a leading/trailing space
+# (silently trimmed), or a ';' (comment). ASCII encoding matters more
+# here than for the env file: the INI APIs are code-page sensitive and
+# a UTF-8 GPU name comes back mojibake on a non-Latin locale.
+function ConvertTo-IniSafe([string]$s) {
+    if (-not $s) { return '' }
+    # Order matters: substitute BEFORE ConvertTo-SafeAscii, not after. SafeAscii
+    # deletes anything outside \x20-\x7E, which includes CR and LF -- so running
+    # it first welds the words on either side of a line break together
+    # ("Radeon RX\r\n7800 XT" -> "Radeon RX7800 XT"). Turning the separators
+    # into spaces first lets SafeAscii's own \s+ collapse and Trim tidy up.
+    $t = $s -replace '[\r\n;]', ' '
+    return ConvertTo-SafeAscii $t
+}
+
+function Write-IniFile {
+    param([string]$Path, [System.Collections.Specialized.OrderedDictionary]$Values)
+    return Invoke-Safe -Label ("writeini:" + $Path) -Default $false -Body {
+        $lines = New-Object System.Collections.ArrayList
+        [void]$lines.Add('[hardware]')
+        foreach ($k in $Values.Keys) {
+            [void]$lines.Add(("{0}={1}" -f $k, (ConvertTo-IniSafe ([string]$Values[$k]))))
+        }
+        # Write-then-rename: a consumer that starts reading while we are
+        # still writing would otherwise see a file with the section header
+        # and half the keys, which reads as "probed successfully, this
+        # machine has no GPU" rather than as an error.
+        $tmp = "$Path.tmp"
+        Set-Content -LiteralPath $tmp -Value $lines -Encoding ASCII -Force -ErrorAction Stop
+        Move-Item -LiteralPath $tmp -Destination $Path -Force -ErrorAction Stop
+        return $true
+    }
+}
+
 # ===============================================================
 # SELF TEST
 #
@@ -1670,6 +1720,13 @@ ggml_vulkan: 1 = NVIDIA GeForce RTX 5060 (NVIDIA) | uma: 0 | fp16: 1 | warp size
     Assert-Eq 'strip non-ASCII' 'NVIDIA GeForce RTX 4090' (ConvertTo-SafeAscii "NVIDIA GeForce RTX 4090`u{00AE}")
     Assert-Eq 'env strips bang' 'Radeon RX 7800 XT' (ConvertTo-EnvSafe 'Radeon! RX 7800 XT')
     Assert-Eq 'env strips pct'  'GPU 100' (ConvertTo-EnvSafe 'GPU 100%')
+    # INI values face different hazards than env values: a newline forges a
+    # bogus key, a ';' turns the rest of the line into a comment, and stray
+    # whitespace is trimmed by the reader anyway. ! and % must SURVIVE --
+    # stripping them the way the env sanitiser does would mangle real names.
+    Assert-Eq 'ini flattens newline' 'Radeon RX 7800 XT' (ConvertTo-IniSafe "Radeon RX`r`n7800 XT")
+    Assert-Eq 'ini strips semicolon' 'GPU A B' (ConvertTo-IniSafe 'GPU A ; B')
+    Assert-Eq 'ini keeps bang/pct'   'Radeon! 100%' (ConvertTo-IniSafe '  Radeon! 100%  ')
 
     Write-Host ''
     if ($script:TestFail -eq 0) {
@@ -1955,6 +2012,47 @@ if ($EmitEnv) {
         Add-Log ("emitted env file: {0}" -f $EmitEnv)
     } else {
         Write-Warn ("Could not write {0}; launch.bat will parse the JSON instead." -f $EmitEnv)
+    }
+}
+
+# Optional flat-INI handoff, for NSIS. Same measured facts as the env
+# file, same deliberate omission of catalogue knowledge.
+#
+# Unlike -EmitEnv, a failure here is fatal. launch.bat can fall back to
+# parsing hardware.json when the env file is missing; the installer
+# cannot -- NSIS has no JSON parser, which is the entire reason this
+# file exists. And the wizard's failure mode is not a visible error but
+# a wrong recommendation: with vram_gb unset it reads 0, matches no rung
+# on the VRAM ladder, falls through to the catalogue default, and
+# cheerfully offers a model the machine cannot load. Exiting non-zero
+# instead puts the wizard on its "could not read this machine's
+# hardware" path, which offers the catalogue unfiltered and says so.
+if ($IniPath) {
+    $iniValues = [ordered]@{
+        gpu_name         = [string]$gpu.name
+        gpu_vendor       = [string]$gpu.vendor
+        vram_gb          = [int]$gpu.vram_gb
+        vram_mib         = [int]$gpu.vram_mib
+        detection_method = [string]$gpu.detection_method
+        gpu_confidence   = [string]$gpu.confidence
+        is_integrated    = [int][bool]$gpu.is_integrated
+        ram_gb           = [int]$ramGB
+        disk_free_gb     = [int]$disk.free_gb
+        disk_known       = [int][bool]$disk.known
+        cpu_name         = [string]$cpu.name
+        cpu_cores        = [int]$cpu.cores
+        is_virtualized   = [int][bool]$isVm
+        recommended_tier = [string]$tier
+        usable_budget_gb = [int]$budget.gb
+        warning_count    = [int]$script:Warnings.Count
+    }
+    if (Write-IniFile -Path $IniPath -Values $iniValues) {
+        Add-Log ("emitted ini file: {0}" -f $IniPath)
+        Write-Ok ("Wrote {0}" -f $IniPath)
+    } else {
+        Write-Err ("Could not write {0}." -f $IniPath)
+        Write-Err 'The installer cannot size the model catalogue without it.'
+        exit 1
     }
 }
 

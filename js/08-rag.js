@@ -758,6 +758,40 @@ async function buildContextMessages(thread, card, opts) {
       if (freed >= tokensToFree) break;
     }
 
+    // Safety net: selection found nothing, but we are over the PHYSICAL
+    // ceiling.
+    //
+    // firstArchivable can land on 0 when the trailing reserve covers the
+    // whole live window — which happens when the fixed overhead (a big
+    // storybook, a long authored lore, a fat writing style) is eating most
+    // of the budget rather than the conversation being long. The old code
+    // did nothing at all in that case: no archive, no fold, no note. The
+    // hard trim further down then quietly shifted those same messages out
+    // of the payload to make the request fit, leaving the model a hole it
+    // could not see and the user no record that anything had gone.
+    //
+    // So when the live window alone is over `budget`, take the oldest
+    // messages anyway and let compression have them. They are leaving the
+    // context either way; the only question is whether they leave as a
+    // summarised beat or as silence. Floor of two verbatim messages so the
+    // model always has the exchange it is replying to, and we stop as soon
+    // as we are back under the ceiling rather than clearing the board.
+    if (toArchive.length === 0 && (usedTokens + liveTokens) > budget && liveMsgs.length > 2) {
+      for (let i = 0; i < liveMsgs.length - 2; i++) {
+        const m = liveMsgs[i];
+        m.archived = true;
+        toArchive.push(m);
+        freed += liveCosts[i];
+        if ((usedTokens + liveTokens - freed) <= budget) break;
+      }
+      if (toArchive.length) {
+        console.warn('[lore] the trailing reserve covered the whole live window but '
+          + 'the context is over budget — folding the ' + toArchive.length
+          + ' oldest message' + (toArchive.length === 1 ? '' : 's')
+          + ' anyway rather than dropping them silently.');
+      }
+    }
+
     if (toArchive.length > 0) {
       // Fold the just-archived chunk into the running summary (with any prior).
       const _loreBefore = summary || '';
@@ -766,7 +800,13 @@ async function buildContextMessages(thread, card, opts) {
       // stored -- authored lore stays the card's, untouched.
       const _authored = (card && card.loreEnabled && card.startingLore)
         ? card.startingLore.trim() : '';
-      summary = await summarizeForLore(summary, toArchive, _authored);
+      // tokenLimit is the fallback context budget, used only when the
+      // server does not report its own n_ctx (file:// mode, proxy down,
+      // older llama-server). It can overestimate -- it is clamped to the
+      // model's TRAINING context, not the --ctx-size the server was
+      // started with -- which is why summarizeForLore still treats a 400
+      // as the no-room case rather than trusting this number.
+      summary = await compressWithCardModel(summary, toArchive, _authored, tokenLimit, card);
       setThreadLore(thread, summary);
 
       // Record what this pass actually did. Without a before/after size you
@@ -788,7 +828,15 @@ async function buildContextMessages(thread, card, opts) {
           // null when the pass produced a summary; a reason string when it
           // gave up. A row with before === after AND a reason is a failure
           // wearing the same clothes as a no-op.
-          why: (typeof _loreLastOutcome !== 'undefined') ? _loreLastOutcome : null
+          why: (typeof _loreLastOutcome !== 'undefined') ? _loreLastOutcome : null,
+          // The inspector used to infer failure from after === 0. That no
+          // longer holds: a failed pass now writes a gap marker, so
+          // `after` is non-zero and the row would read as a note rather
+          // than a fault. Record the verdict instead of deriving it.
+          // Absent on rows written before this change, which is why the
+          // inspector keeps the old check as a fallback.
+          failed: (typeof _loreLastKind !== 'undefined')
+                  && _loreLastKind !== 'ok' && _loreLastKind !== 'skip'
         });
         while (thread.loreLog.length > 6) thread.loreLog.shift();
       } catch (e) { /* telemetry must never break a turn */ }
@@ -800,7 +848,22 @@ async function buildContextMessages(thread, card, opts) {
       // divider near the TOP of the chat, which is easy to miss when the
       // user's eye is on the streaming reply at the bottom. Read by
       // renderMessages; cleared at the start of the next user turn.
-      pendingLoreCompressionNote = { count: toArchive.length, threadId: thread.id };
+      // Carries the VERDICT, not just the count. The banner used to say
+      // "folded N older messages into the summary" on every pass that
+      // archived anything -- including the ones that archived those
+      // messages and then failed to summarise them. That is the most
+      // misleading moment in the whole feature: the user is told their
+      // history was preserved at the exact instant it was dropped.
+      const _kind = (typeof _loreLastKind !== 'undefined') ? _loreLastKind : 'ok';
+      pendingLoreCompressionNote = {
+        count: toArchive.length,
+        threadId: thread.id,
+        kind: _kind,
+        reason: (_kind === 'ok' || _kind === 'skip')
+          ? null
+          : ((typeof _loreLastOutcome !== 'undefined' && _loreLastOutcome)
+             || 'compression did not complete')
+      };
 
       // Recompute post-archive state. usedTokens now reflects the new
       // (typically smaller) lore — this is what gets returned to the

@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=GobboNet
+GenericName=Local AI Chat
+Comment=Local chat for local models. No account, no API key, no telemetry.
+Exec=/usr/lib/gobbonet/gobbonet-launch
+Icon=gobbonet
+Terminal=false
+Categories=Network;Chat;Utility;
+Keywords=AI;LLM;chat;llama;local;offline;
+StartupNotify=true

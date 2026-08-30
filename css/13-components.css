@@ -598,3 +598,60 @@ input[type="range"]::-moz-range-thumb {
 @media (max-width: 700px) {
   .ext-entry-name, .ext-entry-url { font-size: 16px; } /* prevent iOS zoom on focus */
 }
+
+/* ================================================================
+   MODEL CATALOGUE — the add-a-model modal (config panel)
+
+   Deliberately close to the first-run wizard's download step: a
+   list of rows, one progress bar, a log line. Matching it beats
+   inventing a second look for the same task.
+================================================================ */
+.catalog-entry {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-areas: "name button" "meta button";
+  gap: 2px 12px;
+  align-items: center;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: rgba(0,243,255,0.02);
+}
+.catalog-entry-name {
+  grid-area: name;
+  font-size: 13px;
+  color: var(--cyan-bright);
+}
+.catalog-entry-meta {
+  grid-area: meta;
+  font-size: 11px;
+  color: var(--cyan-dim);
+}
+.catalog-entry button { grid-area: button; }
+.catalog-entry.installed { opacity: 0.55; }
+
+.dl-bar {
+  height: 9px;
+  background: var(--black);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  overflow: hidden;
+  margin: 4px 0;
+}
+.dl-bar > i {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: var(--cyan-bright);
+  transition: width .3s;
+}
+
+@media (max-width: 700px) {
+  .catalog-entry {
+    grid-template-columns: 1fr;
+    grid-template-areas: "name" "meta" "button";
+    gap: 6px;
+  }
+  .catalog-entry button { justify-self: start; }
+}

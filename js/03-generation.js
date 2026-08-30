@@ -254,11 +254,53 @@ function stopGenTimerTicker() {
  * thread happens to be on screen. (Data always went to the right message
  * object; the DOM writes were the loose end.)
  */
+/**
+ * Should a reply be painted as it arrives, or held until it is finished?
+ *
+ * This gates PAINTING, not the request. The transport keeps streaming in
+ * both modes, deliberately, because three things in the chat path depend
+ * on receiving tokens as they are produced:
+ *
+ *   1. The smart reply limit. maybeApplySmartLimit (this file) calls
+ *      stopGeneration() the moment the estimate crosses the cap, and the
+ *      chat request sends max_tokens: -1 -- so mid-stream cancellation is
+ *      the ONLY thing bounding reply length. Ask llama-server for a
+ *      non-streaming completion and the cap silently stops working: the
+ *      model runs to EOS or fills the context, and the user waits for a
+ *      long reply that then gets trimmed anyway.
+ *   2. Partial progress. The ~2.5s saveState tick below, and the
+ *      server-side job spool, both need bytes as they land. They are what
+ *      make a reply survive a navigation or a Stop.
+ *   3. The reveal itself. Held mode still ends with the same
+ *      finalizeStreamMessage -> renderStreamingUpdate the streaming path
+ *      uses, so a thinking model's reasoning is split from its content by
+ *      exactly the same parser. Nothing about the output differs; only
+ *      when it is shown.
+ *
+ * What the user asked for is not to WATCH the reply being written, and
+ * that is entirely a rendering concern. So: keep the bytes, hold the
+ * brush. Reads `!== false` so an older settings blob, or a corrupted one,
+ * streams as every existing install already does.
+ */
+function shouldPaintWhileStreaming() {
+  try {
+    return !(state && state.settings && state.settings.streamReplies === false);
+  } catch (e) {
+    return true;
+  }
+}
+
 function makeStreamFeeder(assistantMsg, thread) {
   const decoder = new TextDecoder();
   let lineBuf = '';
   let lastRender = 0, lastSave = 0, chunkCount = 0, firstLogged = false;
   const threadIsVisible = () => thread && thread.id === state.activeThreadId;
+  // Resolved once per generation, not per chunk: flipping the toggle
+  // mid-reply would otherwise reveal a half-written message, which is the
+  // exact thing the setting exists to prevent. Whatever it was when the
+  // turn started is what this turn honours.
+  const paintLive = shouldPaintWhileStreaming();
+  if (!paintLive) console.log('[stream] holding reply until complete (Reply Delivery: hold)');
   return {
     feed(bytes) {
       // Smart limit already cut this reply — freeze it. The job poll keeps
@@ -283,7 +325,9 @@ function makeStreamFeeder(assistantMsg, thread) {
           if (maybeApplySmartLimit(assistantMsg)) {
             // Content was truncated at the sentence end — repaint now so the
             // trimmed text (not the overshoot) is what stays on screen.
-            if (threadIsVisible()) renderStreamingUpdate(assistantMsg);
+            // Skipped in held mode: nothing is on screen to correct, and the
+            // caller's post-generation repaint shows the trimmed text anyway.
+            if (paintLive && threadIsVisible()) renderStreamingUpdate(assistantMsg);
             return;
           }
         } else if (chunkCount <= 3) {
@@ -291,7 +335,7 @@ function makeStreamFeeder(assistantMsg, thread) {
         }
       }
       const now = Date.now();
-      if (now - lastRender > 80 && threadIsVisible()) {
+      if (paintLive && now - lastRender > 80 && threadIsVisible()) {
         renderStreamingUpdate(assistantMsg);
         lastRender = now;
       }

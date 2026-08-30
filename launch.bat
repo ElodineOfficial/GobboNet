@@ -149,7 +149,7 @@ if defined GEMMA_LLM_PORT (
 ::
 :: Resolution order, highest first:
 ::   1. GEMMA_LISTEN_PORT   -- one-off override for a single run
-::   2. .gobbonet-port      -- written by the installer if you chose one
+::   2. .gobbonet-port      -- written by gobbonet.exe when it binds
 ::   3. 9066                -- the default
 :: ---------------------------------------------------------------
 set "WEB_PORT="
@@ -185,7 +185,8 @@ echo !WEB_PORT!| findstr /r "^[0-9][0-9]*$" >nul 2>&1
 if errorlevel 1 (
     echo  [*] Could not read a port number from .gobbonet-port -- using 9066.
     if defined WEB_PORT_SRC echo      The file contained: "!WEB_PORT_SRC!"
-    echo      Delete .gobbonet-port and reinstall, or put a single number in it.
+    echo      Delete .gobbonet-port and start GobboNet once to rewrite it,
+    echo      or put a single number in it.
     set "WEB_PORT=9066"
 )
 if !WEB_PORT! lss 1024 (
@@ -239,7 +240,23 @@ if /i "%~1"=="reset-password" (
     echo  [..] Password reset requested -- you'll set a new one now.
 )
 
-if not exist "!SECRET_FILE!" call :setup_password
+:: Record that a password was WRITTEN this run, not merely read.
+::
+:: Cleared first, deliberately. setlocal inherits this window's
+:: environment, so a value left behind by an earlier run in the same cmd
+:: session -- or set by hand -- would otherwise make a run that changed
+:: nothing look like a run that set a new password, and the adoption
+:: branch at :launch would refuse to reuse a perfectly good server.
+::
+:: This covers "launch.bat reset-password" too: that deletes the secret
+:: file above, so the call below fires and the flag is set. Which is
+:: correct -- reset-password is the clearest case of all for refusing to
+:: adopt a process still holding the old salt.
+set "SECRET_JUST_SET="
+if not exist "!SECRET_FILE!" (
+    call :setup_password
+    set "SECRET_JUST_SET=1"
+)
 if not exist "!SECRET_FILE!" (
     echo  [ERROR] No password was set. Cannot start securely. Exiting.
     pause
@@ -1837,11 +1854,49 @@ if not exist "%~dp0chat.html" (
 :: This lets your phone load chat.html over the network
 :: Lenient on purpose: / answers 401 when not logged in, which is our own
 :: auth layer and therefore proof the file server is up.
+:: Cleared for the same reason SECRET_JUST_SET is: setlocal inherits
+:: this window's environment.
+set "PW_PORT_CONFLICT="
 call :http_probe "http://127.0.0.1:!WEB_PORT!/"
-if not errorlevel 1 (
+if errorlevel 1 goto :fs_port_free
+
+:: Something is already answering on the web port.
+::
+:: Adopting it is normally exactly right: it saves a spawn and avoids a
+:: duplicate server fighting over the same port.
+::
+:: It is wrong in precisely one case, and that case is the bug behind
+:: "I set a password in the installer and the browser will not accept
+:: it". The access secret reaches fileserver.ps1 by ENVIRONMENT VARIABLE
+:: at spawn time -- GEMMA_ACCESS_SECRET, set further down -- and
+:: fileserver.ps1 reads it once into $AccessSalt / $AccessHash at
+:: startup (fileserver.ps1:217-223). It never re-reads it. So a server
+:: still running from before the password change is still hashing
+:: against the OLD salt, and it will reject the new password no matter
+:: what is on disk.
+::
+:: That is why the obvious remedies all fail: deleting .gobbonet-secret,
+:: uninstalling, reinstalling and adding antivirus exceptions every one
+:: of them touches DISK, and none of them touches a running PROCESS.
+:: Only ending that process does -- which is why a reboot "fixes" it and
+:: why the whole thing feels supernatural.
+if not defined SECRET_JUST_SET (
     echo  [OK] File server already running on :!WEB_PORT!
     goto :get_lan_ip
 )
+
+:: A password was written this run AND something already holds the
+:: port. Flag THAT combination, not the password alone: on a first
+:: install the password is also new, but the port is free and the
+:: launch must proceed normally. Fall through to the holder check
+:: below, which names the PID.
+set "PW_PORT_CONFLICT=1"
+echo.
+echo  [*] You set a new password this run, but something is already
+echo      serving :!WEB_PORT!.
+echo.
+
+:fs_port_free
 
 :: ---------------------------------------------------------------
 :: Is the port already taken, and by what?
@@ -1863,6 +1918,52 @@ if defined HAVE_PS (
     for /f "usebackq delims=" %%H in (`powershell -NoProfile -Command "try { $p=[int]$env:GN_CHKPORT; $c=Get-NetTCPConnection -LocalPort $p -State Listen -ErrorAction Stop | Select-Object -First 1; if ($c) { $pr=Get-Process -Id $c.OwningProcess -ErrorAction SilentlyContinue; ('PID {0} ({1})' -f $c.OwningProcess, $(if($pr){$pr.ProcessName}else{'unknown'})) } } catch { }"`) do set "PORT_HOLDER=%%H"
     set "GN_CHKPORT="
 )
+:: The password case, handled before the generic "try anyway?" prompt
+:: below, because starting anyway genuinely cannot help here and
+:: offering it would be misleading.
+::
+:: A second fileserver.ps1 fails to bind a port that is already held and
+:: exits. The :fserver_wait probe loop further down would then get its
+:: 401 from the OLD server, report [OK] File server on :!WEB_PORT!, and
+:: hand the user straight back into the wrong-password loop -- with one
+:: extra dead PowerShell for company. Stopping here is the only outcome
+:: that leaves them able to act.
+::
+:: Gated on PW_PORT_CONFLICT, which is set ONLY when the probe found
+:: something already on the port. A first install also sets a new
+:: password, and must not be stopped here.
+::
+:: Not gated on PORT_HOLDER being resolved. The holder lookup needs
+:: PowerShell and Get-NetTCPConnection, and when either is unavailable
+:: PORT_HOLDER is empty -- but the probe already proved something is
+:: there, so the advice below stands with or without a PID.
+if defined PW_PORT_CONFLICT (
+    echo.
+    echo  [!] The password you just set will NOT work while that
+    echo      process is running.
+    echo.
+    if defined PORT_HOLDER (
+        echo      Holding :!WEB_PORT! right now: !PORT_HOLDER!
+        echo.
+    )
+    echo      A GobboNet file server loads the password ONCE, when it
+    echo      starts. The one already running loaded the previous
+    echo      password and cannot see the new one, so it will keep
+    echo      rejecting it. Reinstalling does not help -- that replaces
+    echo      files on disk, and this is a process in memory.
+    echo.
+    echo      Fix, in order of preference:
+    echo        1. End that PID in Task Manager, then run launch.bat again.
+    echo        2. Or reboot, which ends it for you.
+    echo        3. If it is NOT GobboNet, that program owns the port --
+    echo           pick another: put a number in .gobbonet-port, or run
+    echo               set GEMMA_LISTEN_PORT=9067
+    echo           in this window and launch again.
+    echo.
+    pause
+    goto :fatal
+)
+
 if defined PORT_HOLDER (
     echo.
     echo  [*] Port !WEB_PORT! is already in use by !PORT_HOLDER!.

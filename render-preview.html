@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<!--
+  Visual check for the whole message renderer: code blocks, syntax
+  highlighting, tables, lists, quotes, and maths in every delimiter form.
+
+  Open it in a browser; nothing to build. Loads the REAL js/18-utils.js and
+  the REAL stylesheets, so it cannot drift from what ships. Dev tool only —
+  stage-web.sh copies a fixed file list and will not pick this up.
+
+  The automated suite proves the HTML is correct and nothing executes. It
+  cannot tell you whether a matrix bracket meets its rows, whether table
+  columns breathe, or whether the highlighter's colours are legible against
+  the panel. That is what this is for.
+
+  math-preview.html is still the right tool for atom-level maths detail
+  (radical joins, script baselines). This one is about whole messages.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GobboNet — render preview</title>
+<link rel="stylesheet" href="css/01-tokens.css">
+<link rel="stylesheet" href="css/04-chat.css">
+<link rel="stylesheet" href="css/13-components.css">
+<link rel="stylesheet" href="css/16-math.css">
+<link rel="stylesheet" href="css/17-markdown.css">
+<style>
+  body { background: var(--black, #0a0a0f); color: var(--text, #d0d0d8);
+         font-family: var(--font, monospace); padding: 24px; margin: 0; }
+  h1 { color: var(--cyan-bright, #0ff); font-size: 18px; }
+  h2 { color: var(--magenta, #f0f); font-size: 13px; margin: 32px 0 10px;
+       border-bottom: 1px solid var(--border, #333); padding-bottom: 4px;
+       letter-spacing: 2px; }
+  .case { border: 1px solid rgba(255,255,255,.08); border-radius: 6px;
+          margin: 12px 0; overflow: hidden; }
+  .case > .src { font-family: var(--font-mono, monospace); font-size: 11px;
+                 color: var(--label, #888); background: rgba(0,0,0,.35);
+                 padding: 8px 12px; white-space: pre-wrap; border-bottom: 1px solid rgba(255,255,255,.08); }
+  .case > .out { padding: 12px 16px; }
+  .note { color: var(--label, #888); font-size: 12px; margin: 4px 0 16px; max-width: 70ch; }
+  .wide { max-width: 820px; }
+</style>
+</head>
+<body>
+<h1>GOBBONET // RENDER PREVIEW</h1>
+<p class="note">
+  Top of each card: what the model sent. Bottom: what the user sees, inside a
+  real <code>.message-content</code>. Narrow the window to check the mobile
+  rules and the table's horizontal scroll.
+</p>
+<div id="out" class="wide"></div>
+
+<script src="js/18-utils.js"></script>
+<script>
+const CASES = [
+  ['Code: blank lines and markdown metacharacters',
+`Both of these used to be mangled.
+
+\`\`\`python
+def apply(fn, xs):
+    """Map fn over xs."""
+    return [fn(x) for x in xs]
+
+def total(xs):
+    # ** not bold **, a * b * c, - not a bullet
+    return sum(x * 2 for x in xs)
+\`\`\`
+
+Press Copy and paste it somewhere: the line breaks must survive.`],
+
+  ['Code: several languages',
+`\`\`\`js
+// tagged template + regex
+const re = /^\\d+$/;
+export function greet(name = "world") {
+  return \`hello \${name}\`;
+}
+\`\`\`
+
+\`\`\`go
+func main() {
+    xs := []int{1, 2, 3}
+    for i, x := range xs {   // comment
+        fmt.Printf("%d=%d\\n", i, x)
+    }
+}
+\`\`\`
+
+\`\`\`sql
+SELECT name, COUNT(*) AS n FROM users
+WHERE created_at > '2024-01-01' GROUP BY name ORDER BY n DESC;
+\`\`\`
+
+\`\`\`html
+<div class="card" data-id="7">
+  <!-- a comment -->
+  <span>text</span>
+</div>
+\`\`\`
+
+\`\`\`wharrgarbl
+an unknown language is deliberately NOT highlighted
+let x = "this should be plain"
+\`\`\``],
+
+  ['Tables',
+`| Model | VRAM | Context | Notes |
+|-------|-----:|:-------:|-------|
+| Gemma 4 E4B | 6 GB | 32768 | general purpose |
+| Qwen3.5 9B | 8 GB | 32768 | good at code |
+| Command R 35B | 24 GB | 16384 | strong at RAG, needs a big card |
+
+Alignment above: left, right, centre, left. The wrapper scrolls, not the bubble.`],
+
+  ['Lists, nested and mixed',
+`- top level
+  - nested once
+    - nested twice
+  - back to one
+- second top
+
+1. ordered
+2. also ordered
+   1. sub-ordered
+   2. and another
+3. third
+
+- [x] finished task
+- [ ] unfinished task
+- [ ] another one`],
+
+  ['Quotes, rules, headings, inline',
+`# Heading one
+## Heading two
+### Heading three
+#### Heading four
+
+> A blockquote with **bold** inside it.
+> > And a nested one.
+
+---
+
+Inline: \`code\`, **bold**, *italic*, ***both***, ~~struck~~, and a
+[link](https://example.com) plus a bare https://example.com/path one.`],
+
+  ['Maths: every delimiter form',
+`Display with dollars:
+
+$$E = mc^2$$
+
+Display with brackets:
+
+\\[ \\int_0^\\infty e^{-x^2} dx = \\frac{\\sqrt{\\pi}}{2} \\]
+
+Inline with dollars: the identity $\\sum_{i=1}^{n} i = \\frac{n(n+1)}{2}$ is
+standard, and $x^2$ is too.
+
+Inline with parens: \\(a^2 + b^2 = c^2\\).
+
+Money must stay money: it cost $5, then $10 later, then $1,200 all in.`],
+
+  ['Maths: environments (the columns and grids)',
+`\`\`\`latex
+\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}
+\`\`\`
+
+\`\`\`latex
+\\begin{bmatrix} 1 & 0 & 0 \\\\ 0 & 1 & 0 \\\\ 0 & 0 & 1 \\end{bmatrix}
+\`\`\`
+
+\`\`\`latex
+\\begin{vmatrix} a & b \\\\ c & d \\end{vmatrix}
+\`\`\`
+
+\`\`\`latex
+\\begin{cases} x & \\text{if } x > 0 \\\\ -x & \\text{if } x < 0 \\\\ 0 & \\text{otherwise} \\end{cases}
+\`\`\`
+
+\`\`\`latex
+\\begin{aligned} f(x) &= (x+1)^2 \\\\ &= x^2 + 2x + 1 \\end{aligned}
+\`\`\``],
+
+  ['Fence forms that used to fail',
+`Tilde fence:
+
+~~~js
+let a = 1;
+~~~
+
+Four backticks containing three:
+
+\`\`\`\`markdown
+\`\`\`js
+nested and intact
+\`\`\`
+\`\`\`\`
+
+An unclosed fence — what every streaming frame looks like:
+
+\`\`\`python
+def still_arriving(`],
+
+  ['Roleplay: none of this is markup',
+`*She grins.* "It'll cost you $5," she says, "maybe $10 if you're slow."
+
+The variable x_i and the expression a^b are prose here, not maths.`],
+];
+
+const out = document.getElementById('out');
+for (const [title, src] of CASES) {
+  const h = document.createElement('h2');
+  h.textContent = title;
+  out.appendChild(h);
+
+  const card = document.createElement('div');
+  card.className = 'case';
+  const s = document.createElement('div');
+  s.className = 'src';
+  s.textContent = src;
+  const o = document.createElement('div');
+  o.className = 'out message-content';
+  o.innerHTML = parseMarkdown(src, '#ff4da6');
+  card.appendChild(s);
+  card.appendChild(o);
+  out.appendChild(card);
+}
+</script>
+</body>
+</html>

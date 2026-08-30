@@ -80,6 +80,14 @@ function forkAt(messageIndex) {
     name: `⑂ ${baseName}`,
     messages: sharedMessages,
     lore: thread.lore || '',
+    // Inherited from the source, NOT from getActiveCard(). A fork is the same
+    // conversation up to the cut; taking today's active card here would put a
+    // stranger's name on every copied turn that predates the per-message
+    // stamp. The copied messages carry their own cardId where they have one.
+    cardId: thread.cardId,
+    cardName: thread.cardName,
+    personaId: thread.personaId,
+    personaName: thread.personaName,
     createdAt: Date.now(),
     pinned: false,
     folderId: thread.folderId,
@@ -163,12 +171,79 @@ function generateId() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 }
 
+/* ── Who said this? ───────────────────────────────────────────────
+   Threads used to carry no card reference at all, so renderMessages()
+   resolved getActiveCard() once for the whole list — every assistant turn
+   in every thread wore whichever character happened to be selected right
+   now (issue #19).
+
+   The reported symptom is the avatar, but the same two variables also feed
+   the speaker name, the assistant text and dialogue colours, and the
+   {{char}} expansion inside the message body — so switching characters
+   didn't just change the face on old replies, it renamed the speaker,
+   recoloured the prose, and rewrote {{char}} in dialogue that was written
+   before that character existed. All of it resolves through here now.
+
+   Resolution order, most specific first:
+     1. m.cardId      — stamped on assistant turns from here on
+     2. thread.cardId — stamped at thread creation; covers any message a
+                        path I didn't stamp produced, and inherited by forks
+     3. thread.cardName — tombstone. The card was deleted; show the name it
+                        had with a neutral avatar rather than dressing the
+                        history in whoever is active now. Drop this branch
+                        (and the one line in createThread) if you'd rather
+                        not carry a denormalised name.
+     4. getActiveCard() — legacy threads, which have none of the above and
+                        therefore behave exactly as they do today.
+
+   Built once per render rather than per message: a long thread against a
+   large roster would otherwise be a linear scan per turn. */
+function makeCastResolver(thread) {
+  const cardById = new Map((state.characterCards || []).map(c => [c.id, c]));
+  const personaById = new Map((state.personaCards || []).map(p => [p.id, p]));
+  const activeCard = getActiveCard();
+  const activePersona = getActivePersona();
+
+  return {
+    cardFor(m) {
+      const stamped = (m && m.cardId) || (thread && thread.cardId);
+      if (stamped) {
+        const found = cardById.get(stamped);
+        if (found) return found;
+        if (thread && thread.cardName) {
+          return { ...DEFAULT_CARD, id: null, name: thread.cardName, avatar: '' };
+        }
+      }
+      return activeCard;
+    },
+    personaFor(m) {
+      const stamped = (m && m.personaId) || (thread && thread.personaId);
+      if (stamped) {
+        const found = personaById.get(stamped);
+        if (found) return found;
+        if (thread && thread.personaName) {
+          return { ...DEFAULT_PERSONA, id: null, name: thread.personaName, avatar: '' };
+        }
+      }
+      return activePersona;
+    },
+  };
+}
+
 function createThread() {
   const card = getActiveCard();
+  const persona = getActivePersona();
   const thread = {
     id: generateId(),
     name: 'New Thread',
     messages: [],
+    // Who this thread belongs to. Read as the per-message fallback by
+    // makeCastResolver(); see the note above it. cardName/personaName are
+    // tombstones, used only if the card or persona is later deleted.
+    cardId: card.id,
+    cardName: card.name,
+    personaId: persona.id,
+    personaName: persona.name,
     // thread.lore now holds ONLY the running conversation summary (built up
     // by compression). Authored world/setting lore lives on the card
     // (card.startingLore) and is injected fresh each build, so we no longer

@@ -151,21 +151,33 @@ function renderMessages() {
     return;
   }
 
-  const card = getActiveCard();
-  const persona = getActivePersona();
-  const userName = persona.name || 'Anonymous';
-  const cardName = card.name || 'Assistant';
-
-  // Resolve text/dialog colors
+  // Identity is resolved PER MESSAGE, not once for the list. Resolving it
+  // once here was issue #19: every assistant turn wore the currently-selected
+  // character. See makeCastResolver() in js/09-threads.js for the order.
+  //
+  // The four colours below used to be four consts. They are now derived from
+  // whichever card/persona a given turn belongs to, memoised per identity so
+  // safeCssColor still runs a handful of times per render rather than once
+  // per message.
+  //
   // Cards and personas can arrive from an imported file or a synced peer, and
-  // these four values land directly in style="color:..." attributes below.
+  // these values land directly in style="color:..." attributes below.
   // Allowlist the shapes a colour picker produces; anything else falls back to
   // the 1.5.8 defaults rather than to empty, so a hostile value degrades to the
   // correct colour instead of to no colour.
-  const userTextColor   = safeCssColor(persona.textColor,   FALLBACK_PERSONA_TEXT_COLOR);
-  const userDialogColor = safeCssColor(persona.dialogColor, FALLBACK_PERSONA_DIALOG_COLOR);
-  const aiTextColor     = safeCssColor(card.textColor,      FALLBACK_CARD_TEXT_COLOR);
-  const aiDialogColor   = safeCssColor(card.dialogColor,    FALLBACK_CARD_DIALOG_COLOR);
+  const cast = makeCastResolver(thread);
+  const _colorMemo = new Map();
+  const colorsOf = (who, isUser) => {
+    if (_colorMemo.has(who)) return _colorMemo.get(who);
+    const pair = {
+      text: safeCssColor(who.textColor,
+        isUser ? FALLBACK_PERSONA_TEXT_COLOR : FALLBACK_CARD_TEXT_COLOR),
+      dialog: safeCssColor(who.dialogColor,
+        isUser ? FALLBACK_PERSONA_DIALOG_COLOR : FALLBACK_CARD_DIALOG_COLOR),
+    };
+    _colorMemo.set(who, pair);
+    return pair;
+  };
 
   // ── Branch origin banner ────────────────────────────────────────
   let branchBannerHtml = '';
@@ -231,14 +243,21 @@ function renderMessages() {
 
     if (m.role === 'system') return '';
     const isUser = m.role === 'user';
+    // Whoever actually produced THIS turn. cardName/userName are still used
+    // below for {{char}}/{{user}} expansion, so a line written by CodeGoblin
+    // keeps saying CodeGoblin after you switch away from it.
+    const msgCard = cast.cardFor(m);
+    const msgPersona = cast.personaFor(m);
+    const cardName = msgCard.name || 'Assistant';
+    const userName = msgPersona.name || 'Anonymous';
     const roleLabel = isUser ? userName : cardName;
     const avatar = isUser
-      ? renderAvatar(persona.avatar, userName)
-      : renderAvatar(card.avatar, cardName);
+      ? renderAvatar(msgPersona.avatar, userName)
+      : renderAvatar(msgCard.avatar, cardName);
     const archivedClass = m.archived ? ' archived' : '';
     const className = `message message-${m.role}${archivedClass}`;
-    const textColor = isUser ? userTextColor : aiTextColor;
-    const dialogColor = isUser ? userDialogColor : aiDialogColor;
+    const { text: textColor, dialog: dialogColor } =
+      colorsOf(isUser ? msgPersona : msgCard, isUser);
     // Display-time safety net: assistant messages saved before the unwrap fix
     // (or produced by any path that bypasses finalize) may still hold a raw
     // tool-call envelope. Unwrap for display only; stored content is untouched.
@@ -325,7 +344,16 @@ function renderMessages() {
 
     // Show typing indicator only when generating AND no content or reasoning yet
     const isCurrentlyGenerating = isGenerating && !isUser && i === thread.messages.length - 1;
-    const showTypingDots = isCurrentlyGenerating && !m.content && !m.reasoning;
+    // ...or whenever a reply is being HELD, however much of it has already
+    // arrived. renderStreamingUpdate is gated during held generation, but a
+    // full renderMessages() is not: switching to another thread and back
+    // mid-reply rebuilds from state, and state has the partial text. Without
+    // this the held reply would be revealed by the round trip -- exactly the
+    // spoiler the setting exists to prevent. isGenerating is already false by
+    // the time the caller's post-generation renderMessages() runs, so the
+    // finished reply still lands normally.
+    const holdingReply = isCurrentlyGenerating && !shouldPaintWhileStreaming();
+    const showTypingDots = isCurrentlyGenerating && (holdingReply || (!m.content && !m.reasoning));
     const searchBadge = m.searchData ? '<span class="search-badge" title="Web search results attached">&#128269;</span>' : '';
 
     // Response timer + smart-limit badges (assistant messages only). While
@@ -444,7 +472,6 @@ function renderMessages() {
   if (pendingLoreCompressionNote && pendingLoreCompressionNote.threadId === thread.id) {
     const n = pendingLoreCompressionNote.count;
     const banner = document.createElement('div');
-    banner.className = 'message message-system-inject lore-compressed-banner';
     // Clickable: seeing THAT compression happened is only half the story.
     // What it produced is the part you need when the summary starts
     // repeating itself or dropping the details the character depends on.
@@ -452,12 +479,43 @@ function renderMessages() {
     const _delta = _lg ? (_lg.after - _lg.before) : null;
     const _deltaTxt = (_delta === null) ? ''
       : ' &middot; summary ' + (_delta >= 0 ? '+' : '') + _delta + ' chars';
-    banner.innerHTML = '&#128221; Lore: folded ' + n + ' older '
-      + (n === 1 ? 'message' : 'messages') + ' into the summary' + _deltaTxt
-      + ' <span class="lore-inspect-link">inspect</span>';
+    const _kind = pendingLoreCompressionNote.kind || 'ok';
+    const _failed = (_kind !== 'ok' && _kind !== 'skip');
+
+    if (_failed) {
+      // The other half of item 4. A compressor that has stopped working
+      // is invisible by design otherwise: the messages leave the context
+      // quietly, the summary stops growing, and the only record is a
+      // console line and a field in the lore inspector that nobody opens
+      // because nothing told them to. This is what tells them to.
+      //
+      // Wording is about what the USER lost, not what the request did.
+      // "HTTP 400 from the model server" is true and useless; "the oldest
+      // N messages were dropped" is what actually happened to their
+      // conversation, and it is why the reply that follows may not
+      // remember something it should.
+      banner.className = 'message message-system-inject lore-compressed-banner lore-banner-warn';
+      banner.innerHTML = '&#9888; Lore: could not summarise ' + n + ' older '
+        + (n === 1 ? 'message' : 'messages')
+        + ' &mdash; ' + (n === 1 ? 'it was' : 'they were')
+        + ' dropped from the model\'s memory to keep the chat working'
+        + ' <span class="lore-inspect-link">why?</span>';
+      // The reason belongs on the element itself rather than only behind
+      // the click, so it reaches a tooltip and a screen reader without
+      // opening the inspector first.
+      banner.title = pendingLoreCompressionNote.reason || '';
+      banner.setAttribute('aria-label', 'Lore compression failed. '
+        + (pendingLoreCompressionNote.reason || '')
+        + ' Activate for details.');
+    } else {
+      banner.className = 'message message-system-inject lore-compressed-banner';
+      banner.innerHTML = '&#128221; Lore: folded ' + n + ' older '
+        + (n === 1 ? 'message' : 'messages') + ' into the summary' + _deltaTxt
+        + ' <span class="lore-inspect-link">inspect</span>';
+      banner.title = 'Show the current summary and how it has grown';
+    }
     banner.setAttribute('role', 'button');
     banner.setAttribute('tabindex', '0');
-    banner.title = 'Show the current summary and how it has grown';
     banner.onclick = () => openLoreInspector();
     banner.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openLoreInspector(); } };
     // Sit just above the streaming assistant message so the marker is
@@ -516,6 +574,23 @@ function _loreTokens(txt) {
   try { return estimateTokens(txt || ''); } catch (e) { return Math.ceil((txt || '').length / 4); }
 }
 
+/**
+ * Did this pass give up?
+ *
+ * Reads the verdict recorded at fold time. The old test was
+ * `after === 0`, which worked only while a failing pass returned the
+ * previous lore untouched AND that lore happened to be empty -- so a
+ * failure in a thread with existing lore already read as a no-op, and
+ * now that failures append a gap marker `after` is never 0. Rows written
+ * before this change carry no `failed` field, so the old test stays as
+ * the fallback for them.
+ */
+function _loreRowFailed(e) {
+  if (!e) return false;
+  if (typeof e.failed === 'boolean') return e.failed;
+  return !!e.why && e.after === 0;
+}
+
 function openLoreInspector() {
   const thread = getActiveThread();
   if (!thread) return;
@@ -553,7 +628,7 @@ function openLoreInspector() {
       const cls = d > 0 ? 'lore-grow' : (d < 0 ? 'lore-shrink' : '');
       const t = new Date(e.at).toLocaleTimeString();
       const pct = Math.round((e.after / max) * 100);
-      html += '<tr' + ((e.why && e.after === 0) ? ' class="lore-failed"' : '') + '>'
+      html += '<tr' + (_loreRowFailed(e) ? ' class="lore-failed"' : '') + '>'
         + '<td>' + (i + 1) + '</td>'
         + '<td>' + escapeHtml(t) + '</td>'
         + '<td>' + e.folded + '</td>'
@@ -570,8 +645,8 @@ function openLoreInspector() {
     // request 404'd look identical in the size column.
     // A recovered pass still produced a summary, so it is a note, not a
     // failure -- amber rows are for passes that yielded nothing.
-    const failed = log.filter(e => e.why && e.after === 0);
-    const noted  = log.filter(e => e.why && e.after > 0);
+    const failed = log.filter(e => e.why && _loreRowFailed(e));
+    const noted  = log.filter(e => e.why && !_loreRowFailed(e));
     if (failed.length) {
       html += '<div class="lore-warn"><b>' + failed.length + ' of ' + log.length
             + ' passes produced no summary.</b><br>';

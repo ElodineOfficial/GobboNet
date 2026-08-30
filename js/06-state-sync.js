@@ -506,6 +506,57 @@ function safeParse(raw, fallback, asInt) {
 }
 
 /**
+ * DRY scan window, expressed so that every llama.cpp build accepts it.
+ *
+ * This field used to be hardcoded to -1, which older llama-server read as
+ * the sentinel for "scan the whole context". Upstream has since dropped
+ * that sentinel: the field is now range-checked as 0 <= value <= 2147483647
+ * and its default fell to 64. Newer engines reject -1 outright —
+ *
+ *   upstream HTTP 400: Field 'dry_penalty_last_n': Value must be between
+ *   0 <= value <= 2147483647, but got -1
+ *
+ * — and because this parameter is sent on EVERY request, not only when DRY
+ * is switched on, that 400 killed all generation rather than just DRY runs.
+ * It showed up on Linux first because the .deb pins a recent engine build
+ * (see installer-linux/engine.sha256) while Windows still runs an older one
+ * that honours -1. Nothing about the platform itself is involved.
+ *
+ * Sending the resolved context size keeps the original meaning intact on
+ * both: old builds expanded -1 to exactly this number, and new builds take
+ * it as a plain in-range window. resolveContextLimit() is already clamped
+ * to the model's real ceiling and floored at 2048, so the scan window can
+ * never exceed the context being scanned — and since the prompt builder
+ * never sends more than this many tokens, the window still covers 100% of
+ * what is actually in play.
+ *
+ * Note the value has to stay proportionate, not merely legal: the engine
+ * sizes its DRY ring buffer from this number, so 2147483647 would validate
+ * and then ask for a multi-gigabyte allocation to hold a window that can
+ * never fill.
+ *
+ * Hence the ceiling. resolveContextLimit() clamps to activeModel.maxCtx,
+ * but when no model is loaded yet there is no ceiling to clamp against and
+ * a card carrying a junk contextLimit (hand-edited, or imported from
+ * somewhere odd) passes straight through. Such a value is still legal
+ * upstream and would fail the wrong way — a silent oversized allocation
+ * rather than a 400. 262144 is the largest maxCtx in the registry, so this
+ * cannot trim a window any real model could actually use.
+ *
+ * The fallback only fires if 04-state.js somehow hasn't loaded; 4096 is a
+ * safe in-range window rather than a behavioural choice.
+ */
+const DRY_PENALTY_LAST_N_CEILING = 262144;
+
+function resolveDryPenaltyLastN(card) {
+  const n = (typeof resolveContextLimit === 'function')
+    ? parseInt(resolveContextLimit(card), 10)
+    : NaN;
+  if (isNaN(n) || n < 0) return 4096;
+  return Math.min(n, DRY_PENALTY_LAST_N_CEILING);
+}
+
+/**
  * Build sampler parameters from the active character card.
  * Returns an object to spread into the llama.cpp API body.
  *
@@ -540,7 +591,9 @@ function getCardSamplerParams(card) {
     dry_multiplier:     card.dryMultiplier !== undefined ? card.dryMultiplier : 0,
     dry_base:           card.dryBase !== undefined ? card.dryBase : 1.75,
     dry_allowed_length: card.dryAllowedLength !== undefined ? card.dryAllowedLength : 2,
-    dry_penalty_last_n: -1
+    // Resolved rather than -1: newer engines range-check this field and
+    // reject the old sentinel. See resolveDryPenaltyLastN above.
+    dry_penalty_last_n: resolveDryPenaltyLastN(card)
   };
 }
 

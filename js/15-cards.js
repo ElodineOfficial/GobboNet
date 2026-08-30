@@ -22,7 +22,15 @@ function openSettings() {
   const aScale = state.settings.avatarScale || 1;
   document.getElementById('set-avatar-scale').value = aScale;
   document.getElementById('set-allow-remote-images').checked = !!state.settings.allowRemoteImages;
+  // Defaults ON: `!== false` rather than a truthy test, so a settings blob
+  // saved before this option existed streams as it always did instead of
+  // silently switching the user to held replies on upgrade.
+  document.getElementById('set-stream-replies').checked = (state.settings.streamReplies !== false);
   document.getElementById('avatar-scale-val').textContent = Math.round(aScale * 100) + '%';
+  // The Add a Model button needs a server to download with; in file:// mode it
+  // is hidden with an explanation instead. Runs on open rather than at boot so
+  // it is correct even if the panel is built before 02-model.js has run.
+  try { applyModelCatalogAvailability(); } catch (e) { console.error('[catalog]', e); }
   document.getElementById('settings-modal').classList.add('open');
 }
 
@@ -39,6 +47,7 @@ function saveSettings() {
   state.settings.cotTimeoutMinutes = parseInt(document.getElementById('set-cot-timeout-minutes').value) || 2;
   state.settings.avatarScale = parseFloat(document.getElementById('set-avatar-scale').value) || 1;
   state.settings.allowRemoteImages = document.getElementById('set-allow-remote-images').checked;
+  state.settings.streamReplies = document.getElementById('set-stream-replies').checked;
   saveState();
   closeSettings();
   renderMessages();
@@ -85,12 +94,112 @@ function closeCharacters() {
   renderMessages();
 }
 
+/* ── Cast ordering ────────────────────────────────────────────────
+   Array position IS the order. There is no `order` field on a card and
+   there is no migration, because there is nothing to migrate: every card
+   that exists already has an index.
+
+   The roadmap leaned the other way, on the grounds that an explicit field
+   "survives merge-imports cleanly". Checked, and it's the reverse. Import
+   merges by id and appends (js/21-data.js:107), so exporting cards ranked
+   0,1,2 into a profile that already has cards ranked 0,1,2 produces two of
+   each rank; sorting that gives you the imported roster interleaved through
+   your own. Avoiding it means renumbering the incoming cards to sit after
+   the existing ones — which is what appending to an array already does, for
+   free. The field would buy a backfill, a collision rule and a sort on every
+   read path, to arrive at the same list.
+
+   The one real argument for a field is the threads store: cards persist as a
+   JSON array inside the meta record (js/05-persistence.js:570), so order
+   round-trips, but `threads` moved to an IDB store keyed by id and lost its
+   array order — hence `threadOrder` (js/05-persistence.js:567). If cards ever
+   move to a keyed store, the answer is the same six lines, not a schema
+   change. Noted rather than pre-built.
+
+   Nine sites read `[0]` as a fallback (getActiveCard, getActivePersona, the
+   four delete paths, two import paths). None of them means "the built-in
+   default" — they all mean "some card, deterministically". Under user
+   ordering they resolve to the user's top card, which is a better answer than
+   the oldest one, so all nine were left alone. */
+
+/* Move one entry within its array and slide the matching row to match.
+   Deliberately not a re-render: renderCardGrid() replaces the button that
+   was just clicked, and the row underneath a stationary cursor becomes the
+   row that got displaced — so clicking ▲ twice without moving the mouse
+   moves a card up and then straight back down. Moving the node keeps the
+   button under the pointer, and keeps focus for the keyboard path.
+   The array is still the source of truth: if the DOM has drifted from it for
+   any reason, this bails to a full render rather than guessing. */
+function moveCastEntry(list, id, delta, gridId, rerender, btn) {
+  if (!Array.isArray(list)) return;
+  const from = list.findIndex(x => x && x.id === id);
+  if (from === -1) return;
+  const to = from + delta;
+  if (to < 0 || to >= list.length) return;   // already at an end
+
+  const [moved] = list.splice(from, 1);
+  list.splice(to, 0, moved);
+  saveState();
+
+  const grid = document.getElementById(gridId);
+  const rows = grid ? Array.from(grid.children) : [];
+  if (!grid || rows.length !== list.length) { rerender(); return; }
+
+  grid.insertBefore(rows[from], delta < 0 ? rows[to] : rows[to].nextSibling);
+  refreshMoveButtons(grid);
+
+  // The clicked arrow travelled with its row. Put focus back on it, or on
+  // its partner if this move disabled it, so the keyboard path doesn't drop
+  // the user out to <body> on reaching an end.
+  if (btn && btn.isConnected) {
+    const partner = btn.parentNode && btn.parentNode.querySelector(
+      btn.dataset.move === 'up' ? '[data-move="down"]' : '[data-move="up"]');
+    const target = btn.disabled ? partner : btn;
+    if (target) target.focus({ preventScroll: true });
+  }
+}
+
+/* End-caps only: the top row can't go up, the bottom row can't go down.
+   Re-derived from live positions so it matches what a full render produces. */
+function refreshMoveButtons(grid) {
+  const rows = grid.children;
+  for (let i = 0; i < rows.length; i++) {
+    const up = rows[i].querySelector('[data-move="up"]');
+    const dn = rows[i].querySelector('[data-move="down"]');
+    if (up) up.disabled = (i === 0);
+    if (dn) dn.disabled = (i === rows.length - 1);
+  }
+}
+
+/* Shared markup for the reorder column. Omitted entirely for a list of one,
+   matching how Del is omitted at length 1. */
+function moveColumnHtml(id, name, idx, total, fn) {
+  if (total < 2) return '';
+  const who = escapeHtml(name || 'this entry');
+  const eid = escapeJsAttr(id);
+  return `
+      <div class="card-move">
+        <button class="card-move-btn" data-move="up" ${idx === 0 ? 'disabled' : ''}
+                onclick="event.stopPropagation();${fn}('${eid}',-1,this)"
+                title="Move up" aria-label="Move ${who} up">&#9650;</button>
+        <button class="card-move-btn" data-move="down" ${idx === total - 1 ? 'disabled' : ''}
+                onclick="event.stopPropagation();${fn}('${eid}',1,this)"
+                title="Move down" aria-label="Move ${who} down">&#9660;</button>
+      </div>`;
+}
+
+function moveCard(id, delta, btn) {
+  moveCastEntry(state.characterCards, id, delta, 'card-grid', renderCardGrid, btn);
+}
+
 function renderCardGrid() {
   const grid = document.getElementById('card-grid');
-  grid.innerHTML = state.characterCards.map(c => {
+  const total = state.characterCards.length;
+  grid.innerHTML = state.characterCards.map((c, i) => {
     const av = renderAvatar(c.avatar, c.name);
     return `
     <div class="card-item ${c.id === state.activeCardId ? 'active' : ''}" onclick="activateCard('${escapeJsAttr(c.id)}')">
+      ${moveColumnHtml(c.id, c.name, i, total, 'moveCard')}
       <div class="card-avatar">${av}</div>
       <div class="card-info">
         <div class="card-name">${escapeHtml(c.name)}</div>
@@ -168,6 +277,7 @@ function editCard(id) {
   document.getElementById('card-style').value = card.writingStyle;
   document.getElementById('card-personality').value = card.personality;
   document.getElementById('card-lore-toggle').value = card.loreEnabled !== false ? 'on' : 'off';
+  populateLoreModelSelect(card.loreModelFile || '');
   document.getElementById('card-starting-lore').value = card.startingLore || '';
   document.getElementById('card-rag-storybook').value = card.ragStorybook || '';
   updateStorybookReadout();
@@ -264,6 +374,7 @@ function saveCard() {
   card.writingStyle = document.getElementById('card-style').value;
   card.personality = document.getElementById('card-personality').value;
   card.loreEnabled = document.getElementById('card-lore-toggle').value === 'on';
+  card.loreModelFile = document.getElementById('card-lore-model').value || '';
   card.startingLore = document.getElementById('card-starting-lore').value;
   const _prevStorybook = card.ragStorybook || '';
   card.ragStorybook = document.getElementById('card-rag-storybook').value;
@@ -309,6 +420,49 @@ function saveCard() {
   document.getElementById('char-close-row').style.display = '';
   renderCardGrid();
   renderPersonaGrid();
+}
+
+/**
+ * Fill the card editor's compression-model dropdown from models-list.json —
+ * the same file the header picker reads, so the choices are exactly the
+ * GGUFs sitting in the models folder and nothing else. Drop a new model in
+ * and it appears here on the next open.
+ *
+ * `selected` may name a model that is no longer on disk (deleted, renamed,
+ * or the card came from another machine). That entry is kept in the list,
+ * marked missing, rather than silently reset to the default: quietly
+ * changing which model summarises someone's story is worse than showing
+ * them a stale name they can fix.
+ */
+async function populateLoreModelSelect(selected) {
+  const sel = document.getElementById('card-lore-model');
+  if (!sel) return;
+  const want = (selected || '').trim();
+  sel.innerHTML = '<option value="">Same as chat model (default)</option>';
+
+  let models = [];
+  try {
+    const r = await fetch('/models-list.json', { cache: 'no-store' });
+    if (r.ok) models = (await r.json()).models || [];
+  } catch (e) {
+    // file:// mode, or no file server. The default option still works, and
+    // compression falls back to the chat model at run time anyway.
+  }
+
+  for (const m of models) {
+    const o = document.createElement('option');
+    o.value = m.file;
+    o.textContent = m.name + (m.active ? '  (currently loaded)' : '');
+    sel.appendChild(o);
+  }
+
+  if (want && !models.some(m => m.file === want)) {
+    const o = document.createElement('option');
+    o.value = want;
+    o.textContent = want + '  (not in the models folder)';
+    sel.appendChild(o);
+  }
+  sel.value = want;
 }
 
 function cancelCardEdit() {

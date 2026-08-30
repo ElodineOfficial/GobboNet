@@ -255,6 +255,14 @@
   .btn { min-height: 44px; }
   .msg-action-btn { min-height: 36px; padding: 6px 12px; }
   .toggle-sidebar { padding: 6px 12px; }
+
+  /* Reorder arrows are revealed by hover on desktop. The width query in
+     css/10-responsive.css catches phones, but a touchscreen laptop is wide
+     AND touch, and there is no hover to reveal them with — so key off the
+     pointer here as well. (.card-actions has the same gap; left alone
+     deliberately, it predates this change.) */
+  .card-item .card-move { opacity: 1; }
+  .card-move-btn { width: 26px; min-height: 26px; font-size: 10px; }
 }
 
 /* ── Narrow-phone padding override that actually wins ─────────────

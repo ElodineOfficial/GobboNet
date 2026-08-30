@@ -20,6 +20,8 @@
 <link rel="stylesheet" href="css/13-components.css">
 <link rel="stylesheet" href="css/14-card-code.css">
 <link rel="stylesheet" href="css/15-lore-view.css">
+<link rel="stylesheet" href="css/16-math.css">
+  <link rel="stylesheet" href="css/17-markdown.css">
 </head>
 <body>
 
@@ -127,13 +129,46 @@
   <div class="modal">
     <h2>CONFIG</h2>
 
-    <div class="form-group" style="margin-top:12px; padding:12px; border:1px solid var(--green-dim); border-radius:var(--radius); background:rgba(0,255,65,0.03);">
-      <label>&#127760; Remote Images In Cards</label>
-      <div class="form-hint" style="margin-top:2px;margin-bottom:10px;">Character avatars and backgrounds can point at a web address instead of holding the picture themselves. Loading one contacts that server, which tells it your IP address &mdash; the only thing in GobboNet that reaches outside your machine without you asking. Off by default. Pictures pasted or uploaded directly are unaffected and always work.</div>
+    <div class="form-group" style="margin-top:12px; padding:12px; border:1px solid rgba(0,243,255,0.18); border-radius:var(--radius); background:rgba(0,243,255,0.02);">
+      <label for="set-avatar-scale">&#128100; Avatar Size</label>
+      <div class="form-hint" style="margin-top:2px;margin-bottom:10px;">Scales every avatar — in chat, on character cards, and on the dashboard. Applies live; set it wherever it reads best on your screen.</div>
+      <div style="display:flex;align-items:center;gap:14px;">
+        <input type="range" id="set-avatar-scale" min="0.7" max="1.6" step="0.05" value="1" oninput="previewAvatarScale(this.value)" style="flex:1;">
+        <span id="avatar-scale-val" style="font-size:13px;font-weight:700;color:var(--cyan-bright);min-width:46px;text-align:right;">100%</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:12px;margin-top:14px;">
+        <span class="form-hint" style="margin:0;flex-shrink:0;">Preview:</span>
+        <div class="msg-avatar" style="border-color:var(--cyan-dim);color:var(--cyan-bright);box-shadow:inset 0 0 12px rgba(0,0,0,0.85),0 0 9px rgba(0,243,255,0.22);">U</div>
+        <div class="msg-avatar" style="border-color:var(--magenta-dim);color:var(--magenta);box-shadow:inset 0 0 12px rgba(0,0,0,0.85),0 0 9px rgba(217,0,255,0.22);">AI</div>
+      </div>
+    </div>
+
+    <div class="form-group" style="margin-top:12px; padding:12px; border:1px solid rgba(0,243,255,0.18); border-radius:var(--radius); background:rgba(0,243,255,0.02);">
+      <label>&#128172; Reply Delivery</label>
+      <div class="form-hint" style="margin-top:2px;margin-bottom:10px;">Watch the reply appear word by word, or hold it back and post it complete. Holding doesn't slow anything down &mdash; the reply is written just as fast, you simply don't see it until it's done. Handy when a story beat lands better unspoiled. You'll still see the typing dots and the timer, and Stop still works.</div>
       <label class="code-enable-row">
-        <input type="checkbox" id="set-allow-remote-images">
-        <span>Allow remote images</span>
+        <input type="checkbox" id="set-stream-replies">
+        <span>Stream replies as they're written</span>
       </label>
+    </div>
+
+    <div class="form-group" style="margin-top:4px; padding:10px 12px; border:1px dashed rgba(0,243,255,0.15); border-radius:var(--radius); background:rgba(0,243,255,0.02);">
+      <div class="form-hint" style="margin:0;">
+        Your name, avatar, and text colors moved to <strong>Personas</strong> &mdash;
+        open the Characters panel and edit your persona card.
+        You can keep multiple personas and swap between them per conversation.
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label for="set-apikey">Search API Key (web search)</label>
+      <input type="password" id="set-apikey" placeholder="Get a free key at ollama.com/settings/keys">
+      <div style="margin-top:6px; display:flex; gap:8px; align-items:center;">
+        <button class="btn btn-sm" type="button" onclick="testSearchConnection()">Test Connection</button>
+        <span id="search-test-status" style="font-size:12px;color:var(--cyan-dim);"></span>
+      </div>
+      <pre id="search-test-output" style="display:none; margin-top:8px; max-height:200px; overflow:auto; font-size:11px; padding:8px; background:var(--black); border:1px solid var(--border); border-radius:var(--radius); color:var(--cyan-mid);"></pre>
+      <div class="form-hint">Free key from ollama.com/settings/keys. Search proxy on :11435 is started by launch.bat. Note: the search proxy is the ONLY network traffic — llama.cpp itself is fully offline.</div>
     </div>
 
     <div class="form-group" style="margin-top:12px; padding:12px; border:1px solid rgba(255,149,0,0.22); border-radius:var(--radius); background:rgba(255,149,0,0.03);">
@@ -177,39 +212,14 @@
       </div>
     </div>
 
-    <div class="form-group" style="margin-top:4px; padding:10px 12px; border:1px dashed rgba(0,243,255,0.15); border-radius:var(--radius); background:rgba(0,243,255,0.02);">
-      <div class="form-hint" style="margin:0;">
-        Your name, avatar, and text colors moved to <strong>Personas</strong> &mdash;
-        open the Characters panel and edit your persona card.
-        You can keep multiple personas and swap between them per conversation.
-      </div>
+    <div class="form-group" style="margin-top:12px; padding:12px; border:1px solid var(--green-dim); border-radius:var(--radius); background:rgba(0,255,65,0.03);">
+      <label>&#127760; Remote Images In Cards</label>
+      <div class="form-hint" style="margin-top:2px;margin-bottom:10px;">Character avatars and backgrounds can point at a web address instead of holding the picture themselves. Loading one contacts that server, which tells it your IP address &mdash; the only thing in GobboNet that reaches outside your machine without you asking. Off by default. Pictures pasted or uploaded directly are unaffected and always work.</div>
+      <label class="code-enable-row">
+        <input type="checkbox" id="set-allow-remote-images">
+        <span>Allow remote images</span>
+      </label>
     </div>
-
-    <div class="form-group" style="margin-top:12px; padding:12px; border:1px solid rgba(0,243,255,0.18); border-radius:var(--radius); background:rgba(0,243,255,0.02);">
-      <label for="set-avatar-scale">&#128100; Avatar Size</label>
-      <div class="form-hint" style="margin-top:2px;margin-bottom:10px;">Scales every avatar — in chat, on character cards, and on the dashboard. Applies live; set it wherever it reads best on your screen.</div>
-      <div style="display:flex;align-items:center;gap:14px;">
-        <input type="range" id="set-avatar-scale" min="0.7" max="1.6" step="0.05" value="1" oninput="previewAvatarScale(this.value)" style="flex:1;">
-        <span id="avatar-scale-val" style="font-size:13px;font-weight:700;color:var(--cyan-bright);min-width:46px;text-align:right;">100%</span>
-      </div>
-      <div style="display:flex;align-items:center;gap:12px;margin-top:14px;">
-        <span class="form-hint" style="margin:0;flex-shrink:0;">Preview:</span>
-        <div class="msg-avatar" style="border-color:var(--cyan-dim);color:var(--cyan-bright);box-shadow:inset 0 0 12px rgba(0,0,0,0.85),0 0 9px rgba(0,243,255,0.22);">U</div>
-        <div class="msg-avatar" style="border-color:var(--magenta-dim);color:var(--magenta);box-shadow:inset 0 0 12px rgba(0,0,0,0.85),0 0 9px rgba(217,0,255,0.22);">AI</div>
-      </div>
-    </div>
-
-    <div class="form-group">
-      <label for="set-apikey">Search API Key (web search)</label>
-      <input type="password" id="set-apikey" placeholder="Get a free key at ollama.com/settings/keys">
-      <div style="margin-top:6px; display:flex; gap:8px; align-items:center;">
-        <button class="btn btn-sm" type="button" onclick="testSearchConnection()">Test Connection</button>
-        <span id="search-test-status" style="font-size:12px;color:var(--cyan-dim);"></span>
-      </div>
-      <pre id="search-test-output" style="display:none; margin-top:8px; max-height:200px; overflow:auto; font-size:11px; padding:8px; background:var(--black); border:1px solid var(--border); border-radius:var(--radius); color:var(--cyan-mid);"></pre>
-      <div class="form-hint">Free key from ollama.com/settings/keys. Search proxy on :11435 is started by launch.bat. Note: the search proxy is the ONLY network traffic — llama.cpp itself is fully offline.</div>
-    </div>
-
 
     <div class="form-group" style="margin-top:12px; padding:12px; border:1px solid rgba(255,165,0,0.25); border-radius:var(--radius); background:rgba(255,165,0,0.03);">
       <label style="color:var(--amber,#ffaa00);">&#9201; Infinite Runtime Bug Fix</label>
@@ -226,19 +236,84 @@
         </div>
       </div>
     </div>
+
+    <!-- Sits directly above Privacy Status, which stays last. This is a button,
+         not a setting: openSettings() does not populate it and saveSettings()
+         does not read it.
+         The download path is known-bugged and held off pending a fix patch --
+         applyModelCatalogAvailability() in js/02-model.js disables the button
+         and writes the reason into #add-model-unavailable. The hint below is
+         written in the future tense to match. -->
+    <div class="form-group" id="add-model-block" style="margin-top:12px; padding:12px; border:1px solid rgba(0,243,255,0.18); border-radius:var(--radius); background:rgba(0,243,255,0.02);">
+      <label>&#128229; Add a Model</label>
+      <div class="form-hint" style="margin-top:2px;margin-bottom:10px;">
+        Browse the model list and download one straight into your models folder,
+        where it will appear in the header dropdown when it lands.
+      </div>
+      <button class="btn btn-sm" type="button" onclick="openModelCatalog()">BROWSE CATALOGUE</button>
+      <div class="form-hint" id="add-model-unavailable" style="display:none;margin-top:8px;"></div>
+    </div>
+
     <div class="form-group" style="margin-top:12px; padding:12px; border:1px solid var(--green-dim); border-radius:var(--radius); background:rgba(0,255,65,0.03);">
       <label style="color:var(--green-neon);">&#128274; Privacy Status</label>
       <div class="form-hint" style="color:var(--green-dim);">
-        llama.cpp runs 100% offline — no accounts, no telemetry, no network calls.
+        llama.cpp runs 100% offline &mdash; no accounts, no telemetry, no tracking.
         Your model and conversations never leave your machine.
-        The only network traffic is the optional web search proxy (port 11435),
-        which you control via the search toggle.
+        Two things can reach the internet, both optional and both listed here:
+        the web search proxy, which you control with the search toggle, and the
+        model catalogue above, which is a plain download of a public list with
+        nothing about you or your hardware attached. Turn it off in
+        <code>config.toml</code> with <code>model_catalog_remote = false</code>.
       </div>
     </div>
 
     <div class="modal-actions">
       <button class="btn" onclick="closeSettings()">Cancel</button>
       <button class="btn btn-fill" onclick="saveSettings()">SAVE</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODEL CATALOGUE MODAL
+     Deliberately matches the first-run wizard's download step rather than
+     inventing a second interaction for the same job: a list of models, one
+     progress bar, a log line, one button. Progress is polled, not streamed —
+     the wizard polls and it works. -->
+<div class="modal-backdrop" id="model-catalog-modal">
+  <div class="modal">
+    <h2>ADD A MODEL</h2>
+
+    <div class="form-hint" id="model-catalog-intro" style="margin-bottom:12px;">
+      These download from HuggingFace straight to your models folder. GobboNet
+      checks each one against the publisher's checksum and throws it away if it
+      does not match. Only one download runs at a time.
+    </div>
+
+    <div class="form-hint" id="model-catalog-free" style="margin-bottom:10px;"></div>
+
+    <!-- LIST VIEW -->
+    <div id="model-catalog-list"></div>
+
+    <!-- PROGRESS VIEW -->
+    <div id="model-catalog-progress" style="display:none;">
+      <div id="model-catalog-dl-title" style="font-size:14px;margin-bottom:8px;color:var(--cyan-mid);"></div>
+      <div class="dl-bar"><i id="model-catalog-bar"></i></div>
+      <div class="form-hint" id="model-catalog-log" style="margin-top:6px;">starting&hellip;</div>
+      <!-- Separate from the log line on purpose: the log is rewritten by every
+           poll tick, so anything durable written there is gone within 700ms. -->
+      <div class="form-hint" id="model-catalog-note" style="display:none;margin-top:6px;color:var(--amber,#ffaa00);"></div>
+      <div id="model-catalog-swap-row" style="display:none;margin-top:12px;">
+        <div class="form-hint" style="margin-bottom:8px;">
+          Switching now restarts the model and changes the context window, so the
+          conversation you have open will be re-sent under the new limit. You can
+          also leave it and pick the new model from the header dropdown later.
+        </div>
+        <button class="btn btn-sm btn-fill" type="button" onclick="swapToDownloadedModel()">SWITCH TO IT NOW</button>
+      </div>
+    </div>
+
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModelCatalog()">CLOSE</button>
     </div>
   </div>
 </div>
@@ -393,6 +468,15 @@
           <option value="off">Disabled — oldest messages are dropped</option>
         </select>
         <div class="form-hint">When enabled, messages beyond the last 40 are compressed into a running summary that persists across the conversation.</div>
+      </div>
+
+      <div class="form-group">
+        <label for="card-lore-model">Compression Model <span style="opacity:0.5;font-weight:400;font-size:11px;">&mdash; advanced; leave as-is unless you want this</span></label>
+        <select id="card-lore-model">
+          <option value="">Same as chat model (default)</option>
+        </select>
+        <div class="form-hint">Summarising is a different job from writing dialogue. Any GGUF you have put in the <code>models</code> folder can do it instead &mdash; a small one to keep summaries terse and fast, or a larger one if you want the summaries to hold nuance the chat model misses.</div>
+        <div class="form-hint" style="color:var(--amber,#ffaa00);margin-top:6px;">Costs two model loads every time compression fires: once to load this model, once to put your chat model back. llama.cpp holds one model at a time, so there is no way around that. Compression already pauses the conversation while it runs &mdash; this makes that pause considerably longer. Worth it for a long story; not worth it for casual chat.</div>
       </div>
 
       <div class="form-group">
@@ -914,7 +998,7 @@ gobbo.every(5, async () =&gt; {
             <div><span style="color:var(--green-neon);">Frontend</span> &mdash; Vanilla HTML/CSS/JS &mdash; no build step, no frameworks</div>
             <div><span style="color:var(--green-neon);">Server</span> &mdash; PowerShell HTTP listener + launch.bat</div>
             <div><span style="color:var(--green-neon);">Storage</span> &mdash; your browser, mirrored to a state file in the install folder so a reload never loses a thread</div>
-            <div><span style="color:var(--green-neon);">Licence</span> &mdash; MIT &mdash; every file in the install folder is readable and yours to change</div>
+            <div><span style="color:var(--green-neon);">Licence</span> &mdash; AGPLv3 &mdash; every file in the install folder is readable and yours to change, and anyone you serve it to gets that same right</div>
           </div>
         </div>
 

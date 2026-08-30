@@ -1,0 +1,48 @@
+#!/bin/sh
+# GobboNet postrm.
+#
+# Refreshes the same caches postinst did, and — importantly — does not touch
+# any user's data, not even on purge.
+set -e
+
+case "$1" in
+    remove|purge|upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
+        if command -v update-desktop-database >/dev/null 2>&1; then
+            update-desktop-database -q /usr/share/applications || true
+        fi
+        if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+            gtk-update-icon-cache -q -f -t /usr/share/icons/hicolor || true
+        fi
+        ;;
+esac
+
+# --- what this script deliberately does not do ------------------------------
+#
+# ~/.config/gobbonet and ~/.local/share/gobbonet are left alone, including on
+# purge. Two reasons, and both matter:
+#
+#   1. A root maintainer script cannot safely decide to delete files out of
+#      every home directory on the machine. It would have to guess which homes
+#      to walk, and getting that wrong deletes someone else's data.
+#   2. The models in there are gigabytes the user waited for. They are not
+#      ours to remove on a package operation they may well be reversing in
+#      thirty seconds.
+#
+# The command that clears them is `gobbonet uninstall`, run as the user who
+# owns them — which is also the only context that can prompt about the models.
+# Run it BEFORE removing the package, while the binary is still installed.
+
+if [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
+    echo ""
+    echo "  GobboNet's program files are gone."
+    echo ""
+    echo "  Your conversations, config and downloaded models were left alone —"
+    echo "  a package script running as root should not delete files out of"
+    echo "  home directories."
+    echo ""
+    echo "  To remove those too, reinstall and run:  gobbonet uninstall"
+    echo "    --keep-models / --remove-models / --yes are all accepted."
+    echo ""
+fi
+
+exit 0

@@ -293,6 +293,11 @@
   .card-item .card-avatar { width: calc(50px * var(--avatar-scale, 1)); height: calc(50px * var(--avatar-scale, 1)); font-size: calc(20px * var(--avatar-scale, 1)); }
   /* Touch: always show card actions */
   .card-item .card-actions { opacity: 1; }
+  /* Same for the reorder arrows — there is no hover to reveal them with.
+     Taller targets for a thumb; the pair still costs less row width than
+     one more button in the actions strip would. */
+  .card-item .card-move { opacity: 1; }
+  .card-move-btn { width: 26px; min-height: 26px; font-size: 10px; }
 
   /* --- Lore panel --- */
   .lore-panel { padding: 10px 12px; }

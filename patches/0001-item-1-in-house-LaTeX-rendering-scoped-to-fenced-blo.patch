@@ -1,0 +1,1212 @@
+From 397c1ac0f92dbf440b19716663e0eaec42929b38 Mon Sep 17 00:00:00 2001
+From: Implementing AI <ai@example.com>
+Date: Sat, 29 Aug 2026 14:56:44 +0000
+Subject: [PATCH 1/4] item 1: in-house LaTeX rendering, scoped to fenced blocks
+
+~110 symbols and a recursive-descent parser in js/18-utils.js. No
+dependency, no CDN, no vendored fonts. Every leaf goes through
+escapeHtml; class names are fixed literals.
+
+- js/18-utils.js: renderer + latex/math/tex fence hook ahead of the
+  generic fence handler; mathSourceSafe for the source view
+- css/16-math.css: layout (new file, linked in chat.html)
+- math-preview.html: visual check against the real renderer + CSS
+- test-math-render.mjs: 141 assertions
+---
+ chat.html            |   1 +
+ css/16-math.css      | 179 +++++++++++++++
+ js/18-utils.js       | 506 ++++++++++++++++++++++++++++++++++++++++++-
+ math-preview.html    | 116 ++++++++++
+ test-math-render.mjs | 321 +++++++++++++++++++++++++++
+ 5 files changed, 1122 insertions(+), 1 deletion(-)
+ create mode 100644 css/16-math.css
+ create mode 100644 math-preview.html
+ create mode 100644 test-math-render.mjs
+
+diff --git a/chat.html b/chat.html
+index 6c6b0a2..9ebb210 100644
+--- a/chat.html
++++ b/chat.html
+@@ -20,6 +20,7 @@
+ <link rel="stylesheet" href="css/13-components.css">
+ <link rel="stylesheet" href="css/14-card-code.css">
+ <link rel="stylesheet" href="css/15-lore-view.css">
++<link rel="stylesheet" href="css/16-math.css">
+ </head>
+ <body>
+ 
+diff --git a/css/16-math.css b/css/16-math.css
+new file mode 100644
+index 0000000..be0e1ff
+--- /dev/null
++++ b/css/16-math.css
+@@ -0,0 +1,179 @@
++/* ================================================================
++   MATH RENDERING
++
++   Layout for the in-house LaTeX renderer (js/18-utils.js). Fractions,
++   radicals and stacked operator limits are all done with inline-flex
++   rather than tables or absolute positioning, so they stay on the text
++   baseline and reflow with the message.
++
++   No font is shipped. KaTeX's typographic quality comes substantially
++   from bundling Computer Modern — roughly a megabyte, in artefacts that
++   also have to fit an NSIS installer and Linux packages. A system serif
++   is a visible step down and a deliberate one.
++================================================================ */
++
++.math-block {
++  background: var(--panel);
++  border: 1px solid var(--border);
++  border-radius: var(--radius);
++  margin: 12px 0;
++  overflow: hidden;
++}
++
++.math-rendered {
++  padding: 14px 16px;
++  overflow-x: auto;          /* long equations scroll rather than wrap mid-fraction */
++  font-family: var(--font-math, Georgia, 'Times New Roman', serif);
++  font-size: 1.15em;
++  line-height: 2.1;          /* room for stacked limits and accents */
++  color: var(--text);
++}
++
++/* Source view — hidden until the Source button is pressed. */
++.math-source {
++  display: none;
++  margin: 0;
++  padding: 14px 16px;
++  border-top: 1px solid var(--border);
++  background: var(--black);
++  overflow-x: auto;
++}
++.math-block.math-show-source .math-source { display: block; }
++.math-block.math-show-source .math-rendered { display: none; }
++
++/* ── Atoms ──────────────────────────────────────────────────────── */
++
++.math-var { font-style: italic; }                    /* single letters are variables */
++.math-fn,
++.math-text { font-style: normal; }
++.math-fn { margin-right: 0.15em; }
++.math-text { font-family: var(--font); font-size: 0.92em; }
++
++/* Approximate TeX spacing: relations and binary operators get air.
++   Real TeX varies the amount by class; this is one flat value. */
++.math-bin { margin: 0 0.22em; }
++
++.math-space { display: inline-block; }
++
++.math-unknown {
++  font-family: var(--font);
++  font-size: 0.9em;
++  color: var(--amber, var(--label));
++  background: rgba(255, 176, 0, 0.12);
++  border-radius: 3px;
++  padding: 0 3px;
++  font-style: normal;
++}
++
++/* ── Fractions ──────────────────────────────────────────────────── */
++
++.math-frac {
++  display: inline-flex;
++  flex-direction: column;
++  vertical-align: -0.55em;    /* sits the bar near the baseline */
++  text-align: center;
++  margin: 0 0.15em;
++  font-size: 0.95em;
++}
++.math-num {
++  border-bottom: 1px solid currentColor;
++  padding: 0 0.35em 0.1em;
++  line-height: 1.35;
++}
++.math-den {
++  padding: 0.1em 0.35em 0;
++  line-height: 1.35;
++}
++
++.math-binom { display: inline-flex; align-items: center; }
++.math-binom-stack {
++  display: inline-flex;
++  flex-direction: column;
++  text-align: center;
++  padding: 0 0.2em;
++  line-height: 1.25;
++  font-size: 0.95em;
++}
++
++/* ── Radicals ───────────────────────────────────────────────────── */
++
++.math-sqrt { display: inline-flex; align-items: flex-start; margin: 0 0.1em; }
++.math-radical { font-size: 1.15em; line-height: 1; }
++.math-radicand {
++  border-top: 1px solid currentColor;
++  padding: 0.12em 0.25em 0 0.15em;
++  margin-top: 0.12em;
++}
++.math-root {
++  font-size: 0.65em;
++  align-self: flex-start;
++  margin-right: -0.45em;      /* tucks the index into the radical's crook */
++  margin-top: 0.1em;
++}
++
++/* ── Scripts ────────────────────────────────────────────────────── */
++
++.math-sup-i, .math-sub-i { font-size: 0.72em; }
++
++/* Both scripts on one base: stacked, not sequential. */
++.math-subsup {
++  display: inline-flex;
++  flex-direction: column;
++  vertical-align: -0.35em;
++  font-size: 0.72em;
++  line-height: 1.15;
++  text-align: left;
++  margin-left: 0.05em;
++}
++
++/* ── Big operators ──────────────────────────────────────────────── */
++
++.math-bigop { font-size: 1.45em; line-height: 1; }
++
++.math-limits {
++  display: inline-flex;
++  flex-direction: column;
++  align-items: center;
++  vertical-align: -0.5em;
++  margin: 0 0.2em;
++}
++.math-limits .math-upper,
++.math-limits .math-lower {
++  font-size: 0.62em;
++  line-height: 1.2;
++}
++.math-limits .math-upper:empty,
++.math-limits .math-lower:empty { display: none; }
++
++/* ── Accents ────────────────────────────────────────────────────── */
++
++.math-accent {
++  display: inline-flex;
++  flex-direction: column;
++  align-items: center;
++  vertical-align: -0.15em;
++}
++.math-accent .math-mark {
++  font-size: 0.8em;
++  line-height: 0.6;
++  height: 0.5em;
++}
++.math-accent .math-acc-base { line-height: 1.1; }
++
++/* ── Alphabets ──────────────────────────────────────────────────── */
++
++.math-f-cal  { font-family: 'Segoe Script', 'Apple Chancery', cursive; font-style: normal; }
++.math-f-bb   { font-weight: 600; letter-spacing: 0.03em; }
++.math-f-bf   { font-weight: 700; font-style: normal; }
++.math-f-rm   { font-style: normal; }
++.math-f-it   { font-style: italic; }
++.math-f-sf   { font-family: var(--font); font-style: normal; }
++.math-f-tt   { font-family: var(--font-mono, monospace); font-style: normal; }
++.math-f-frak { font-family: 'UnifrakturMaguntia', 'Luminari', fantasy; font-style: normal; }
++.math-f-cal .math-var,
++.math-f-bb .math-var,
++.math-f-bf .math-var,
++.math-f-rm .math-var,
++.math-f-sf .math-var,
++.math-f-tt .math-var,
++.math-f-frak .math-var { font-style: inherit; font-weight: inherit; }
+diff --git a/js/18-utils.js b/js/18-utils.js
+index 6207989..78a5469 100644
+--- a/js/18-utils.js
++++ b/js/18-utils.js
+@@ -59,7 +59,10 @@ function copyMessage(index) {
+  * with code that contains quotes, backticks, or angle brackets.
+  */
+ function copyCodeBlock(btn) {
+-  const block = btn.closest('.code-block, .file-block');
++  // .math-block is included so its Copy button yields the LaTeX source
++  // rather than the rendered glyphs — the source pre is the only
++  // <pre><code> in that block, so the existing lookup finds it unchanged.
++  const block = btn.closest('.code-block, .file-block, .math-block');
+   const codeEl = block && block.querySelector('pre code');
+   if (!codeEl) return;
+   const text = codeEl.textContent;
+@@ -286,6 +289,495 @@ const DIALOG_QUOTE_RE = new RegExp(
+   'g'
+ );
+ 
++/* ================================================================
++   MATH RENDERER
++
++   ~110 symbols and a recursive-descent parser for the subset of LaTeX a
++   chat model actually emits. No dependency, no CDN, no vendored fonts —
++   which is the point: this ships inside the NSIS installer and the Linux
++   packages, and the privacy premise means it can never fetch anything.
++
++   SCOPE. This renders maths recognisably, not perfectly. Known gaps, all
++   deliberate:
++     - No matrix or aligned environments (\begin{pmatrix} etc). They fall
++       through to the unknown-command path and show their source.
++     - No growing delimiters. \left( \frac{a}{b} \right) draws fixed-size
++       parens; real TeX scales them to the fraction.
++     - No nested script shrinking (scriptstyle / scriptscriptstyle).
++     - Spacing is approximate. TeX distinguishes operators, relations and
++       punctuation and spaces each differently; we give relations and
++       binary operators a flat margin and leave it there.
++   The trade is deliberate: "recognisably correct" with a readable 300
++   lines beats "typographically perfect" with 280 KB of parser plus a
++   megabyte of Computer Modern.
++
++   SECURITY. This consumes model output, imported character cards, and
++   synced state from paired LAN devices — the same untrusted inputs the
++   escaping work covered. Two rules hold throughout, and every function
++   below obeys them:
++     1. Every character that reaches the output goes through escapeHtml().
++        No exceptions, including the fixed symbol table, so there is one
++        rule to audit rather than a list of trusted sources.
++     2. Class names are fixed literals. Nothing from the input is ever
++        interpolated into a tag, an attribute, or a style.
++   Nothing here touches innerHTML and nothing evaluates anything.
++================================================================ */
++
++/* Command → the character it prints. Fixed table; nothing is computed. */
++const MATH_SYMBOLS = {
++  // Greek, lower
++  alpha: 'α', beta: 'β', gamma: 'γ', delta: 'δ', epsilon: 'ϵ', varepsilon: 'ε',
++  zeta: 'ζ', eta: 'η', theta: 'θ', vartheta: 'ϑ', iota: 'ι', kappa: 'κ',
++  lambda: 'λ', mu: 'μ', nu: 'ν', xi: 'ξ', pi: 'π', varpi: 'ϖ', rho: 'ρ',
++  varrho: 'ϱ', sigma: 'σ', varsigma: 'ς', tau: 'τ', upsilon: 'υ', phi: 'ϕ',
++  varphi: 'φ', chi: 'χ', psi: 'ψ', omega: 'ω',
++  // Greek, upper
++  Gamma: 'Γ', Delta: 'Δ', Theta: 'Θ', Lambda: 'Λ', Xi: 'Ξ', Pi: 'Π',
++  Sigma: 'Σ', Upsilon: 'Υ', Phi: 'Φ', Psi: 'Ψ', Omega: 'Ω',
++  // Relations
++  leq: '≤', le: '≤', geq: '≥', ge: '≥', neq: '≠', ne: '≠', equiv: '≡',
++  approx: '≈', sim: '∼', simeq: '≃', cong: '≅', propto: '∝', ll: '≪', gg: '≫',
++  subset: '⊂', supset: '⊃', subseteq: '⊆', supseteq: '⊇', in: '∈', notin: '∉',
++  ni: '∋', perp: '⊥', parallel: '∥', mid: '∣', doteq: '≐',
++  // Binary operators
++  times: '×', div: '÷', pm: '±', mp: '∓', cdot: '·', ast: '∗', star: '⋆',
++  circ: '∘', bullet: '∙', oplus: '⊕', ominus: '⊖', otimes: '⊗', oslash: '⊘',
++  odot: '⊙', cap: '∩', cup: '∪', setminus: '∖', wedge: '∧', vee: '∨',
++  triangleq: '≜',
++  // Arrows
++  rightarrow: '→', to: '→', leftarrow: '←', gets: '←', leftrightarrow: '↔',
++  Rightarrow: '⇒', implies: '⟹', Leftarrow: '⇐', Leftrightarrow: '⇔',
++  iff: '⟺', mapsto: '↦', longrightarrow: '⟶', longleftarrow: '⟵',
++  uparrow: '↑', downarrow: '↓', nearrow: '↗', searrow: '↘',
++  // Misc symbols
++  infty: '∞', partial: '∂', nabla: '∇', forall: '∀', exists: '∃',
++  nexists: '∄', emptyset: '∅', varnothing: '∅', neg: '¬', lnot: '¬',
++  angle: '∠', triangle: '△', square: '□', diamond: '⋄', dagger: '†',
++  prime: '′', ell: 'ℓ', hbar: 'ℏ', Re: 'ℜ', Im: 'ℑ', aleph: 'ℵ',
++  surd: '√', top: '⊤', bot: '⊥', flat: '♭', sharp: '♯', natural: '♮',
++  checkmark: '✓', dots: '…', ldots: '…', cdots: '⋯', vdots: '⋮', ddots: '⋱',
++  degree: '°', percent: '%',
++  // Delimiters that arrive as commands
++  langle: '⟨', rangle: '⟩', lceil: '⌈', rceil: '⌉', lfloor: '⌊', rfloor: '⌋',
++  lbrace: '{', rbrace: '}', vert: '|', Vert: '‖', backslash: '\\',
++};
++
++/* Big operators. Scripts attached to these stack above and below rather
++   than sitting beside, which is the single biggest visual cue that maths
++   is being typeset rather than printed. */
++const MATH_BIGOPS = {
++  sum: '∑', prod: '∏', coprod: '∐', int: '∫', iint: '∬', iiint: '∭',
++  oint: '∮', bigcup: '⋃', bigcap: '⋂', bigoplus: '⨁', bigotimes: '⨂',
++  bigvee: '⋁', bigwedge: '⋀', bigsqcup: '⨆', lim: 'lim', limsup: 'lim sup',
++  liminf: 'lim inf', max: 'max', min: 'min', sup: 'sup', inf: 'inf',
++  argmax: 'arg max', argmin: 'arg min',
++};
++
++/* Function names: upright roman, not italic. \sin x, not 𝑠𝑖𝑛 𝑥. */
++const MATH_FUNCS = new Set([
++  'sin', 'cos', 'tan', 'cot', 'sec', 'csc', 'arcsin', 'arccos', 'arctan',
++  'sinh', 'cosh', 'tanh', 'coth', 'log', 'ln', 'lg', 'exp', 'det', 'dim',
++  'ker', 'deg', 'gcd', 'hom', 'arg', 'Pr', 'mod', 'bmod',
++]);
++
++/* Accents: command → the mark drawn over the base. */
++const MATH_ACCENTS = {
++  hat: '^', widehat: '^', tilde: '~', widetilde: '~', bar: '‾', overline: '‾',
++  vec: '→', dot: '·', ddot: '··', acute: '´', grave: '`', check: 'ˇ',
++  breve: '˘', mathring: '˚',
++};
++
++/* Alphabet styling. Values are class-name suffixes, chosen from this fixed
++   table only — never taken from input. */
++const MATH_FONTS = {
++  mathcal: 'cal', mathbb: 'bb', mathbf: 'bf', mathrm: 'rm', mathit: 'it',
++  mathsf: 'sf', mathtt: 'tt', mathfrak: 'frak', boldsymbol: 'bf',
++  textbf: 'bf', textit: 'it', textrm: 'rm', operatorname: 'rm',
++};
++
++/* Explicit spacing commands → em widths. */
++const MATH_SPACES = {
++  ',': 0.17, ':': 0.22, ';': 0.28, '!': -0.17, ' ': 0.25,
++  quad: 1, qquad: 2, thinspace: 0.17, enspace: 0.5,
++};
++
++/* Characters TeX puts air around. Approximate — see SCOPE above. */
++const MATH_SPACED = new Set([
++  '+', '−', '=', '<', '>', '±', '∓', '×', '÷', '≤', '≥', '≠', '≈', '≡',
++  '→', '←', '↔', '⇒', '⇐', '⇔', '∈', '∉', '⊂', '⊃', '⊆', '⊇', '∪', '∩',
++  '∧', '∨', '⊕', '⊗', '∼', '≃', '≅', '∝', '≪', '≫', '⟹', '⟸', '⟺', '↦',
++]);
++
++/* Inverse of escapeHtml, and nothing more.
++ *
++ * parseMarkdown escapes the whole message before it looks for fences, so by
++ * the time a ```latex body reaches the renderer its `< > & " '` are already
++ * entities. The renderer parses raw LaTeX and re-escapes every leaf itself
++ * (rule 1 above), so it needs the raw text back.
++ *
++ * This exists for that one boundary. It must never be used to build HTML —
++ * its output goes straight into the tokenizer and comes back out through
++ * escapeHtml. &amp; is decoded LAST so "&amp;lt;" ends up as the literal
++ * text "&lt;" rather than being decoded twice into "<".
++ */
++function mathDecodeEntities(s) {
++  return String(s)
++    .replace(/&lt;/g, '<')
++    .replace(/&gt;/g, '>')
++    .replace(/&quot;/g, '"')
++    .replace(/&#39;/g, "'")
++    .replace(/&amp;/g, '&');
++}
++
++/* ── Tokenizer ──────────────────────────────────────────────────── */
++
++function mathTokenize(src) {
++  const out = [];
++  let i = 0;
++  while (i < src.length) {
++    const c = src[i];
++    if (c === '\\') {
++      const rest = src.slice(i + 1);
++      const word = /^[a-zA-Z]+/.exec(rest);
++      if (word) { out.push({ t: 'cmd', v: word[0] }); i += 1 + word[0].length; continue; }
++      // \\ is a line break; \{ \$ \% and friends are literal characters.
++      const next = src[i + 1];
++      if (next === '\\') { out.push({ t: 'br' }); i += 2; continue; }
++      if (next === undefined) { out.push({ t: 'chr', v: '\\' }); i += 1; continue; }
++      if (Object.prototype.hasOwnProperty.call(MATH_SPACES, next)) {
++        out.push({ t: 'space', v: MATH_SPACES[next] }); i += 2; continue;
++      }
++      out.push({ t: 'chr', v: next, literal: true }); i += 2; continue;
++    }
++    if (c === '{') { out.push({ t: '{' }); i++; continue; }
++    if (c === '}') { out.push({ t: '}' }); i++; continue; }
++    if (c === '^') { out.push({ t: '^' }); i++; continue; }
++    if (c === '_') { out.push({ t: '_' }); i++; continue; }
++    if (c === '\n') { out.push({ t: 'br' }); i++; continue; }
++    if (c === ' ' || c === '\t' || c === '\r') { i++; continue; }  // math mode eats whitespace
++    if (c === '-') { out.push({ t: 'chr', v: '−' }); i++; continue; }   // proper minus
++    if (c === '*') { out.push({ t: 'chr', v: '∗' }); i++; continue; }   // never emit a literal *
++    if (c === "'") { out.push({ t: 'chr', v: '′' }); i++; continue; }
++    out.push({ t: 'chr', v: c }); i++;
++  }
++  return out;
++}
++
++/* ── Parser ─────────────────────────────────────────────────────── */
++/* Produces a node array. Node kinds: chr, sym, op, fn, frac, sqrt, accent,
++   font, text, space, br, group, script, unknown. */
++
++function mathParse(tokens) {
++  let pos = 0;
++
++  function atEnd() { return pos >= tokens.length; }
++
++  /* One atom, before any ^ / _ are attached. */
++  function parseAtom() {
++    const tk = tokens[pos];
++    if (!tk) return null;
++
++    if (tk.t === '{') { pos++; return { k: 'group', body: parseUntilClose() }; }
++    if (tk.t === '}') { pos++; return null; }             // stray close — drop it
++    if (tk.t === 'br') { pos++; return { k: 'br' }; }
++    if (tk.t === 'space') { pos++; return { k: 'space', em: tk.v }; }
++    if (tk.t === 'chr') { pos++; return { k: 'chr', v: tk.v, literal: !!tk.literal }; }
++    if (tk.t === '^' || tk.t === '_') return null;        // handled by the caller
++
++    // tk.t === 'cmd'
++    const name = tk.v;
++    pos++;
++
++    if (name === 'frac' || name === 'dfrac' || name === 'tfrac' || name === 'cfrac') {
++      return { k: 'frac', num: parseArg(), den: parseArg() };
++    }
++    if (name === 'binom' || name === 'dbinom') {
++      return { k: 'binom', top: parseArg(), bot: parseArg() };
++    }
++    if (name === 'sqrt') {
++      const root = parseOptionalArg();
++      return { k: 'sqrt', root, body: parseArg() };
++    }
++    if (name === 'text' || name === 'textnormal' || name === 'mbox') {
++      return { k: 'text', v: parseRawArg() };
++    }
++    if (Object.prototype.hasOwnProperty.call(MATH_ACCENTS, name)) {
++      return { k: 'accent', mark: MATH_ACCENTS[name], body: parseArg() };
++    }
++    if (Object.prototype.hasOwnProperty.call(MATH_FONTS, name)) {
++      return { k: 'font', cls: MATH_FONTS[name], body: parseArg() };
++    }
++    if (Object.prototype.hasOwnProperty.call(MATH_BIGOPS, name)) {
++      return { k: 'op', v: MATH_BIGOPS[name] };
++    }
++    if (MATH_FUNCS.has(name)) return { k: 'fn', v: name };
++    if (Object.prototype.hasOwnProperty.call(MATH_SYMBOLS, name)) {
++      return { k: 'sym', v: MATH_SYMBOLS[name] };
++    }
++    if (Object.prototype.hasOwnProperty.call(MATH_SPACES, name)) {
++      return { k: 'space', em: MATH_SPACES[name] };
++    }
++    // \left and \right: consume the command, keep the delimiter at its
++    // natural size. Documented gap — see SCOPE.
++    if (name === 'left' || name === 'right' || name === 'bigl' || name === 'bigr' ||
++        name === 'big' || name === 'Big' || name === 'biggl' || name === 'biggr') {
++      const d = tokens[pos];
++      if (d && (d.t === 'chr' || d.t === 'cmd')) {
++        pos++;
++        if (d.t === 'chr') return d.v === '.' ? { k: 'space', em: 0 } : { k: 'chr', v: d.v };
++        const sym = MATH_SYMBOLS[d.v];
++        return sym ? { k: 'sym', v: sym } : { k: 'unknown', v: d.v };
++      }
++      return { k: 'space', em: 0 };
++    }
++    if (name === 'displaystyle' || name === 'textstyle' || name === 'limits' ||
++        name === 'nolimits' || name === 'scriptstyle') {
++      return { k: 'space', em: 0 };   // acknowledged and ignored
++    }
++    return { k: 'unknown', v: name };
++  }
++
++  /* An argument: either a braced group or the single next atom. */
++  function parseArg() {
++    if (tokens[pos] && tokens[pos].t === '{') { pos++; return parseUntilClose(); }
++    const a = parseAtom();
++    return a ? [a] : [];
++  }
++
++  /* \sqrt[3]{x} — the bracketed index. Raw scan; it is never HTML. */
++  function parseOptionalArg() {
++    if (!tokens[pos] || tokens[pos].t !== 'chr' || tokens[pos].v !== '[') return null;
++    pos++;
++    const body = [];
++    while (!atEnd() && !(tokens[pos].t === 'chr' && tokens[pos].v === ']')) {
++      const a = parseAtom();
++      if (a) body.push(a); else pos++;
++    }
++    if (!atEnd()) pos++;   // the ]
++    return body;
++  }
++
++  /* \text{...} keeps its spaces, so it is read off the tokens as characters
++     rather than parsed as maths. */
++  function parseRawArg() {
++    let s = '';
++    if (!tokens[pos] || tokens[pos].t !== '{') {
++      const a = tokens[pos];
++      if (a && a.t === 'chr') { pos++; return a.v; }
++      return '';
++    }
++    pos++;
++    let depth = 1;
++    while (!atEnd()) {
++      const tk = tokens[pos];
++      if (tk.t === '{') depth++;
++      else if (tk.t === '}') { depth--; if (depth === 0) { pos++; break; } }
++      if (depth > 0) {
++        if (tk.t === 'chr') s += tk.v;
++        else if (tk.t === 'cmd') s += ' ';
++        else if (tk.t === 'space') s += ' ';
++        else if (tk.t === '^') s += '^';
++        else if (tk.t === '_') s += '_';
++      }
++      pos++;
++    }
++    return s;
++  }
++
++  function parseUntilClose() {
++    const body = [];
++    while (!atEnd() && tokens[pos].t !== '}') {
++      const node = parseOne();
++      if (node) body.push(node); else pos++;
++    }
++    if (!atEnd()) pos++;   // the }
++    return body;
++  }
++
++  /* One atom plus any scripts hanging off it. x_i^2 and x^2_i both land
++     as a single script node with sub and sup. */
++  function parseOne() {
++    const base = parseAtom();
++    if (!base) return null;
++    let sub = null, sup = null;
++    while (!atEnd() && (tokens[pos].t === '^' || tokens[pos].t === '_')) {
++      const which = tokens[pos].t;
++      pos++;
++      const arg = parseArg();
++      if (which === '^') sup = arg; else sub = arg;
++    }
++    if (!sub && !sup) return base;
++    return { k: 'script', base, sub, sup };
++  }
++
++  const out = [];
++  while (!atEnd()) {
++    const node = parseOne();
++    if (node) out.push(node); else pos++;
++  }
++  return out;
++}
++
++/* ── Emitter ────────────────────────────────────────────────────── */
++/* Every leaf goes through escapeHtml. Every class name is a literal. */
++
++function mathEmit(nodes) {
++  return (nodes || []).map(mathEmitNode).join('');
++}
++
++function mathEmitNode(n) {
++  switch (n.k) {
++    case 'chr': {
++      const ch = escapeHtml(n.v);
++      // A single unstyled letter is a variable and italicises; digits,
++      // punctuation and anything escaped with a backslash do not.
++      if (!n.literal && /^[a-zA-Z]$/.test(n.v)) return `<i class="math-var">${ch}</i>`;
++      if (MATH_SPACED.has(n.v)) return `<span class="math-bin">${ch}</span>`;
++      return ch;
++    }
++    case 'sym': {
++      const ch = escapeHtml(n.v);
++      return MATH_SPACED.has(n.v) ? `<span class="math-bin">${ch}</span>` : ch;
++    }
++    case 'fn':  return `<span class="math-fn">${escapeHtml(n.v)}</span>`;
++    case 'op':  return `<span class="math-bigop">${escapeHtml(n.v)}</span>`;
++    case 'text': return `<span class="math-text">${escapeHtml(n.v)}</span>`;
++    case 'br':  return '<br>';
++    case 'space':
++      if (!n.em) return '';
++      return `<span class="math-space" style="width:${(Math.round(n.em * 100) / 100)}em"></span>`;
++    case 'group': return mathEmit(n.body);
++    case 'frac':
++      return '<span class="math-frac">' +
++               `<span class="math-num">${mathEmit(n.num)}</span>` +
++               `<span class="math-den">${mathEmit(n.den)}</span>` +
++             '</span>';
++    case 'binom':
++      return '<span class="math-binom">(' +
++               `<span class="math-binom-stack"><span>${mathEmit(n.top)}</span>` +
++               `<span>${mathEmit(n.bot)}</span></span>` +
++             ')</span>';
++    case 'sqrt':
++      return '<span class="math-sqrt">' +
++               (n.root ? `<span class="math-root">${mathEmit(n.root)}</span>` : '') +
++               '<span class="math-radical">&#8730;</span>' +
++               `<span class="math-radicand">${mathEmit(n.body)}</span>` +
++             '</span>';
++    case 'accent':
++      return '<span class="math-accent">' +
++               `<span class="math-mark">${escapeHtml(n.mark)}</span>` +
++               `<span class="math-acc-base">${mathEmit(n.body)}</span>` +
++             '</span>';
++    case 'font':
++      // n.cls comes from MATH_FONTS, never from input.
++      return `<span class="math-f-${n.cls}">${mathEmit(n.body)}</span>`;
++    case 'script': {
++      const base = mathEmitNode(n.base);
++      // Big operators take their scripts stacked above and below.
++      if (n.base.k === 'op') {
++        return '<span class="math-limits">' +
++                 `<span class="math-upper">${n.sup ? mathEmit(n.sup) : ''}</span>` +
++                 base +
++                 `<span class="math-lower">${n.sub ? mathEmit(n.sub) : ''}</span>` +
++               '</span>';
++      }
++      if (n.sub && n.sup) {
++        return base + '<span class="math-subsup">' +
++                 `<span class="math-sup">${mathEmit(n.sup)}</span>` +
++                 `<span class="math-sub">${mathEmit(n.sub)}</span>` +
++               '</span>';
++      }
++      if (n.sup) return base + `<sup class="math-sup-i">${mathEmit(n.sup)}</sup>`;
++      return base + `<sub class="math-sub-i">${mathEmit(n.sub)}</sub>`;
++    }
++    case 'unknown':
++      // The failure mode: show the source, highlighted, exactly as the user
++      // sees it today. escapeHtml on the command name is not optional —
++      // this is the one path that echoes input back verbatim.
++      return `<span class="math-unknown">\\${escapeHtml(n.v)}</span>`;
++    default:
++      return '';
++  }
++}
++
++/* Render raw LaTeX to HTML. Public entry point: safe to call with any
++   string from any source. Returns escaped, tag-balanced HTML. */
++function renderMathHtml(src) {
++  try {
++    return mathEmit(mathParse(mathTokenize(String(src == null ? '' : src))));
++  } catch (e) {
++    // A renderer bug must not blank a message. Fall back to what the user
++    // would have seen with no renderer at all.
++    console.error('[math] render failed:', e);
++    return `<span class="math-unknown">${escapeHtml(src)}</span>`;
++  }
++}
++
++/* Make an already-escaped source string survive the rest of parseMarkdown.
++ *
++ * Everything after this point in parseMarkdown is a regex over the whole
++ * message, and several of those passes have no idea what a <pre> is. The
++ * emphasis pass turns a source line reading `a * b * c` into
++ * `a <em> b </em> c` — and since Copy reads textContent, the user would be
++ * handed LaTeX with the asterisks silently deleted.
++ *
++ * This is not a new bug: a ```js block containing `a * b * c` is mangled the
++ * same way today. That is worth its own item, since the real fix is a protect
++ * mechanism in parseMarkdown that would change code blocks too. Here we only
++ * need our own source view to be faithful, so the five trigger characters go
++ * out as numeric entities. The HTML parser decodes them back before anything
++ * reads textContent, so Copy still yields the exact bytes the model sent.
++ *
++ * Newlines go too: \n\n+ becomes </p><p> further down, which would put
++ * broken markup inside the <pre>. &#10; renders as a line break in a <pre>.
++ *
++ * ONE pass, not six chained replaces. Chaining re-scans its own output: the
++ * * step emits &#42;, and a later # step then rewrote the # inside it to
++ * give &&#35;42;. Same class of ordering bug as decoding &amp; last in
++ * mathDecodeEntities, and the reason both are done deliberately.
++ */
++const MATH_SOURCE_ENTITIES = {
++  '*': '&#42;',    // ** bold ** and * em *
++  '[': '&#91;',    // [text](url)
++  '#': '&#35;',    // ^### headings
++  '-': '&#45;',    // ^- bullets
++  '`': '&#96;',    // inline code
++  '\n': '&#10;',   // \n\n -> </p><p>, \n -> <br>
++};
++function mathSourceSafe(escaped) {
++  return String(escaped).replace(/[*[#\-`\n]/g, ch => MATH_SOURCE_ENTITIES[ch]);
++}
++
++/* A ```latex fence. `body` arrives ALREADY HTML-escaped, because
++   parseMarkdown escapes the whole message before it looks for fences.
++   It is decoded for the parser and reused for the source view. */
++function renderMathBlock(body, lang) {
++  const escapedSource = String(body).replace(/^\n+|\s+$/g, '');
++  const rendered = renderMathHtml(mathDecodeEntities(escapedSource));
++  const label = /^[a-z]+$/.test(lang) ? lang : 'latex';
++  return '<div class="math-block">' +
++           '<div class="code-block-header">' +
++             `<span class="code-lang">${label}</span>` +
++             '<div class="code-btns">' +
++               '<button class="btn btn-sm" onclick="toggleMathSource(this)">Source</button>' +
++               '<button class="btn btn-sm code-copy-btn" onclick="copyCodeBlock(this)">Copy</button>' +
++             '</div>' +
++           '</div>' +
++           `<div class="math-rendered">${rendered}</div>` +
++           `<pre class="math-source"><code>${mathSourceSafe(escapedSource)}</code></pre>` +
++         '</div>';
++}
++
++/* Flip a rendered block to its source and back. The renderer has known
++   gaps (matrices, growing delimiters), so every block carries an escape
++   hatch rather than stranding the user with a wrong picture. */
++function toggleMathSource(btn) {
++  const block = btn.closest('.math-block');
++  if (!block) return;
++  const showing = block.classList.toggle('math-show-source');
++  btn.textContent = showing ? 'Rendered' : 'Source';
++}
++
+ function parseMarkdown(text, dialogColor) {
+   if (!text) return '';
+   // dialogColor rides in from a character card, which can arrive from an
+@@ -302,6 +794,17 @@ function parseMarkdown(text, dialogColor) {
+     return `<div class="file-block"><div class="file-header"><span class="file-name">&#128196; ${fn}</span><div class="code-btns"><button class="btn btn-sm code-copy-btn" onclick="copyCodeBlock(this)">Copy</button><button class="btn btn-sm" data-filename="${fn}" onclick="downloadFile(this)">Save</button></div></div><pre><code id="${id}">${raw}</code></pre></div>`;
+   });
+ 
++  // Math fences: ```latex / ```math / ```tex → rendered, with a Source
++  // toggle. MUST run before the generic code-block handler below, whose
++  // (\w*) would otherwise swallow the language tag and print the source.
++  //
++  // Scoped to fences deliberately. Scanning prose for $...$ turns "it cost
++  // $5, then $10 later" into a formula — a false-positive problem that is
++  // identical whether you use KaTeX or roll your own. Inline math can be an
++  // opt-in setting later, once the renderer has proven itself here.
++  html = html.replace(/```(latex|math|tex)\n([\s\S]*?)```/g, (_, lang, body) =>
++    renderMathBlock(body, lang));
++
+   // Regular code blocks → wrapped with a header bar carrying a Copy button.
+   // The label shows the language tag when one was given (```js etc).
+   html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => {
+@@ -387,6 +890,7 @@ function parseMarkdown(text, dialogColor) {
+   html = html.replace(/<\/pre>\s*<\/p>/g, '</pre>');
+   html = html.replace(/<p>\s*<div class="file-block">/g, '<div class="file-block">');
+   html = html.replace(/<p>\s*<div class="code-block">/g, '<div class="code-block">');
++  html = html.replace(/<p>\s*<div class="math-block">/g, '<div class="math-block">');
+   html = html.replace(/<\/div>\s*<\/p>/g, '</div>');
+   return html;
+ }
+diff --git a/math-preview.html b/math-preview.html
+new file mode 100644
+index 0000000..2678b10
+--- /dev/null
++++ b/math-preview.html
+@@ -0,0 +1,116 @@
++<!DOCTYPE html>
++<!--
++  Visual check for the math renderer. Open it in a browser; nothing to build.
++
++  Loads the REAL js/18-utils.js and css/16-math.css, so it cannot drift from
++  what ships. Dev tool only — stage-web.sh copies a fixed file list and will
++  not pick this up.
++
++  The automated suite proves nothing executes and that expressions parse.
++  It cannot tell you whether a fraction sits on the baseline or whether the
++  radical overline meets the radical. That is what this is for.
++-->
++<html lang="en">
++<head>
++<meta charset="utf-8">
++<meta name="viewport" content="width=device-width, initial-scale=1">
++<title>GobboNet — math renderer preview</title>
++<link rel="stylesheet" href="css/01-tokens.css">
++<link rel="stylesheet" href="css/16-math.css">
++<style>
++  body { background: var(--black, #0a0a0f); color: var(--text, #d0d0d8);
++         font-family: var(--font, monospace); padding: 24px; margin: 0; }
++  h1 { color: var(--cyan-bright, #0ff); font-size: 18px; }
++  h2 { color: var(--magenta, #f0f); font-size: 13px; margin: 28px 0 8px;
++       border-bottom: 1px solid var(--border, #333); padding-bottom: 4px; }
++  .row { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr);
++         gap: 12px; align-items: center; border-bottom: 1px solid rgba(255,255,255,.06);
++         padding: 6px 0; }
++  .src { font-family: var(--font-mono, monospace); font-size: 11px;
++         color: var(--label, #888); word-break: break-all; }
++  .out { font-family: var(--font-math, Georgia, serif); font-size: 1.15em;
++         line-height: 2.1; overflow-x: auto; }
++  .note { color: var(--label, #888); font-size: 12px; margin: 4px 0 16px; }
++  @media (max-width: 700px) { .row { grid-template-columns: 1fr; } }
++</style>
++</head>
++<body>
++<h1>GOBBONET // MATH RENDERER PREVIEW</h1>
++<p class="note">
++  Left: what the model sent. Right: what the user sees. Anything highlighted in
++  amber fell through to source — that is the intended failure mode, not a crash.
++</p>
++<div id="out"></div>
++
++<script src="js/18-utils.js"></script>
++<script>
++const GROUPS = [
++  ['Everyday arithmetic', [
++    '2 + 2 = 4', '3 \\times 4 \\div 2', 'x \\pm y', '50\\%', '\\$5',
++  ]],
++  ['School algebra', [
++    'x^2 + y^2 = z^2', 'a_1, a_2, \\ldots, a_n', 'x_i^2',
++    '\\frac{a}{b}', '\\frac{-b \\pm \\sqrt{b^2-4ac}}{2a}',
++    '\\sqrt{2}', '\\sqrt[3]{8}', '(x+1)(x-1)', '\\frac{1}{2} + \\frac{1}{3}',
++  ]],
++  ['Calculus', [
++    '\\int_0^1 x^2 dx', '\\int_{-\\infty}^{\\infty} e^{-x^2} dx',
++    '\\sum_{i=1}^{n} i', '\\prod_{k=1}^{n} k',
++    '\\lim_{x \\to 0} \\frac{\\sin x}{x}', '\\frac{d}{dx} f(x)',
++    '\\frac{\\partial f}{\\partial x}', '\\nabla f',
++  ]],
++  ['Linear algebra', [
++    'A^T A', '\\mathbf{v} \\cdot \\mathbf{w}', '\\vec{v}', '\\hat{x}', '\\bar{x}',
++    '\\det(A) \\neq 0', '\\lambda_1 \\geq \\lambda_2',
++  ]],
++  ['Sets and logic', [
++    'x \\in \\mathbb{R}', 'A \\cup B', 'A \\cap B \\subseteq C',
++    '\\forall x \\exists y', 'P \\Rightarrow Q', '\\emptyset',
++  ]],
++  ['ML notation', [
++    '\\mathcal{L}(\\theta)', '\\hat{y} = \\sigma(w^T x + b)',
++    '\\frac{1}{N} \\sum_{i=1}^{N} (y_i - \\hat{y}_i)^2',
++    '\\arg\\max_{\\theta} P(D \\mid \\theta)',
++    '\\alpha \\nabla_\\theta J(\\theta)', '\\mathbb{E}[X]',
++    '\\sigma^2 = \\text{Var}(X)', 'p(x \\mid y) \\propto p(y \\mid x) p(x)',
++  ]],
++  ['Greek and misc', [
++    '\\alpha \\beta \\gamma \\delta', '\\Omega \\Sigma \\Delta',
++    '\\theta \\approx 3.14', 'f: X \\to Y', '\\log_2 n',
++  ]],
++  ['Known gaps — these SHOULD show amber source', [
++    '\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}',
++    '\\left( \\frac{a}{b} \\right)',
++    '\\somethingnobodyimplemented{q}',
++  ]],
++  ['Hostile input — nothing here may execute', [
++    '\\unknown{<img src=x onerror=alert(1)>}',
++    '\\text{<script>alert(1)<\/script>}',
++    '\\frac{<img src=x onerror=alert(1)>}{2}',
++  ]],
++];
++
++const root = document.getElementById('out');
++for (const [title, items] of GROUPS) {
++  const h = document.createElement('h2');
++  h.textContent = title;
++  root.appendChild(h);
++  for (const src of items) {
++    const row = document.createElement('div');
++    row.className = 'row';
++    const a = document.createElement('div');
++    a.className = 'src';
++    a.textContent = src;                    // textContent: the preview itself never injects
++    const b = document.createElement('div');
++    b.className = 'out';
++    b.innerHTML = renderMathHtml(src);      // the real renderer's output, as it ships
++    row.appendChild(a); row.appendChild(b);
++    root.appendChild(row);
++  }
++}
++
++// If any of the hostile rows had executed, this would have fired first.
++console.log('[preview] rendered without executing anything');
++</script>
++</body>
++</html>
+diff --git a/test-math-render.mjs b/test-math-render.mjs
+new file mode 100644
+index 0000000..ea0137c
+--- /dev/null
++++ b/test-math-render.mjs
+@@ -0,0 +1,321 @@
++/**
++ * Item 1 — LaTeX rendering.
++ *
++ * Runs the REAL renderer and the REAL parseMarkdown out of js/18-utils.js.
++ *
++ * Three things are being checked, in order of how much they matter:
++ *   1. Nothing executes. Every leaf goes through escapeHtml, and the
++ *      unknown-command path — the one that echoes input back — is the one
++ *      most worth hammering.
++ *   2. A corpus of expressions a chat model actually emits renders, rather
++ *      than falling through to source.
++ *   3. The pass coexists with the rest of parseMarkdown: emphasis, code
++ *      fences, dialogue quotes and paragraph wrapping.
++ */
++import fs from 'fs';
++import vm from 'vm';
++
++const ROOT = '/home/claude/work/GobboNet';
++const UTILS = fs.readFileSync(ROOT + '/js/18-utils.js', 'utf8');
++
++const block = UTILS.slice(
++  UTILS.indexOf('/* ================================================================\n   MATH RENDERER'),
++  UTILS.indexOf('/* ================================================================\n   COLOR PICKER HELPERS')
++);
++
++let pass = 0, fail = 0;
++const ok = (c, l) => { if (c) { pass++; console.log('  \u2713 ' + l); } else { fail++; console.log('  \u2717 ' + l); } };
++const eq = (a, b, l) => ok(a === b, l + (a === b ? '' : `\n      got:  ${JSON.stringify(a)}\n      want: ${JSON.stringify(b)}`));
++
++/* escapeHtml is DOM-based in the browser. Reimplement it exactly here —
++   textContent->innerHTML escapes & < >, then " and ' are added. */
++const ctx = {
++  console,
++  escapeHtml: (str) => String(str == null ? '' : str)
++    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
++    .replace(/"/g, '&quot;').replace(/'/g, '&#39;'),
++  safeCssColor: (v) => (typeof v === 'string' && /^#[0-9a-f]{3,8}$/i.test(v) ? v : ''),
++  DIALOG_QUOTE_RE: /(?:&quot;)(?:(?!\n\n)[\s\S]){1,400}?(?:&quot;)/g,
++};
++ctx.globalThis = ctx;
++vm.createContext(ctx);
++vm.runInContext(block, ctx);
++// parseMarkdown itself, for the integration section.
++vm.runInContext(UTILS.slice(UTILS.indexOf('function parseMarkdown(text, dialogColor) {'),
++                            UTILS.indexOf('/* ================================================================\n   COLOR PICKER HELPERS')), ctx);
++
++const render = (s) => ctx.renderMathHtml(s);
++const text = (html) => html.replace(/<[^>]*>/g, '')
++  .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')
++  .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&#8730;/g, '\u221a');
++
++/* ================================================================
++   1. SECURITY — the rules the renderer claims to hold
++================================================================ */
++console.log('\n=== A. nothing executes ===');
++{
++  const attacks = [
++    ['\\unknown{<img src=x onerror=alert(1)>}',        'roadmap\'s stated case'],
++    ['<script>alert(1)</script>',                       'bare script tag'],
++    ['\\text{<script>alert(1)</script>}',               'script inside \\text'],
++    ['\\frac{<img src=x onerror=alert(1)>}{2}',         'inside a fraction numerator'],
++    ['x^{<svg onload=alert(1)>}',                       'inside a superscript'],
++    ['\\mathbb{"><img src=x onerror=alert(1)>}',        'attribute-breakout attempt'],
++    ['\\sqrt[<b>3</b>]{x}',                             'inside a root index'],
++    ['\\hat{<iframe src=javascript:alert(1)>}',         'inside an accent'],
++    ['\\<img src=x onerror=alert(1)>',                  'unknown command name is a tag'],
++    ['\\onerror=alert(1)',                              'command name looks like a handler'],
++  ];
++  for (const [src, label] of attacks) {
++    const out = render(src);
++    const bad = /<(script|img|svg|iframe|b)\b/i.test(out) || /on\w+\s*=/i.test(out) ||
++                /javascript:/i.test(out);
++    ok(!bad, `no live markup: ${label}`);
++  }
++  // The payload still survives as text so the user can see what was sent.
++  // Math mode eats whitespace, so it comes back without its spaces.
++  const shown = text(render('\\unknown{<img src=x onerror=alert(1)>}'));
++  ok(shown.includes('img') && shown.includes('onerror') && shown.includes('<'),
++     'payload is shown as inert literal text, not swallowed');
++}
++
++console.log('\n=== B. no double-escaping across the parseMarkdown boundary ===');
++{
++  // parseMarkdown escapes the whole message first, so the fence body arrives
++  // as entities. mathDecodeEntities must invert that exactly — once.
++  eq(ctx.mathDecodeEntities('x &lt; y'), 'x < y', '&lt; decodes');
++  eq(ctx.mathDecodeEntities('a &amp;&amp; b'), 'a && b', '&amp; decodes');
++  eq(ctx.mathDecodeEntities('&amp;lt;'), '&lt;', '&amp;lt; decodes ONCE, to literal "&lt;"');
++  eq(ctx.mathDecodeEntities('&quot;q&quot; &#39;s&#39;'), '"q" \'s\'', 'quote entities decode');
++
++  // A raw < typed into a fence: escaped by parseMarkdown, decoded for the
++  // parser, re-escaped on the way out. Exactly once, not twice.
++  const out = ctx.parseMarkdown('```latex\nx < y\n```', '');
++  ok(!out.includes('&amp;lt;'), 'a raw < in a fence is not double-escaped');
++  ok(out.includes('&lt;'), 'and is still escaped exactly once in the output');
++  // And a literal "&lt;" typed as text stays literal rather than becoming <.
++  const lit = ctx.parseMarkdown('```latex\nx &lt; y\n```', '');
++  ok(lit.includes('&amp;lt;'), 'a typed &lt; entity stays literal text');
++}
++
++/* ================================================================
++   2. CORPUS — expressions a chat model actually emits
++================================================================ */
++console.log('\n=== C. corpus ===');
++{
++  // [source, substrings that must appear in the visible text, label]
++  const corpus = [
++    // everyday arithmetic
++    ['2 + 2 = 4',                       ['2', '+', '4'],        'arithmetic'],
++    ['3 \\times 4 \\div 2',             ['×', '÷'],             'times / div'],
++    ['x \\pm y',                        ['±'],                  'plus-minus'],
++    ['50\\%',                           ['%'],                  'escaped percent'],
++    ['\\$5',                            ['$'],                  'escaped dollar'],
++    // school algebra
++    ['x^2 + y^2 = z^2',                 ['2', 'x', 'z'],        'superscripts'],
++    ['a_1, a_2, \\ldots, a_n',          ['…', 'a'],             'subscripts + ellipsis'],
++    ['x_i^2',                           ['x', 'i', '2'],        'sub and sup on one base'],
++    ['\\frac{a}{b}',                    ['a', 'b'],             'fraction'],
++    ['\\frac{-b \\pm \\sqrt{b^2-4ac}}{2a}', ['±', '√', 'b'],    'quadratic formula'],
++    ['\\sqrt{2}',                       ['√', '2'],             'square root'],
++    ['\\sqrt[3]{8}',                    ['√', '3', '8'],        'cube root'],
++    ['(x+1)(x-1)',                      ['(', ')', '−'],        'parens and minus'],
++    ['\\frac{1}{2} + \\frac{1}{3}',     ['1', '2', '3'],        'two fractions'],
++    // calculus
++    ['\\int_0^1 x^2 dx',                ['∫', '0', '1'],        'definite integral'],
++    ['\\int_{-\\infty}^{\\infty} e^{-x^2} dx', ['∫', '∞', 'e'], 'gaussian integral'],
++    ['\\sum_{i=1}^{n} i',               ['∑', 'n', 'i'],        'summation'],
++    ['\\prod_{k=1}^{n} k',              ['∏', 'k'],             'product'],
++    ['\\lim_{x \\to 0} \\frac{\\sin x}{x}', ['lim', '→', 'sin'], 'limit'],
++    ['\\frac{d}{dx} f(x)',              ['d', 'f'],             'derivative'],
++    ['\\frac{\\partial f}{\\partial x}', ['∂', 'f'],            'partial derivative'],
++    ['\\nabla f',                       ['∇'],                  'gradient'],
++    // linear algebra
++    ['A^T A',                           ['A', 'T'],             'transpose'],
++    ['\\mathbf{v} \\cdot \\mathbf{w}',  ['v', '·', 'w'],        'dot product'],
++    ['\\vec{v}',                        ['→', 'v'],             'vector accent'],
++    ['\\hat{x}',                        ['^', 'x'],             'hat accent'],
++    ['\\bar{x}',                        ['‾', 'x'],             'bar accent'],
++    ['\\|x\\|_2',                       ['x', '2'],             'norm'],
++    ['\\det(A) \\neq 0',                ['det', '≠'],           'determinant'],
++    ['\\lambda_1 \\geq \\lambda_2',     ['λ', '≥'],             'eigenvalues'],
++    // sets and logic
++    ['x \\in \\mathbb{R}',              ['∈', 'R'],             'element of reals'],
++    ['A \\cup B',                       ['∪'],                  'union'],
++    ['A \\cap B \\subseteq C',          ['∩', '⊆'],             'intersection / subset'],
++    ['\\forall x \\exists y',           ['∀', '∃'],             'quantifiers'],
++    ['P \\Rightarrow Q',                ['⇒'],                  'implication'],
++    ['\\emptyset',                      ['∅'],                  'empty set'],
++    // ML / stats notation
++    ['\\mathcal{L}(\\theta)',           ['L', 'θ'],             'loss function'],
++    ['\\hat{y} = \\sigma(w^T x + b)',   ['^', 'σ', 'w'],        'logistic unit'],
++    ['\\frac{1}{N} \\sum_{i=1}^{N} (y_i - \\hat{y}_i)^2', ['∑', 'N', '−'], 'MSE'],
++    ['\\arg\\max_{\\theta} P(D \\mid \\theta)', ['arg', 'max', 'θ', '∣'], 'MAP estimate'],
++    ['\\alpha \\nabla_\\theta J(\\theta)', ['α', '∇', 'J'],     'gradient step'],
++    ['\\mathbb{E}[X]',                  ['E', 'X'],             'expectation'],
++    ['\\sigma^2 = \\text{Var}(X)',      ['σ', 'Var'],           'variance with \\text'],
++    ['p(x \\mid y) \\propto p(y \\mid x) p(x)', ['∣', '∝'],     'Bayes proportionality'],
++    // greek and misc
++    ['\\alpha \\beta \\gamma \\delta',  ['α', 'β', 'γ', 'δ'],   'greek lowercase'],
++    ['\\Omega \\Sigma \\Delta',         ['Ω', 'Σ', 'Δ'],        'greek uppercase'],
++    ['\\theta \\approx 3.14',           ['θ', '≈'],             'approx'],
++    ['f: X \\to Y',                     ['→', 'f'],             'function signature'],
++    ['\\log_2 n',                       ['log', '2', 'n'],      'log with base'],
++  ];
++
++  let rendered = 0;
++  for (const [src, wants, label] of corpus) {
++    const out = render(src);
++    const vis = text(out);
++    const missing = wants.filter(w => !vis.includes(w));
++    const clean = !out.includes('math-unknown');
++    ok(missing.length === 0 && clean,
++       `${label}${missing.length ? '  missing ' + JSON.stringify(missing) : ''}${clean ? '' : '  [fell through to source]'}`);
++    if (missing.length === 0 && clean) rendered++;
++  }
++  console.log(`  — ${rendered}/${corpus.length} rendered without falling through`);
++}
++
++console.log('\n=== D. structure, not just characters ===');
++{
++  ok(/math-frac[\s\S]*math-num[\s\S]*math-den/.test(render('\\frac{a}{b}')),
++     'fraction emits a stacked numerator and denominator');
++  ok(/math-radicand/.test(render('\\sqrt{x}')), 'root emits a radicand with an overline');
++  ok(/math-limits[\s\S]*math-upper[\s\S]*math-lower/.test(render('\\sum_{i=1}^{n}')),
++     'big operator stacks its limits above and below');
++  ok(/math-sup-i/.test(render('x^2')) && !/math-limits/.test(render('x^2')),
++     'an ordinary base takes an inline superscript, not stacked limits');
++  ok(/math-subsup[\s\S]*math-sup[\s\S]*math-sub/.test(render('x_i^2')),
++     'a base with both scripts stacks them rather than printing them in sequence');
++  ok(/<i class="math-var">x<\/i>/.test(render('x')), 'a lone letter is italicised as a variable');
++  ok(!/math-var/.test(render('\\sin')), 'a function name is not italicised');
++  ok(/math-f-bb/.test(render('\\mathbb{R}')), 'alphabet commands emit their fixed class');
++  ok(/math-f-cal/.test(render('\\mathcal{L}')), 'and \\mathcal likewise');
++}
++
++console.log('\n=== E. the documented gaps fail the documented way ===');
++{
++  const m = render('\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}');
++  ok(m.includes('math-unknown'), 'matrices fall through to highlighted source');
++  ok(text(m).includes('begin'), 'and the source is legible, not blank');
++  ok(!/<(script|img)\b/i.test(m), 'the fall-through path is still escaped');
++
++  // Never worse than the status quo: unknown input must still show its text.
++  const junk = render('\\somethingnobodyimplemented{q}');
++  ok(text(junk).includes('somethingnobodyimplemented') && text(junk).includes('q'),
++     'unknown command shows its name and its argument');
++}
++
++/* ================================================================
++   3. INTEGRATION — coexistence with the rest of parseMarkdown
++================================================================ */
++console.log('\n=== F. fences ===');
++{
++  const out = ctx.parseMarkdown('```latex\n\\frac{a}{b}\n```', '');
++  ok(out.includes('math-block'), '```latex renders as a math block');
++  ok(out.includes('math-frac'), 'and the fraction is rendered');
++  ok(out.includes('toggleMathSource'), 'with a Source toggle');
++  ok(out.includes('copyCodeBlock'), 'and a Copy button');
++  ok(/<pre class="math-source"><code>[\s\S]*frac/.test(out), 'source is retained for the toggle');
++
++  ok(ctx.parseMarkdown('```math\nx^2\n```', '').includes('math-block'), '```math is accepted too');
++  ok(ctx.parseMarkdown('```tex\nx^2\n```', '').includes('math-block'), '```tex is accepted too');
++
++  const js = ctx.parseMarkdown('```js\nconst x = 1;\n```', '');
++  ok(js.includes('code-block') && !js.includes('math-block'), '```js is untouched');
++  const plain = ctx.parseMarkdown('```\nplain\n```', '');
++  ok(plain.includes('code-block') && !plain.includes('math-block'), 'an untagged fence is untouched');
++}
++
++console.log('\n=== G. maths, emphasis and code in one message ===');
++{
++  const msg = 'Here is *emphasis* and **bold**:\n\n```latex\n\\sum_{i=1}^{n} i = \\frac{n(n+1)}{2}\n```\n\nAnd `inline code` after.';
++  const out = ctx.parseMarkdown(msg, '');
++  ok(/<em>emphasis<\/em>/.test(out), 'italic still works around a math block');
++  ok(/<strong>bold<\/strong>/.test(out), 'bold still works');
++  ok(/<code>inline code<\/code>/.test(out), 'inline code still works');
++  ok(out.includes('math-limits'), 'the maths still rendered');
++  ok(!/<p>\s*<div class="math-block">/.test(out), 'the math block is not left wrapped in a stray <p>');
++
++  // The renderer must never emit a bare * — parseMarkdown's emphasis pass
++  // runs over its output and would eat it.
++  const star = render('a * b \\ast c \\star d');
++  ok(!star.includes('*'), 'renderer emits no literal asterisk for the emphasis pass to catch');
++  const roundTrip = ctx.parseMarkdown('```latex\na * b * c\n```', '');
++  ok(!/<em>/.test(roundTrip) && !/<strong>/.test(roundTrip),
++     'asterisks in the source view do not become emphasis');
++  ok(roundTrip.includes('&#42;'), 'the source view neutralises them as entities');
++  // Copy reads textContent, so the entities must decode back to real bytes.
++  const src = /<pre class="math-source"><code>([\s\S]*?)<\/code>/.exec(roundTrip)[1];
++  const asTextContent = src.replace(/&#(\d+);/g, (_, d) => String.fromCharCode(+d))
++                           .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
++  eq(asTextContent, 'a * b * c', 'Copy yields the exact bytes the model sent');
++
++  ok(!/&&#/.test(roundTrip), 'entity escaping does not re-scan its own output');
++  eq(ctx.mathSourceSafe('a * b # c - d'), 'a &#42; b &#35; c &#45; d',
++     'each trigger character maps once, in a single pass');
++
++  const multi = ctx.parseMarkdown('```latex\n\\frac{a}{b}\n# not a heading\n- not a bullet\n```', '');
++  ok(!/<strong style="font-size:1.2em/.test(multi), 'a # line in the source is not turned into a heading');
++  ok(!multi.includes('&bull;'), 'a - line in the source is not turned into a bullet');
++  ok(!/<pre class="math-source">[\s\S]*<\/p><p>/.test(multi), 'blank lines do not inject </p><p> into the pre');
++}
++
++console.log('\n=== H. roleplay text is unharmed ===');
++{
++  // The delimiter worry from the roadmap, checked from the other side: the
++  // math pass is fence-scoped, so prose must be completely untouched.
++  const rp = '*grins* It cost $5, then $10 later. x_i and a^b in prose.';
++  const out = ctx.parseMarkdown(rp, '');
++  ok(/<em>grins<\/em>/.test(out), '*grins* still italicises');
++  ok(out.includes('$5') && out.includes('$10'), 'dollar amounts are left alone');
++  ok(!out.includes('math-'), 'no math markup leaks into prose');
++  ok(out.includes('x_i'), 'underscores in prose are untouched');
++
++  const dlg = ctx.parseMarkdown('"Hello there," she said.', '#ff00ff');
++  ok(dlg.includes('dialog-text'), 'dialogue colouring still fires');
++}
++
++console.log('\n=== I. malformed input does not throw or hang ===');
++{
++  const nasty = [
++    ['\\frac{a', 'unclosed brace'],
++    ['}}}{{{', 'unbalanced braces'],
++    ['\\frac', 'command with no arguments'],
++    ['x^', 'trailing caret'],
++    ['x_', 'trailing underscore'],
++    ['\\', 'lone backslash'],
++    ['\\sqrt[', 'unclosed optional argument'],
++    ['^^^___', 'only scripts'],
++    ['', 'empty string'],
++    ['{'.repeat(200), 'deeply nested open braces'],
++    ['\\frac{'.repeat(60) + 'x', 'deeply nested fractions'],
++  ];
++  for (const [src, label] of nasty) {
++    let threw = false, out = '';
++    const t0 = Date.now();
++    try { out = render(src); } catch (e) { threw = true; }
++    const ms = Date.now() - t0;
++    ok(!threw && ms < 1000, `${label} — no throw, ${ms}ms`);
++    ok(typeof out === 'string', `${label} — returns a string`);
++  }
++  ok(render(null) === '' || typeof render(null) === 'string', 'null input is tolerated');
++  ok(typeof render(undefined) === 'string', 'undefined input is tolerated');
++}
++
++console.log('\n=== J. tags are balanced ===');
++{
++  // Unbalanced output would corrupt the rest of the message, which is a
++  // worse failure than rendering the maths wrong.
++  const samples = ['\\frac{a}{b}', '\\sqrt[3]{x}', '\\sum_{i=1}^{n}', 'x_i^2',
++                   '\\hat{x}', '\\mathbb{R}', '\\frac{a', '}}}{{{', '\\text{hi}'];
++  for (const s of samples) {
++    const out = render(s);
++    const open = (out.match(/<(?!\/)([a-z]+)[^>]*>/g) || []).filter(t => !/\/>$/.test(t) && !/^<br/.test(t)).length;
++    const close = (out.match(/<\/[a-z]+>/g) || []).length;
++    ok(open === close, `balanced tags: ${JSON.stringify(s)} (${open} open, ${close} close)`);
++  }
++}
++
++console.log(`\n${pass} passed, ${fail} failed\n`);
++process.exit(fail ? 1 : 0);
+-- 
+2.43.0
+

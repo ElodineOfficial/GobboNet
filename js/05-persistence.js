@@ -289,6 +289,13 @@ function applyLoadedState(saved) {
         if (!t.hasOwnProperty('tags'))        t.tags        = [];
         if (!t.hasOwnProperty('forkSource'))  t.forkSource  = null;
       }
+      // cardId / personaId are deliberately NOT backfilled here. Which
+      // character produced a pre-1.7 message is information the app never
+      // recorded, so any value invented now would be a guess presented as
+      // fact — and the most available guess (the active card) is exactly the
+      // wrong answer that issue #19 is about. Unstamped threads fall through
+      // makeCastResolver() to getActiveCard() and render exactly as they do
+      // today; anything sent from here on is stamped and correct.
 
       // --- MIGRATIONS ---
 

@@ -1,0 +1,169 @@
+/* ================================================================
+   MARKDOWN BLOCKS + SYNTAX HIGHLIGHTING
+
+   Styling for the block elements js/18-utils.js now emits. Most of these
+   had no rules because nothing ever produced the tags: "- x" used to render
+   as a bullet CHARACTER and "1. x" was replaced with itself, so the
+   ul/ol/li rules in css/04-chat.css have been dead since they were written.
+   They stay there and still apply; this file adds the classes.
+
+   Colours come from the existing token set in css/01-tokens.css. Nothing
+   here introduces a new palette.
+================================================================ */
+
+/* ── Headings ────────────────────────────────────────────────────
+   Headings were an inline <strong> with an inline style, so they had no
+   block spacing and no stylesheet could reach them. Real h1-h6 now. */
+.message-content .md-h1,
+.message-content .md-h2,
+.message-content .md-h3,
+.message-content .md-h4,
+.message-content .md-h5,
+.message-content .md-h6 {
+  font-weight: 700;
+  line-height: 1.3;
+  margin: 16px 0 8px;
+  text-shadow: 0 0 2px rgba(0, 243, 255, 0.25);
+}
+.message-content .md-h1:first-child,
+.message-content .md-h2:first-child,
+.message-content .md-h3:first-child { margin-top: 0; }
+
+.message-content .md-h1 { font-size: 1.35em; color: var(--green-neon); }
+.message-content .md-h2 { font-size: 1.2em;  color: var(--magenta); }
+.message-content .md-h3 { font-size: 1.08em; color: var(--label); }
+.message-content .md-h4 { font-size: 1em;    color: var(--cyan-bright); }
+.message-content .md-h5,
+.message-content .md-h6 {
+  font-size: 0.95em;
+  color: var(--cyan-dim);
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+/* h1 and h2 get a rule under them, the way a document does. */
+.message-content .md-h1,
+.message-content .md-h2 {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 4px;
+}
+
+/* ── Rules, quotes, strikethrough ────────────────────────────── */
+.message-content .md-hr {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: 16px 0;
+}
+
+.message-content .md-quote {
+  margin: 10px 0;
+  padding: 2px 14px;
+  border-left: 3px solid var(--magenta);
+  background: rgba(217, 0, 255, 0.05);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  color: rgba(255, 255, 255, 0.8);
+}
+.message-content .md-quote > :first-child { margin-top: 0; }
+.message-content .md-quote > :last-child { margin-bottom: 0; }
+/* Nested quotes step the colour so the depth is readable. */
+.message-content .md-quote .md-quote { border-left-color: var(--cyan-dim); }
+
+.message-content .md-del { opacity: 0.6; }
+
+/* ── Lists ───────────────────────────────────────────────────────
+   The hanging indent is the point: a wrapped line used to start back at
+   the left margin because there was no <li> to hang from. */
+.message-content .md-ul,
+.message-content .md-ol {
+  margin: 8px 0 8px 1.5em;
+  padding-left: 0.4em;
+}
+.message-content .md-ul { list-style: disc; }
+.message-content .md-ol { list-style: decimal; }
+.message-content .md-ul .md-ul { list-style: circle; }
+.message-content .md-ul .md-ul .md-ul { list-style: square; }
+.message-content .md-ul li,
+.message-content .md-ol li { margin: 3px 0; }
+.message-content .md-ul li::marker,
+.message-content .md-ol li::marker { color: var(--cyan-dim); }
+/* A nested list sits tight under its parent item rather than opening a gap. */
+.message-content .md-ul .md-ul,
+.message-content .md-ul .md-ol,
+.message-content .md-ol .md-ul,
+.message-content .md-ol .md-ol { margin-top: 3px; margin-bottom: 3px; }
+
+/* Task list items carry their own box, so the bullet would be a second
+   marker for the same thing. */
+.message-content li.md-task { list-style: none; margin-left: -1.2em; }
+.message-content .md-task-box {
+  display: inline-block;
+  width: 1.2em;
+  color: var(--cyan-bright);
+}
+.message-content li.md-task-done { color: rgba(255, 255, 255, 0.55); }
+.message-content li.md-task-done > .md-task-box { color: var(--green-neon); }
+
+/* ── Tables ──────────────────────────────────────────────────────
+   The wrapper scrolls, not the table. A wide table must not widen the
+   message bubble, or the whole conversation column stretches with it. */
+.message-content .md-table-wrap {
+  overflow-x: auto;
+  margin: 12px 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  max-width: 100%;
+}
+.message-content .md-table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.95em;
+}
+.message-content .md-table th,
+.message-content .md-table td {
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--border);
+  /* Cells wrap rather than forcing a scrollbar for one long sentence, but
+     never break a word in half. */
+  overflow-wrap: break-word;
+}
+.message-content .md-table th {
+  background: rgba(0, 243, 255, 0.06);
+  color: var(--cyan-bright);
+  font-weight: 700;
+  font-size: 0.85em;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--cyan-dim);
+}
+.message-content .md-table tbody tr:last-child td { border-bottom: none; }
+.message-content .md-table tbody tr:nth-child(even) { background: rgba(255, 255, 255, 0.025); }
+.message-content .md-table tbody tr:hover { background: rgba(0, 243, 255, 0.05); }
+
+.message-content .md-al-l { text-align: left; }
+.message-content .md-al-c { text-align: center; }
+.message-content .md-al-r { text-align: right; font-variant-numeric: tabular-nums; }
+
+/* ── Syntax highlighting ─────────────────────────────────────────
+   Six classes, which is all a lexer can honestly distinguish. Comments
+   recede, strings and numbers sit apart from code, keywords lead. */
+.message-content .tok-com { color: #6b7f8a; font-style: italic; }
+.message-content .tok-str { color: #7ee787; }
+.message-content .tok-num { color: #ffb86c; }
+.message-content .tok-kw  { color: var(--magenta); font-weight: 600; }
+.message-content .tok-bi  { color: #79c0ff; }
+.message-content .tok-fn  { color: #ffd866; }
+.message-content .tok-op  { color: rgba(255, 255, 255, 0.55); }
+
+/* ── Responsive ──────────────────────────────────────────────── */
+@media (max-width: 768px) {
+  .message-content .md-table th,
+  .message-content .md-table td { padding: 6px 8px; font-size: 12px; }
+  .message-content .md-ul,
+  .message-content .md-ol { margin-left: 1.1em; }
+  .message-content .md-h1 { font-size: 1.2em; }
+  .message-content .md-h2 { font-size: 1.1em; }
+  /* The negative margin that widens a <pre> to the bubble edge fights the
+     rounded, clipping .code-block wrapper. Only bare <pre> wants it. */
+  .message-content .code-block pre,
+  .message-content .file-block pre { margin: 0; }
+}

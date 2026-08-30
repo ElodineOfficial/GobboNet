@@ -18,7 +18,8 @@ function renderPersonaGrid() {
     grid.innerHTML = '<div class="landing-empty" style="padding:10px 4px;">No personas yet. Click below to add one.</div>';
     return;
   }
-  grid.innerHTML = state.personaCards.map(p => {
+  const total = state.personaCards.length;
+  grid.innerHTML = state.personaCards.map((p, i) => {
     const av = renderAvatar(p.avatar, p.name);
     const freq = (typeof p.injectionFrequency === 'number') ? p.injectionFrequency : 5;
     const freqLabel = freq === 0
@@ -32,6 +33,7 @@ function renderPersonaGrid() {
       : freqLabel;
     return `
     <div class="card-item ${p.id === state.activePersonaId ? 'active' : ''}" onclick="activatePersona('${escapeJsAttr(p.id)}')">
+      ${moveColumnHtml(p.id, p.name, i, total, 'movePersona')}
       <div class="card-avatar">${av}</div>
       <div class="card-info">
         <div class="card-name">${escapeHtml(p.name || 'Unnamed')}</div>
@@ -44,6 +46,14 @@ function renderPersonaGrid() {
       </div>
     </div>`;
   }).join('');
+}
+
+/* Reorder engine is shared with character cards — see moveCastEntry() in
+   js/15-cards.js, which loads first. Array position is the order here too:
+   personaCards persists as an array in the same blob, so nothing extra is
+   needed to make it stick. */
+function movePersona(id, delta, btn) {
+  moveCastEntry(state.personaCards, id, delta, 'persona-grid', renderPersonaGrid, btn);
 }
 
 function activatePersona(id) {

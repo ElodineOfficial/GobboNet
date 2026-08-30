@@ -31,6 +31,22 @@
 
 /* The "inspect" affordance on the in-chat compression banner. */
 .lore-compressed-banner { cursor: pointer; }
+
+/* A fold that archived messages but could not summarise them. Deliberately
+   NOT the magenta of a normal system inject: the standard banner is a
+   routine "this happened" notice that the eye learns to skip, and this one
+   reports lost history. Borrows the amber the lore inspector already uses
+   for give-up rows so the two read as the same event in two places. */
+.lore-banner-warn {
+  background: rgba(255, 149, 0, 0.09);
+  border-color: var(--orange, #ff9500);
+  border-left-color: var(--orange, #ff9500);
+  color: var(--orange, #ff9500);
+  text-shadow: 0 0 5px rgba(255, 149, 0, 0.3);
+  max-width: 78%;          /* longer sentence than the success banner */
+  text-transform: none;    /* it is prose, not a label */
+  letter-spacing: 0.4px;
+}
 .lore-inspect-link {
   text-decoration: underline;
   opacity: 0.75;

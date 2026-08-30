@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GobboNet setup</title>
+<style>
+  /* Palette lifted from installer/gobbonet.nsi so the Linux first run and the
+     Windows wizard read as the same product: MUI_BGCOLOR, MUI_TEXTCOLOR,
+     GN_CHECKCOLOR, GN_BRANDCOLOR, and the InstallColors green. */
+  :root {
+    --bg:      #0D0E12;
+    --text:    #CEE2BA;
+    --bright:  #F2FAE8;
+    --accent:  #97E031;
+    --quiet:   #4D5A4A;
+    --muted:   #8FA383;
+    --panel:   #1A1D25;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.55 system-ui, "Segoe UI", Roboto, sans-serif;
+    display: flex; justify-content: center; padding: 40px 20px 80px;
+  }
+  main { width: 100%; max-width: 620px; }
+  h1 { font-size: 26px; margin: 0 0 4px; color: var(--bright); font-weight: 600; }
+  h2 { font-size: 19px; margin: 0 0 10px; color: var(--bright); font-weight: 600; }
+  p  { margin: 0 0 14px; }
+  .sub { color: var(--muted); margin-bottom: 28px; }
+  .step { display: none; }
+  .step.active { display: block; }
+  .card {
+    background: var(--panel); border: 1px solid #262b35;
+    border-radius: 8px; padding: 22px; margin-bottom: 18px;
+  }
+  label { display: block; margin: 14px 0 5px; color: var(--bright); font-size: 14px; }
+  input[type=text], input[type=password], input[type=url] {
+    width: 100%; padding: 10px 12px; background: var(--panel);
+    border: 1px solid #38404d; border-radius: 5px;
+    color: var(--bright); font: inherit;
+  }
+  input:focus { outline: none; border-color: var(--accent); }
+  button {
+    background: var(--accent); color: #0D0E12; border: 0;
+    padding: 11px 22px; border-radius: 5px; font: inherit; font-weight: 600;
+    cursor: pointer;
+  }
+  button:disabled { opacity: .45; cursor: default; }
+  button.ghost { background: transparent; color: var(--text); border: 1px solid #38404d; }
+  .row { display: flex; gap: 10px; align-items: center; margin-top: 20px; }
+  .choice {
+    display: block; border: 1px solid #38404d; border-radius: 6px;
+    padding: 14px 16px; margin-bottom: 10px; cursor: pointer;
+  }
+  .choice:hover { border-color: var(--muted); }
+  .choice.sel { border-color: var(--accent); background: #151922; }
+  .choice .t { color: var(--bright); font-weight: 600; }
+  .choice .d { color: var(--muted); font-size: 13.5px; margin-top: 3px; }
+  .err {
+    background: #2a1618; border: 1px solid #6b2b30; color: #ffc9c9;
+    padding: 11px 14px; border-radius: 5px; margin: 14px 0; display: none;
+  }
+  .bar { height: 9px; background: #20242e; border-radius: 5px; overflow: hidden; margin: 14px 0 8px; }
+  .bar > i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .3s; }
+  .log { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13px; color: var(--accent); }
+  .brand { color: var(--quiet); font-size: 12.5px; text-align: center; margin-top: 34px; }
+  .note { color: var(--muted); font-size: 13.5px; }
+  ol.steps { list-style: none; padding: 0; margin: 0 0 26px; display: flex; gap: 7px; }
+  ol.steps li { flex: 1; height: 3px; background: #262b35; border-radius: 2px; }
+  ol.steps li.on { background: var(--accent); }
+  code { color: var(--bright); background: #151922; padding: 1px 5px; border-radius: 3px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>GobboNet</h1>
+  <p class="sub">Local chat for local models. No account, no API key, no telemetry,
+     no corpo middleman. What you type stays on the machine you type it on.</p>
+
+  <ol class="steps" id="bar">
+    <li class="on"></li><li></li><li></li><li></li>
+  </ol>
+
+  <div class="err" id="err"></div>
+
+  <!-- 1. password ------------------------------------------------------- -->
+  <section class="step active" id="s1">
+    <div class="card">
+      <h2>Set your access password</h2>
+      <p>If you later open GobboNet to your home network, this password is what
+         stops anyone else on that network reading your chats. It is stored only
+         as an Argon2id hash — never as plain text — and never leaves this machine.</p>
+      <label for="pw1">Password</label>
+      <input type="password" id="pw1" autocomplete="new-password" autofocus>
+      <label for="pw2">Confirm</label>
+      <input type="password" id="pw2" autocomplete="new-password">
+      <p class="note" style="margin-top:14px">Six characters minimum. You will type
+         this once in your browser, and once on your phone the first time it connects.</p>
+      <div class="row"><button id="b1">Continue</button></div>
+    </div>
+  </section>
+
+  <!-- 2. backend -------------------------------------------------------- -->
+  <section class="step" id="s2">
+    <div class="card">
+      <h2>Where should models run?</h2>
+      <div class="choice sel" id="c-local" data-mode="local">
+        <div class="t">On this machine</div>
+        <div class="d">Uses the llama.cpp engine bundled with this install. Nothing leaves the box.</div>
+      </div>
+      <div class="choice" id="c-remote" data-mode="remote">
+        <div class="t">On a server I already have</div>
+        <div class="d">Point GobboNet at an OpenAI-compatible endpoint you run.</div>
+      </div>
+      <div id="remote-fields" style="display:none">
+        <label for="rurl">Server address</label>
+        <input type="url" id="rurl" placeholder="http://192.168.1.10:8080">
+        <label for="rkey">API key (optional)</label>
+        <input type="text" id="rkey" autocomplete="off">
+      </div>
+      <div class="row"><button id="b2">Continue</button></div>
+    </div>
+  </section>
+
+  <!-- 3. model ---------------------------------------------------------- -->
+  <section class="step" id="s3">
+    <div class="card">
+      <h2>Pick a model</h2>
+      <p class="note" id="freenote"></p>
+      <div id="models"></div>
+      <div class="row">
+        <button id="b3">Download</button>
+        <button class="ghost" id="b3skip">I already have one</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- 4. download ------------------------------------------------------- -->
+  <section class="step" id="s4">
+    <div class="card">
+      <h2 id="dltitle">Downloading</h2>
+      <p>This is the only large download here, and it goes from HuggingFace
+         straight to your disk. Budget some time for it.</p>
+      <div class="bar"><i id="dlbar"></i></div>
+      <div class="log" id="dllog">starting…</div>
+      <div class="row"><button id="b4" disabled>Continue</button></div>
+    </div>
+  </section>
+
+  <!-- 5. lan ------------------------------------------------------------ -->
+  <section class="step" id="s5">
+    <div class="card">
+      <h2>Phone access over the LAN</h2>
+      <p>Off by default. GobboNet listens only on this machine unless you say
+         otherwise — turning this on lets other devices on your home network
+         reach the chat, using the password you just set.</p>
+      <div class="choice sel" id="c-lanoff" data-lan="off">
+        <div class="t">This machine only</div>
+        <div class="d">Binds 127.0.0.1. Private.</div>
+      </div>
+      <div class="choice" id="c-lanon" data-lan="on">
+        <div class="t">Allow devices on my network</div>
+        <div class="d">Binds 0.0.0.0. Anyone on the LAN who knows the password can connect.</div>
+      </div>
+      <h2 style="margin-top:26px">Start at login</h2>
+      <p>Off by default. GobboNet is a server, and one that starts itself every
+         time you sign in should be something you asked for.</p>
+      <div class="choice sel" id="c-asoff" data-as="off">
+        <div class="t">Only when I open it</div>
+        <div class="d">Nothing runs until you click GobboNet.</div>
+      </div>
+      <div class="choice" id="c-ason" data-as="on">
+        <div class="t">Start it when I log in</div>
+        <div class="d">Starts the server quietly. No browser window opens by itself.</div>
+      </div>
+      <div class="row"><button id="b5">Finish</button></div>
+    </div>
+  </section>
+
+  <!-- 6. done ----------------------------------------------------------- -->
+  <section class="step" id="s6">
+    <div class="card">
+      <h2>Ready.</h2>
+      <p id="donetext">Setup is complete. GobboNet is starting.</p>
+      <p class="note">Everything in the install folder is plain text you can read,
+         break and rebuild. That is the point.</p>
+    </div>
+  </section>
+
+  <div class="brand">GobboNet — Elodine / GoblinCorps</div>
+</main>
+
+<script>
+(function () {
+  var state = {}, mode = "local", lan = "off", auto = "off", pick = null, poll = null;
+
+  function $(id) { return document.getElementById(id); }
+  function show(n) {
+    ["s1","s2","s3","s4","s5","s6"].forEach(function (s, i) {
+      $(s).classList.toggle("active", i === n - 1);
+    });
+    var marks = $("bar").children;
+    for (var i = 0; i < marks.length; i++) marks[i].classList.toggle("on", i < n);
+    $("err").style.display = "none";
+    window.scrollTo(0, 0);
+  }
+  function fail(m) { var e = $("err"); e.textContent = m; e.style.display = "block"; }
+
+  function post(path, body) {
+    return fetch(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    }).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (j) {
+        if (!r.ok) throw new Error(j.error || ("Request failed (" + r.status + ")"));
+        return j;
+      });
+    });
+  }
+
+  fetch("/api/state").then(function (r) { return r.json(); }).then(function (s) {
+    state = s;
+    if (!s.has_engine) {
+      $("c-local").querySelector(".d").textContent =
+        "This install has no bundled engine.";
+      $("c-local").classList.remove("sel");
+      $("c-remote").classList.add("sel");
+      mode = "remote";
+      $("remote-fields").style.display = "block";
+    }
+    $("freenote").textContent = "About " + s.free_gb.toFixed(1) + " GB free on this disk.";
+    var box = $("models");
+    s.models.forEach(function (m) {
+      var d = document.createElement("div");
+      d.className = "choice" + (m.index === s.default ? " sel" : "");
+      d.dataset.index = m.index;
+      d.innerHTML = '<div class="t"></div><div class="d"></div>';
+      d.querySelector(".t").textContent = m.display;
+      d.querySelector(".d").textContent =
+        m.size_gb.toFixed(1) + " GB download · suits " + m.min_vram + " GB VRAM or more";
+      d.onclick = function () {
+        box.querySelectorAll(".choice").forEach(function (x) { x.classList.remove("sel"); });
+        d.classList.add("sel");
+        pick = m.index;
+      };
+      box.appendChild(d);
+      if (m.index === s.default) pick = m.index;
+    });
+    if (s.password_set) show(2);
+  });
+
+  $("b1").onclick = function () {
+    var p1 = $("pw1").value, p2 = $("pw2").value;
+    if (p1 !== p2) return fail("The two passwords do not match.");
+    if (p1.length < 6) return fail("Use at least six characters.");
+    post("/api/password", { password: p1, confirm: p2 })
+      .then(function () { show(2); }).catch(function (e) { fail(e.message); });
+  };
+
+  [["c-local", "local"], ["c-remote", "remote"]].forEach(function (pair) {
+    $(pair[0]).onclick = function () {
+      mode = pair[1];
+      $("c-local").classList.toggle("sel", mode === "local");
+      $("c-remote").classList.toggle("sel", mode === "remote");
+      $("remote-fields").style.display = mode === "remote" ? "block" : "none";
+    };
+  });
+
+  $("b2").onclick = function () {
+    post("/api/backend", { mode: mode, url: $("rurl").value, key: $("rkey").value })
+      .then(function () { show(mode === "remote" ? 5 : 3); })
+      .catch(function (e) { fail(e.message); });
+  };
+
+  $("b3skip").onclick = function () { show(5); };
+
+  $("b3").onclick = function () {
+    if (pick === null) return fail("Choose a model first.");
+    post("/api/download", { index: pick }).then(function () {
+      show(4);
+      poll = setInterval(tick, 700);
+      tick();
+    }).catch(function (e) { fail(e.message); });
+  };
+
+  function tick() {
+    fetch("/api/download").then(function (r) { return r.json(); }).then(function (d) {
+      if (d.state === "running") {
+        $("dlbar").style.width = (d.percent || 0) + "%";
+        $("dllog").textContent = (d.done / 1073741824).toFixed(2) + " GB of " +
+          (d.total / 1073741824).toFixed(2) + " GB — " + (d.percent || 0).toFixed(1) + "%";
+      } else if (d.state === "done") {
+        clearInterval(poll);
+        $("dlbar").style.width = "100%";
+        $("dltitle").textContent = "Downloaded";
+        $("dllog").textContent = d.message;
+        $("b4").disabled = false;
+      } else if (d.state === "error") {
+        clearInterval(poll);
+        $("dltitle").textContent = "Download failed";
+        $("dllog").textContent = "";
+        fail(d.message);
+        $("b4").disabled = false;
+      }
+    });
+  }
+
+  $("b4").onclick = function () { show(5); };
+
+  [["c-lanoff", "off"], ["c-lanon", "on"]].forEach(function (pair) {
+    $(pair[0]).onclick = function () {
+      lan = pair[1];
+      $("c-lanoff").classList.toggle("sel", lan === "off");
+      $("c-lanon").classList.toggle("sel", lan === "on");
+    };
+  });
+
+  [["c-asoff", "off"], ["c-ason", "on"]].forEach(function (pair) {
+    $(pair[0]).onclick = function () {
+      auto = pair[1];
+      $("c-asoff").classList.toggle("sel", auto === "off");
+      $("c-ason").classList.toggle("sel", auto === "on");
+    };
+  });
+
+  $("b5").onclick = function () {
+    $("b5").disabled = true;
+    // The server treats a repeat of this call as the same success, so a
+    // double-click or a retry lands on the finish screen rather than an error.
+    post("/api/finish", { lan: lan === "on", autostart: auto === "on" }).then(function (j) {
+      $("donetext").textContent =
+        "Setup is complete. The chat opens at http://" +
+        (j.host === "0.0.0.0" ? "127.0.0.1" : j.host) + ":" + j.port +
+        " — this window can be closed." +
+        (j.autostart ? " GobboNet will also start when you log in." : "");
+      show(6);
+    }).catch(function (e) { $("b5").disabled = false; fail(e.message); });
+  };
+})();
+</script>
+</body>
+</html>

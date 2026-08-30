@@ -4,8 +4,6 @@ GobboNet lets you run an AI chatbot **on your own computer**, with no accounts, 
 
 This guide assumes you've never set up anything like this before. Take it one step at a time and you'll be chatting in about 20–30 minutes (most of that is just waiting for files to download).
 
-**Note: 8/30/26:** Am back, updates starting again beep beep
-
 ---
 
 ## Working models
@@ -173,7 +171,8 @@ Gobbonet is more than a plain chatbox. Here are the parts you'll actually use, i
 - **Characters.** It comes with a few built-in personalities (a terse coder, a wordy lore-keeper, a riddle-speaking oracle). You can switch between them or make your own — give it a name, a description, and a style, and the AI will play that role. You can also **bring in character cards you already have, and send yours back out** (the common `.png` cards used by other AI chat apps), so your existing collection works here too. Most cards carry over cleanly, though a few may need small tweaks after importing.
 - **lorebooks.** A character can carry a lorebook — lore, world details, backstory, notes, whatever you want it to know. Rather than cramming all of that into every single message, GobboNet works out which bits are actually relevant to what you're talking about right now and quietly slips those in. It means a character can "know" far more than would ever fit in one conversation.
 - **Threads.** Each conversation is saved separately in the sidebar, like chat history. You can rename them, pin favorites, and sort them into folders.
-- **Web search (optional).** There's a search button that lets the AI look things up online. This is the *one* feature that needs the internet and a free key — see below. Everything else is fully offline.
+- **Web search (optional).** There's a search button that lets the AI look things up online. It needs a free key — see below. Off unless you turn it on.
+- **Adding models (optional).** Config → **Add a Model** shows a catalogue you can download from without leaving GobboNet or working out HuggingFace's interface. GobboNet downloads the file, checks it, and puts it where it belongs. The list itself is a small public file fetched from goblincorps.com so it can be kept current — a plain download with nothing about you or your machine attached, cached for a day, and switchable off with `model_catalog_remote = false`. If it can't be reached, the list that shipped with GobboNet is used instead and downloading still works.
 - **Switching models.** If you've downloaded more than one model, you can switch between them from a dropdown at the top — no need to restart.
 - **Saving files.** If you ask the AI to write something like code or a document, it can give you a **Save** button to download it.
 - **Settings.** A gear/settings area lets you tweak things, change the look, and manage your data.

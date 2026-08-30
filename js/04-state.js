@@ -42,6 +42,14 @@ const DEFAULT_CARD = {
   writingStyle: 'You are a helpful, friendly, and knowledgeable assistant running fully offline on your local machine. Be concise when the question is simple. Be thorough when the question is complex. Use markdown formatting when it aids readability. When asked to create a file, output it in a code block tagged with the filename like: ```file:example.json followed by the content and closing ```. The user will see a Save button to download it.',
   personality: 'Stay focused, helpful, and accurate. If you are unsure about something, say so rather than guessing.',
   loreEnabled: true,
+  // Which GGUF compresses this card's lore. Empty means "whatever the chat
+  // is already using", which is what every existing card resolves to and is
+  // exactly the behaviour before this field existed.
+  //
+  // A filename from the models folder, matching the values in
+  // models-list.json — the same list the header dropdown uses. Anything the
+  // user has dropped into that folder is a valid choice; nothing else is.
+  loreModelFile: '',
   startingLore: '',
   // RAG Storybook — the big, hand-authored character/world bible. Accepts
   // structured weighted-tag lines (Retriever B) AND/OR plain prose chunks
@@ -144,6 +152,13 @@ const DEFAULT_SETTINGS = {
   smartLimitEnabled: false,   // cap AI reply length (rough token estimate, sentence-end cut)
   smartLimitTokens: 300,      // max estimated tokens per reply when the cap is on
   avatarScale: 1,             // avatar size multiplier (CONFIG slider; 1 = default)
+  // Paint replies token-by-token as they arrive, or hold them and post the
+  // finished reply in one go. Presentation only -- the transport streams
+  // either way. See makeStreamFeeder in 03-generation.js for why: the smart
+  // reply limit cuts generation off mid-stream, and the chat request sends
+  // max_tokens: -1, so a genuinely non-streaming request would leave replies
+  // unbounded. Default on, which is the behaviour every existing install has.
+  streamReplies: true,
   // Remote (http/https) images in cards -- avatars, backgrounds, thumbnails.
   // Off by default: a card from an import or a synced peer can point <img src>
   // at any host, and that beacons this machine's IP on render. data:/blob:

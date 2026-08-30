@@ -164,7 +164,10 @@ function injectGreeting(thread, card) {
   const msg = {
     role: 'assistant',
     content: resolved[0],
-    timestamp: ts
+    timestamp: ts,
+    // The greeting is this card's words, verbatim from its own field. Stamp
+    // it so it keeps that face if the user later switches characters.
+    cardId: card.id
   };
 
   // Multiple openings? Promote to the variants shape. Single greeting
@@ -290,12 +293,158 @@ function setThreadLore(thread, lore) {
 // supposed to free up in the first place.
 const LORE_MAX_CHARS = 2400;
 
+/**
+ * Run one compression pass, on a different local model if the card asks for
+ * one, and put the chat model back afterwards.
+ *
+ * llama.cpp holds a single model, and launch.bat runs it with --parallel 1
+ * on purpose (see the note at launch.bat:1511 -- two differently-shaped
+ * requests in flight churn the KV cache and force a full re-prefill). So
+ * "compress on a different model" means borrowing the server for a pass,
+ * not running a second one alongside it. Compression already blocks the
+ * turn, which is what makes borrowing viable at all: nothing else is trying
+ * to use the model while we have it.
+ *
+ * The cost is two model loads per pass and it is not hideable, so the card
+ * editor says so plainly. Blank -- every card, until someone changes it --
+ * skips all of this and behaves exactly as before.
+ *
+ * Failure policy, in order of what hurts the user least:
+ *   - Can't borrow            -> compress on the chat model anyway. A worse
+ *                                summary beats losing the messages, which is
+ *                                what returning empty would do (08-rag.js
+ *                                has already marked them archived).
+ *   - Compression itself fails -> summarizeForLore's own handling applies;
+ *                                the finally block still returns the model.
+ *   - Can't give it back       -> loud. The user's chat model is not loaded
+ *                                and every following turn would run on the
+ *                                summariser without this saying so.
+ */
+async function compressWithCardModel(existingLore, toArchive, authored, tokenLimit, card) {
+  const want = (card && card.loreModelFile ? String(card.loreModelFile) : '').trim();
+  const have = (typeof _currentModelFile === 'string') ? _currentModelFile : '';
+
+  // Nothing chosen, no file server to swap with, or it is already loaded.
+  if (!want || !IS_SERVED || want === have) {
+    return await summarizeForLore(existingLore, toArchive, authored, tokenLimit);
+  }
+
+  let borrowed = false;
+  try {
+    renderLoreIndicator('loading ' + want + ' to compress...');
+    await swapToModelFile(want);
+    borrowed = true;
+  } catch (e) {
+    console.warn('[lore] could not load the compression model "' + want
+               + '" — falling back to the chat model for this pass:', e);
+  }
+
+  try {
+    return await summarizeForLore(existingLore, toArchive, authored, tokenLimit);
+  } finally {
+    if (borrowed && have) {
+      try {
+        renderLoreIndicator('restoring ' + have + '...');
+        await swapToModelFile(have);
+      } catch (e) {
+        // Nothing here can put it back, so make sure the user finds out
+        // now rather than wondering why the character sounds wrong.
+        console.error('[lore] FAILED to restore the chat model "' + have
+                    + '" after compression. The summariser is still loaded.', e);
+        _loreLastKind = 'failed';
+        _loreLastOutcome = 'compression finished, but the chat model (' + have
+          + ') could not be reloaded afterwards — ' + want + ' is still active. '
+          + 'Pick your model again in the header dropdown.';
+        if (typeof showModelSwitchToast === 'function') {
+          showModelSwitchToast('Could not reload ' + have + ' — ' + want
+            + ' is still active. Re-select your model in the header.', 'err', 0);
+        }
+      }
+    }
+    renderLoreIndicator('');
+  }
+}
+
 /* Hard ceiling on a single compression pass. Compression is awaited by
    buildContextMessages, which sendMessage awaits, so this is also the
    longest the app can appear frozen before the user's turn goes through.
    Generous enough that a slow local model finishes normally; short enough
    that a stuck one is an inconvenience rather than a lockup. */
 const LORE_TIMEOUT_MS = 45000;
+
+/* Output budget for one compression pass.
+
+   TARGET is what we ask for when there is room, and it is the old fixed
+   value: 700 cut beats mid-word because max_tokens covers reasoning as
+   well as content, and removing the cap let a looping model run to the
+   end of the context. 2048 sits between those two failures and the
+   reasoning behind it was never the problem.
+
+   The problem was that it was an ABSOLUTE number inside a budget that is
+   RELATIVE to how full the context already is. llama-server rejects a
+   request when prompt_tokens + max_tokens > n_ctx, so on a nearly-full
+   context the ask itself was what pushed it over and every pass came
+   back 400.
+
+   FLOOR is the smallest ask worth making. Below roughly this, a model
+   that thinks before answering spends the whole allowance on reasoning
+   and returns empty content -- which lands in the "model returned
+   nothing at all" branch and looks like a different bug. If we cannot
+   afford the floor we do not send the request at all.
+
+   SAFETY covers the gap between our token estimate and the server's real
+   tokeniser. estimateTokens is words x 1.43 and under-counts CJK, code,
+   URLs and long identifiers, so the margin is deliberately wide. */
+const LORE_OUTPUT_TARGET_TOKENS = 2048;
+const LORE_OUTPUT_FLOOR_TOKENS  = 512;
+const LORE_CTX_SAFETY_TOKENS    = 256;
+
+/* The model server's REAL context window, cached briefly.
+
+   Nothing else in the frontend knows this number. resolveContextLimit()
+   reports the card's budget clamped to activeModel.maxCtx, and maxCtx is
+   the model's TRAINING context -- 131072 for most of the registry --
+   while llama-server may well have been started with --ctx-size 4096.
+   Budgeting a request against the training figure is how you send a
+   prompt that cannot fit and get the 400 this whole change exists to
+   stop, so the only number worth having is the one the server reports.
+
+   Deliberately does NOT fall back to n_ctx_train. gobboDiag() accepts it
+   because it is displaying a fact; here it would silently reintroduce
+   the exact overestimate above. If the server does not report n_ctx we
+   return null and the caller falls back to the card's limit, which is at
+   least a number the user chose.
+
+   Cached on a short TTL rather than invalidated by hand. A model
+   hot-swap (02-model.js) and a perf restart (savePerfSettings) both
+   change n_ctx, and both take far longer than this window to complete,
+   so a timer costs one small fetch per compression and needs no hooks in
+   files this item has no business touching. A stale reading is survivable
+   in a way a stale hook is not: the worst case is one pass budgeted
+   against the old size, which now fails safely instead of hanging. */
+let _loreServerCtx = null;
+let _loreServerCtxAt = 0;
+const LORE_CTX_TTL_MS = 60000;
+
+async function getServerContextSize() {
+  const now = Date.now();
+  if (now - _loreServerCtxAt < LORE_CTX_TTL_MS) return _loreServerCtx;
+  _loreServerCtxAt = now;
+  if (!IS_SERVED) { _loreServerCtx = null; return null; }
+  try {
+    const r = await privacyFetch(LLAMA_URL + '/props', { cache: 'no-store' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const p = await r.json();
+    const gen = p && p.default_generation_settings;
+    const n = (gen && typeof gen.n_ctx === 'number') ? gen.n_ctx : null;
+    _loreServerCtx = (n && n > 0) ? n : null;
+  } catch (e) {
+    // Server down, proxy 401, or an older llama-server that does not
+    // report it. Not worth a console.error on a path that has a fallback.
+    _loreServerCtx = null;
+  }
+  return _loreServerCtx;
+}
 
 /* Why the last compression pass produced what it did.
    summarizeForLore has three ways to give up -- a bad HTTP response, an
@@ -305,6 +454,48 @@ const LORE_TIMEOUT_MS = 45000;
    them and no way to tell which branch fired is not a diagnosable state,
    so each one now records why. Read it in the lore inspector. */
 let _loreLastOutcome = null;
+
+/* Machine-readable companion to _loreLastOutcome.
+     'ok'     -- a beat was written
+     'skip'   -- the model correctly reported nothing worth recording
+     'noroom' -- no context left to summarise in; messages were dropped
+     'failed' -- the request errored, timed out, or produced nothing
+   _loreLastOutcome stays a prose string because the lore inspector prints
+   it verbatim. The caller needs to BRANCH on the result, and branching on
+   prose means matching substrings, which breaks the first time someone
+   rewords a message. */
+let _loreLastKind = 'ok';
+
+/**
+ * Record, in the lore itself, that messages were dropped without being
+ * summarised.
+ *
+ * This is the honest half of the hard-trim policy. buildContextMessages
+ * marks messages .archived BEFORE awaiting this module, and nothing ever
+ * un-marks them, so when a pass gives up those messages are already gone
+ * from the model's context. Saying nothing leaves the model with a hole
+ * it cannot see and will confabulate across; one line tells it there is
+ * missing history at that point, which is the difference between a gap
+ * and amnesia.
+ *
+ * Rolls the count into an existing marker rather than appending a new
+ * one. Successive failures would otherwise fill the beat log with
+ * near-identical lines and crowd out the actual story -- and the log is
+ * capped at LORE_MAX_CHARS, so those lines would evict real beats.
+ */
+function _appendLoreGapMarker(existingLore, count) {
+  const n = Math.max(1, count | 0);
+  const prior = (existingLore || '').trim();
+  const lines = prior ? prior.split('\n') : [];
+  const last = lines.length ? lines[lines.length - 1] : '';
+  const m = last.match(/^- \[(\d+) earlier messages? dropped without being summarised\.\]$/);
+  const total = m ? (parseInt(m[1], 10) + n) : n;
+  const marker = '- [' + total + ' earlier message' + (total === 1 ? '' : 's')
+               + ' dropped without being summarised.]';
+  if (m) lines[lines.length - 1] = marker;
+  else lines.push(marker);
+  return lines.join('\n');
+}
 
 /**
  * Reduce a model reply to one clean beat.
@@ -361,8 +552,21 @@ function _cleanLoreBeat(text) {
   return t;
 }
 
-async function summarizeForLore(existingLore, messagesToSummarize, authoredLore) {
+async function summarizeForLore(existingLore, messagesToSummarize, authoredLore, fallbackCtx) {
   _loreLastOutcome = null;
+  _loreLastKind = 'ok';
+
+  // How many messages the caller has already archived. Every give-up path
+  // below reports this number, because it is the thing the user actually
+  // lost -- not the size of the summary, which is what the log records.
+  const archivedCount = (messagesToSummarize || []).length;
+
+  // The window everything below is budgeted against. Prefer what the
+  // server reports; fall back to the card's limit when it cannot be
+  // reached (file:// mode, proxy down, older llama-server). The fallback
+  // can overestimate, which is what the 400 handler further down is for.
+  const serverCtx = await getServerContextSize();
+  const ctx = serverCtx || Math.max(2048, parseInt(fallbackCtx, 10) || 4096);
   // Instructions go in a SYSTEM message, not the user turn — most modern
   // chat templates weight system content more reliably for format
   // compliance. We also do NOT include m.reasoning: chain-of-thought from
@@ -411,15 +615,7 @@ async function summarizeForLore(existingLore, messagesToSummarize, authoredLore)
   // Only generated beats are returned and stored. Authored lore stays the
   // card's, untouched, and is injected into context separately.
   const authored = (authoredLore || '').trim();
-  const recorded = [authored, (existingLore || '').trim()].filter(Boolean).join('\n');
 
-  let body = '';
-  if (recorded) {
-    body += '=== ALREADY WRITTEN DOWN - DO NOT REPEAT ANY OF THIS ===\n' + recorded + '\n\n';
-    body += '=== NEW MESSAGES ===\n';
-  } else {
-    body += '=== THE STORY SO FAR ===\n';
-  }
   // Bound the input. The archive step can hand over a very large block --
   // on a 4K-context model the first pass frees a lot at once -- and a big
   // prompt on a small model is both slow and the condition under which it
@@ -430,7 +626,7 @@ async function summarizeForLore(existingLore, messagesToSummarize, authoredLore)
   // window was almost certainly covered by the beat written last pass.
   const MAX_MSGS_PER_PASS = 24;
   const MAX_CHARS_PER_PASS = 12000;
-  let feed = messagesToSummarize;
+  let feed = (messagesToSummarize || []).filter(m => (m && m.content));
   if (feed.length > MAX_MSGS_PER_PASS) feed = feed.slice(-MAX_MSGS_PER_PASS);
   let feedChars = feed.reduce((a, m) => a + ((m.content || '').length), 0);
   while (feed.length > 2 && feedChars > MAX_CHARS_PER_PASS) {
@@ -438,11 +634,86 @@ async function summarizeForLore(existingLore, messagesToSummarize, authoredLore)
     feed = feed.slice(1);
   }
 
-  for (const m of feed) {
+  /* ================================================================
+     FIT THE PROMPT TO THE WINDOW
+
+     This is the part that decides whether compression happens at all,
+     and it used to be a single-shot estimate followed by a verdict.
+     Estimate the feed budget once, fill it, cost the finished prompt,
+     and if the leftover would not cover an output ask, give up and
+     hard-trim. Three things were wrong with that.
+
+     1. The feed budget did not subtract the SYSTEM prompt, the closing
+        instruction, or the per-request fudge -- roughly 280 tokens it
+        then spent on messages anyway. So a feed that filled its budget
+        left about 280 tokens LESS than the floor it was budgeted to
+        leave, and the pass was refused. Any conversation long enough to
+        fill the feed hit this, which is every conversation that needs
+        compressing. The feature read as "it never fires".
+
+     2. The recorded beats were a fixed cost that grew all session and
+        was never trimmed. On a small server window the do-not-repeat
+        header alone could exceed the context, and no amount of feed
+        trimming could recover it. The longer the session ran, the more
+        certain the refusal -- exactly backwards.
+
+     3. One oversized message was always included regardless of cost
+        (the first chunk went in unconditionally), so a single long
+        paste could refuse every pass from then on.
+
+     The replacement trims until it fits instead of checking whether it
+     did. Rungs, cheapest thing to lose first:
+
+       1. Thin the middle of the beat log. Keeps the opening premise and
+          the newest beats -- the two parts that actually do the
+          do-not-repeat job -- and drops between them.
+       2. Drop the oldest feed messages. Already this file's stated
+          policy: an older message that misses the window was almost
+          certainly covered by the beat written last pass.
+       3. Drop the remaining beats. Risks a repeated beat, which is
+          recoverable; lost history is not.
+       4. Shorten the authored lore, keeping its HEAD. The premise leads
+          with who and where.
+       5. Clip the last message, keeping its TAIL. A message ends on its
+          outcome, which is what a beat is about. Half a message
+          summarised beats a whole one dropped.
+
+     Only when a minimal prompt plus the floor cannot fit the window at
+     all -- a genuinely too-small context, not a full one -- do we fall
+     through to the hard-trim path below.
+  ================================================================ */
+
+  const LORE_TAIL = '=== END ===\nWrite the one new beat now. One sentence. Nothing else.';
+  // Fixed and untrimmable: the instructions, plus the per-request
+  // overhead the old code applied as a bare +16 AFTER budgeting.
+  const sysTokens = estimateTokens(sys) + 16;
+
+  /* Keep the END of a message. Word-wise, because estimateTokens counts
+     words -- clipping by character offset would sever a word and make
+     the cost estimate wrong in the same breath. */
+  function _loreClipTail(text, maxTokens) {
+    const words = String(text || '').split(/\s+/).filter(Boolean);
+    const keep = Math.floor(maxTokens * 0.7);
+    if (keep < 1 || words.length <= keep) return text;
+    return '[...] ' + words.slice(-keep).join(' ');
+  }
+
+  /* Drop one line from the MIDDLE of the beat log, keeping the first two
+     and the last three. Same reasoning as the LORE_MAX_CHARS cap: the
+     opening beats are the premise everything later rests on, the newest
+     are what the model is most likely to restate, and the middle is the
+     most safely forgotten. Returns null when there is nothing left to
+     give, which is the signal to move to the next rung. */
+  function _loreThinBeats(text) {
+    const lines = String(text || '').split('\n').filter(l => l.trim());
+    if (lines.length <= 5) return null;
+    return lines.slice(0, 2).concat(lines.slice(3)).join('\n');
+  }
+
+  function _loreChunk(m, clipTokens) {
     const role = m.role === 'user' ? 'User' : 'Assistant';
-    const text = m.content || '';  // intentionally NOT m.reasoning
-    if (!text) continue;
-    body += `${role}: ${text}\n`;
+    const text = clipTokens ? _loreClipTail(m.content || '', clipTokens) : (m.content || '');
+    let chunk = role + ': ' + text + '\n';
     // Search results are a repetition source in their own right: web
     // snippets restate the same place and product names in every result,
     // and folding them in whole taught the summariser that those names
@@ -452,15 +723,114 @@ async function summarizeForLore(existingLore, messagesToSummarize, authoredLore)
       const sd = m.searchData.length > 600
         ? m.searchData.slice(0, 600) + '\u2026'
         : m.searchData;
-      body += `[Search results referenced]:\n${sd}\n`;
+      chunk += '[Search results referenced]:\n' + sd + '\n';
     }
-    body += '\n';
+    return chunk + '\n';
   }
-  body += '=== END ===\nWrite the one new beat now. One sentence. Nothing else.';
+
+  /* Build the largest prompt that leaves room for a floor-sized answer
+     inside `window`. Returns null only if no such prompt exists.
+     `window` is a parameter rather than a closure read so the 400
+     handler can re-fit against a deliberately pessimistic figure. */
+  function _loreFit(window) {
+    let beats = (existingLore || '').trim();
+    let auth  = authored;
+    let msgs  = feed.slice();
+    let clip  = 0;
+    const notes = { beatsThinned: 0, msgsDropped: 0, beatsDropped: false,
+                    authorTrimmed: false, clipped: false };
+
+    // Bounded: every rung strictly shrinks the material or returns.
+    for (let guard = 0; guard < 400; guard++) {
+      const rec = [auth, beats].filter(Boolean).join('\n');
+      const head = rec
+        ? '=== ALREADY WRITTEN DOWN - DO NOT REPEAT ANY OF THIS ===\n' + rec
+          + '\n\n=== NEW MESSAGES ===\n'
+        : '=== THE STORY SO FAR ===\n';
+      const last = msgs.length - 1;
+      const bodyNow = head
+        + msgs.map((m, i) => _loreChunk(m, (clip && i === last) ? clip : 0)).join('')
+        + LORE_TAIL;
+      const promptTokens = sysTokens + estimateTokens(bodyNow);
+      const ask = Math.min(LORE_OUTPUT_TARGET_TOKENS,
+                           window - promptTokens - LORE_CTX_SAFETY_TOKENS);
+      if (ask >= LORE_OUTPUT_FLOOR_TOKENS) {
+        return { body: bodyNow, ask: ask, promptTokens: promptTokens, notes: notes };
+      }
+
+      const thinner = _loreThinBeats(beats);
+      if (thinner !== null) { beats = thinner; notes.beatsThinned++; continue; }
+      if (msgs.length > 1)  { msgs.shift();   notes.msgsDropped++;  continue; }
+      if (beats)            { beats = '';     notes.beatsDropped = true; continue; }
+      if (auth) {
+        const words = auth.split(/\s+/).filter(Boolean);
+        notes.authorTrimmed = true;
+        auth = words.length > 30 ? words.slice(0, Math.floor(words.length / 2)).join(' ') : '';
+        continue;
+      }
+      // One message, no header left. Clip it to whatever room remains.
+      // Computed rather than iterated -- at this point every other term
+      // is known, so there is exactly one right answer and no reason to
+      // converge on it. Runs once; if the result still will not fit, the
+      // window cannot hold the instructions and a floor-sized reply.
+      if (!notes.clipped) {
+        const room = window - sysTokens - estimateTokens(head) - estimateTokens(LORE_TAIL)
+                   - LORE_OUTPUT_FLOOR_TOKENS - LORE_CTX_SAFETY_TOKENS - 12;
+        if (room >= 48) { clip = room; notes.clipped = true; continue; }
+      }
+      return null;
+    }
+    return null;
+  }
+
+  let fitted = _loreFit(ctx);
+
+  if (!fitted) {
+    // No room to compress. Now a genuinely too-small context rather than
+    // a merely full one: everything shrinkable has been shrunk and the
+    // window still cannot hold the instructions plus a floor-sized
+    // reply. This is a real condition, not an error, and it gets its own
+    // branch precisely so it does not arrive as a 400.
+    //
+    // Policy is hard-trim: the messages the caller already archived stay
+    // archived, we write down that they are missing, and the turn goes
+    // through. It is the only one of the three options that is
+    // self-correcting -- dropping this batch frees the context that made
+    // compression impossible, so the next pass usually succeeds on its
+    // own. Refusing the user's turn would deadlock the conversation, and
+    // "stop compressing" would leave it stuck at exactly the fullness
+    // that caused the problem.
+    _loreLastKind = 'noroom';
+    _loreLastOutcome = 'no room to compress -- a ' + ctx + '-token context'
+      + (serverCtx ? '' : ' (estimated; the server did not report its context size)')
+      + ' cannot hold the summariser\'s instructions and a '
+      + LORE_OUTPUT_FLOOR_TOKENS + '-token reply, even with the prompt trimmed to '
+      + 'nothing. The ' + archivedCount + ' oldest message'
+      + (archivedCount === 1 ? ' was' : 's were') + ' dropped from context instead. '
+      + 'Raise the model server\'s context size to fix this.';
+    console.warn('[lore]', _loreLastOutcome);
+    renderLoreIndicator('');
+    return _appendLoreGapMarker(existingLore, archivedCount);
+  }
 
   // Visible indicator so the user can see compression is happening rather
   // than the UI appearing frozen. Cleared on completion / error / abort.
+  // Deliberately after the fit check: showing "compressing..." for a
+  // pass that was never sent is how the old silent stall read on screen.
   renderLoreIndicator('compressing older messages into lore...');
+  if (fitted.notes.msgsDropped || fitted.notes.clipped
+      || fitted.notes.beatsThinned || fitted.notes.beatsDropped
+      || fitted.notes.authorTrimmed) {
+    const n = fitted.notes;
+    console.warn('[lore] context is tight -- trimmed to fit a ' + ctx + '-token window: '
+      + [n.msgsDropped ? n.msgsDropped + ' older message' + (n.msgsDropped === 1 ? '' : 's') + ' dropped' : '',
+         n.clipped ? 'newest message clipped' : '',
+         n.beatsThinned ? n.beatsThinned + ' recorded beat' + (n.beatsThinned === 1 ? '' : 's') + ' held back' : '',
+         n.beatsDropped ? 'do-not-repeat list omitted' : '',
+         n.authorTrimmed ? 'authored lore shortened' : ''
+        ].filter(Boolean).join(', ')
+      + '. Compressing anyway.');
+  }
 
   // Lore compression must never hold the conversation hostage.
   //
@@ -475,8 +845,10 @@ async function summarizeForLore(existingLore, messagesToSummarize, authoredLore)
   const _loreAbort = new AbortController();
   const _loreTimer = setTimeout(() => _loreAbort.abort(), LORE_TIMEOUT_MS);
 
-  try {
-    const resp = await privacyFetch(LLAMA_URL + '/v1/chat/completions', {
+  /* One send. Extracted so the 400 handler can re-fit and try again
+     without duplicating the request body. */
+  function _loreSend(f) {
+    return privacyFetch(LLAMA_URL + '/v1/chat/completions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       signal: _loreAbort.signal,
@@ -484,23 +856,18 @@ async function summarizeForLore(existingLore, messagesToSummarize, authoredLore)
         model: 'local',
         messages: [
           { role: 'system', content: sys },
-          { role: 'user',   content: body }
+          { role: 'user',   content: f.body }
         ],
         // Stream so we don't block the UI for ~30s with zero feedback.
         // The tokens are dropped on the floor — we just want progress.
         stream: true,
-        // Generous, but finite. 700 was cutting beats mid-word because
-        // max_tokens covers REASONING plus content and llama-server runs
-        // with --reasoning-format auto -- a model that thinks first spent
-        // the budget thinking. Removing the cap entirely fixed that and
-        // introduced something worse: with temperature 0.3 and no repeat
-        // penalty, a model that falls into a loop has nothing to stop it
-        // and generates until the context is full.
-        //
-        // 2048 cannot cut a two-sentence beat. The longest chain-of-thought
-        // observed here was about 640 tokens, leaving well over a thousand
-        // for a forty-token sentence. It only ever bites on a runaway.
-        max_tokens: 2048,
+        // Whatever is left of the context, capped at
+        // LORE_OUTPUT_TARGET_TOKENS and never below the floor -- see the
+        // constants at the top of this section for why those two numbers
+        // are what they are. On a roomy context this is 2048 and behaves
+        // exactly as it did before; on a tight one it shrinks instead of
+        // 400ing, and when it cannot reach the floor we never get here.
+        max_tokens: f.ask,
         // Mild repeat penalty. The chat path gets one from the card's
         // sampler settings; this request was sending temperature alone,
         // which is the classic degenerate-loop recipe.
@@ -509,11 +876,49 @@ async function summarizeForLore(existingLore, messagesToSummarize, authoredLore)
         temperature: 0.3
       })
     });
+  }
+
+  try {
+    let resp = await _loreSend(fitted);
+
+    // A 400 here is the server's own context check, and our prediction of
+    // it can be wrong in the one direction that matters: estimateTokens is
+    // words x 1.43, which under-counts CJK, code, URLs and long
+    // identifiers, so a prompt we costed as affordable can still overflow
+    // the real tokeniser.
+    //
+    // That is an inaccurate ESTIMATE, not a full context, and the two used
+    // to be treated the same -- one 400 and the batch was dropped. Re-fit
+    // against 60% of the window instead. The ladder above will shed beats
+    // and older messages until it fits a figure the estimate cannot
+    // plausibly have overshot, and the retry costs one round trip inside
+    // the timeout budget we were already holding. Only if THAT is refused
+    // do we accept the loss.
+    if (!resp.ok && resp.status === 400) {
+      const tighter = _loreFit(Math.floor(ctx * 0.6));
+      if (tighter) {
+        console.warn('[lore] the server refused a prompt we costed as affordable; '
+          + 'retrying against a 60% window.');
+        fitted = tighter;
+        resp = await _loreSend(fitted);
+      }
+    }
+
     if (!resp.ok) {
-      _loreLastOutcome = 'HTTP ' + resp.status + ' from the model server';
+      const noRoom = (resp.status === 400);
+      _loreLastKind = noRoom ? 'noroom' : 'failed';
+      _loreLastOutcome = noRoom
+        ? ('the model server rejected the summary as too long for its '
+           + ctx + '-token context, even after trimming and a second, smaller '
+           + 'attempt. The ' + archivedCount
+           + ' oldest message' + (archivedCount === 1 ? ' was' : 's were')
+           + ' dropped from context instead.')
+        : ('HTTP ' + resp.status + ' from the model server. The ' + archivedCount
+           + ' oldest message' + (archivedCount === 1 ? ' was' : 's were')
+           + ' dropped from context without being summarised.');
       console.error('[lore] request failed:', resp.status, resp.statusText);
       renderLoreIndicator('');
-      return existingLore || '';
+      return _appendLoreGapMarker(existingLore, archivedCount);
     }
 
     // Reuse the project's existing thinking-format parser. Whatever the
@@ -584,18 +989,30 @@ async function summarizeForLore(existingLore, messagesToSummarize, authoredLore)
       // Distinguishing those two is the difference between fixing a regex
       // and rewriting a prompt.
       const rlen = (tmpMsg.reasoning || '').trim().length;
-      _loreLastOutcome = rlen
+      _loreLastKind = 'failed';
+      _loreLastOutcome = (rlen
         ? ('model replied but the parser filed all ' + rlen +
            ' characters as reasoning, not content')
-        : 'model returned nothing at all';
+        : 'model returned nothing at all')
+        + '. The ' + archivedCount + ' oldest message'
+        + (archivedCount === 1 ? ' was' : 's were')
+        + ' dropped from context without being summarised.';
       console.error('[lore] empty summary.', _loreLastOutcome,
                     '| format:', normalizeThinkingFormat(activeModel && activeModel.thinkingFormat));
-      return existingLore || '';
+      // The messages are already archived and nothing was written down,
+      // so this is a gap whatever the cause. Same treatment as a failed
+      // request -- the user loses the same history either way.
+      return _appendLoreGapMarker(existingLore, archivedCount);
     }
 
     // SKIP is the model correctly reporting that nothing worth recording
     // happened. Not a failure, and nothing to append.
     if (/^skip\b/i.test(summary)) {
+      // Not a gap. The model read the batch and judged it inconsequential,
+      // which is the outcome this instruction exists to produce, so no
+      // marker and no warning -- the archived messages were discarded on
+      // purpose rather than lost.
+      _loreLastKind = 'skip';
       _loreLastOutcome = 'nothing worth recording this pass (SKIP)';
       return existingLore || '';
     }
@@ -632,16 +1049,20 @@ async function summarizeForLore(existingLore, messagesToSummarize, authoredLore)
   } catch (e) {
     // An abort is a timeout, not a crash, and saying so matters: it points
     // at a stuck or looping model rather than a bug in the request.
+    const _lost = ' The ' + archivedCount + ' oldest message'
+                + (archivedCount === 1 ? ' was' : 's were')
+                + ' dropped from context without being summarised.';
+    _loreLastKind = 'failed';
     if (e && e.name === 'AbortError') {
       _loreLastOutcome = 'timed out after ' + Math.round(LORE_TIMEOUT_MS / 1000)
-                       + 's and was cancelled so the turn could continue';
-      console.warn('[lore] compression timed out; keeping previous lore.');
+                       + 's and was cancelled so the turn could continue.' + _lost;
+      console.warn('[lore] compression timed out.', _loreLastOutcome);
     } else {
-      _loreLastOutcome = 'threw: ' + (e && e.message ? e.message : String(e));
+      _loreLastOutcome = 'threw: ' + (e && e.message ? e.message : String(e)) + '.' + _lost;
       console.error('Lore summarization failed:', e);
     }
     renderLoreIndicator('');
-    return existingLore || '';
+    return _appendLoreGapMarker(existingLore, archivedCount);
   } finally {
     // Six return paths leave this function. A finally is the only way to be
     // sure the timer dies on all of them -- a leaked one fires minutes

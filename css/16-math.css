@@ -1,0 +1,294 @@
+/* ================================================================
+   MATH RENDERING
+
+   Layout for the in-house LaTeX renderer (js/18-utils.js). Fractions,
+   radicals and stacked operator limits are all done with inline-flex
+   rather than tables or absolute positioning, so they stay on the text
+   baseline and reflow with the message.
+
+   No font is shipped. KaTeX's typographic quality comes substantially
+   from bundling Computer Modern — roughly a megabyte, in artefacts that
+   also have to fit an NSIS installer and Linux packages. A system serif
+   is a visible step down and a deliberate one.
+================================================================ */
+
+.math-block {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin: 12px 0;
+  overflow: hidden;
+}
+
+.math-rendered {
+  padding: 14px 16px;
+  overflow-x: auto;          /* long equations scroll rather than wrap mid-fraction */
+  font-family: var(--font-math, Georgia, 'Times New Roman', serif);
+  font-size: 1.15em;
+  line-height: 2.1;          /* room for stacked limits and accents */
+  color: var(--text);
+}
+
+/* Source view — hidden until the Source button is pressed. */
+.math-source {
+  display: none;
+  margin: 0;
+  padding: 14px 16px;
+  border-top: 1px solid var(--border);
+  background: var(--black);
+  overflow-x: auto;
+}
+.math-block.math-show-source .math-source { display: block; }
+.math-block.math-show-source .math-rendered { display: none; }
+
+/* ── Atoms ──────────────────────────────────────────────────────── */
+
+.math-var { font-style: italic; }                    /* single letters are variables */
+.math-fn,
+.math-text { font-style: normal; }
+.math-fn { margin-right: 0.15em; }
+.math-text { font-family: var(--font); font-size: 0.92em; }
+
+/* Approximate TeX spacing: relations and binary operators get air.
+   Real TeX varies the amount by class; this is one flat value. */
+.math-bin { margin: 0 0.22em; }
+
+.math-space { display: inline-block; }
+
+.math-unknown {
+  font-family: var(--font);
+  font-size: 0.9em;
+  color: var(--amber, var(--label));
+  background: rgba(255, 176, 0, 0.12);
+  border-radius: 3px;
+  padding: 0 3px;
+  font-style: normal;
+}
+
+/* ── Fractions ──────────────────────────────────────────────────── */
+
+.math-frac {
+  display: inline-flex;
+  flex-direction: column;
+  vertical-align: -0.55em;    /* sits the bar near the baseline */
+  text-align: center;
+  margin: 0 0.15em;
+  font-size: 0.95em;
+}
+.math-num {
+  border-bottom: 1px solid currentColor;
+  padding: 0 0.35em 0.1em;
+  line-height: 1.35;
+}
+.math-den {
+  padding: 0.1em 0.35em 0;
+  line-height: 1.35;
+}
+
+.math-binom { display: inline-flex; align-items: center; }
+.math-binom-stack {
+  display: inline-flex;
+  flex-direction: column;
+  text-align: center;
+  padding: 0 0.2em;
+  line-height: 1.25;
+  font-size: 0.95em;
+}
+
+/* ── Radicals ───────────────────────────────────────────────────── */
+
+.math-sqrt { display: inline-flex; align-items: flex-start; margin: 0 0.1em; }
+.math-radical { font-size: 1.15em; line-height: 1; }
+.math-radicand {
+  border-top: 1px solid currentColor;
+  padding: 0.12em 0.25em 0 0.15em;
+  margin-top: 0.12em;
+}
+.math-root {
+  font-size: 0.65em;
+  align-self: flex-start;
+  margin-right: -0.45em;      /* tucks the index into the radical's crook */
+  margin-top: 0.1em;
+}
+
+/* ── Scripts ────────────────────────────────────────────────────── */
+
+.math-sup-i, .math-sub-i { font-size: 0.72em; }
+
+/* Both scripts on one base: stacked, not sequential. */
+.math-subsup {
+  display: inline-flex;
+  flex-direction: column;
+  vertical-align: -0.35em;
+  font-size: 0.72em;
+  line-height: 1.15;
+  text-align: left;
+  margin-left: 0.05em;
+}
+
+/* ── Big operators ──────────────────────────────────────────────── */
+
+.math-bigop { font-size: 1.45em; line-height: 1; }
+
+.math-limits {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  vertical-align: -0.5em;
+  margin: 0 0.2em;
+}
+.math-limits .math-upper,
+.math-limits .math-lower {
+  font-size: 0.62em;
+  line-height: 1.2;
+}
+.math-limits .math-upper:empty,
+.math-limits .math-lower:empty { display: none; }
+
+/* ── Accents ────────────────────────────────────────────────────── */
+
+.math-accent {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  vertical-align: -0.15em;
+}
+.math-accent .math-mark {
+  font-size: 0.8em;
+  line-height: 0.6;
+  height: 0.5em;
+}
+.math-accent .math-acc-base { line-height: 1.1; }
+
+/* ── Alphabets ──────────────────────────────────────────────────── */
+
+.math-f-cal  { font-family: 'Segoe Script', 'Apple Chancery', cursive; font-style: normal; }
+.math-f-bb   { font-weight: 600; letter-spacing: 0.03em; }
+.math-f-bf   { font-weight: 700; font-style: normal; }
+.math-f-rm   { font-style: normal; }
+.math-f-it   { font-style: italic; }
+.math-f-sf   { font-family: var(--font); font-style: normal; }
+.math-f-tt   { font-family: var(--font-mono, monospace); font-style: normal; }
+.math-f-frak { font-family: 'UnifrakturMaguntia', 'Luminari', fantasy; font-style: normal; }
+.math-f-cal .math-var,
+.math-f-bb .math-var,
+.math-f-bf .math-var,
+.math-f-rm .math-var,
+.math-f-sf .math-var,
+.math-f-tt .math-var,
+.math-f-frak .math-var { font-style: inherit; font-weight: inherit; }
+
+/* ── Inline maths ───────────────────────────────────────────────
+   $...$ and \(...\) inside a paragraph. Serif face like the block form so
+   the two match, but no line-height override: an inline formula must not
+   push the paragraph's lines apart. */
+.math-inline {
+  font-family: var(--font-math, Georgia, 'Times New Roman', serif);
+  font-size: 1.05em;
+  white-space: nowrap;
+}
+
+/* ── Environments: matrices, cases, aligned ─────────────────────
+
+   A LaTeX environment body is literally a grid — rows split on \\, cells
+   on & — so CSS grid does the layout with no table markup and no measuring.
+
+   Column counts and delimiter heights are FIXED classes rather than an
+   inline style, because the count is derived from message content and the
+   renderer's rule is that nothing from input reaches an attribute.
+================================================================ */
+
+.math-env {
+  display: inline-flex;
+  align-items: stretch;
+  vertical-align: middle;
+  margin: 0 0.15em;
+}
+
+.math-grid {
+  display: inline-grid;
+  align-items: center;
+  row-gap: 0.35em;
+  column-gap: 0.7em;
+  padding: 0.15em 0.35em;
+  line-height: 1.35;
+}
+
+.math-cols-1  { grid-template-columns: repeat(1, auto); }
+.math-cols-2  { grid-template-columns: repeat(2, auto); }
+.math-cols-3  { grid-template-columns: repeat(3, auto); }
+.math-cols-4  { grid-template-columns: repeat(4, auto); }
+.math-cols-5  { grid-template-columns: repeat(5, auto); }
+.math-cols-6  { grid-template-columns: repeat(6, auto); }
+.math-cols-7  { grid-template-columns: repeat(7, auto); }
+.math-cols-8  { grid-template-columns: repeat(8, auto); }
+.math-cols-9  { grid-template-columns: repeat(9, auto); }
+.math-cols-10 { grid-template-columns: repeat(10, auto); }
+
+/* Column alignment. `rl` is the aligned/align case: odd columns flush
+   right, even flush left, so the = signs line up the way TeX does it. */
+.math-al-c .math-cell { text-align: center; }
+.math-al-l .math-cell { text-align: left; }
+.math-al-rl .math-cell { text-align: right; }
+.math-al-rl .math-cell:nth-child(even) { text-align: left; }
+/* An aligned block has no gap at the relation: "a" and "= b" are one run. */
+.math-al-rl { column-gap: 0.15em; }
+
+/* Delimiters are drawn rather than typeset. A glyph does not grow with its
+   contents, which is the "growing delimiters" gap the renderer has always
+   had; borders stretch for free because the flex parent stretches them. */
+.math-delim {
+  display: inline-block;
+  width: 0.42em;
+  flex: none;
+  align-self: stretch;
+}
+
+.math-d-paren-l,
+.math-d-paren-r {
+  border: 1.5px solid currentColor;
+  width: 0.5em;
+}
+.math-d-paren-l { border-right: 0; border-radius: 60% 0 0 60% / 50% 0 0 50%; }
+.math-d-paren-r { border-left: 0;  border-radius: 0 60% 60% 0 / 0 50% 50% 0; }
+
+.math-d-brack-l,
+.math-d-brack-r { border: 1.5px solid currentColor; }
+.math-d-brack-l { border-right: 0; }
+.math-d-brack-r { border-left: 0; }
+
+.math-d-bar  { border-left: 1.5px solid currentColor; width: 0.3em; }
+.math-d-dbar { border-left: 3px double currentColor; width: 0.35em; }
+
+/* Braces are the one shape borders cannot draw. A glyph scaled to the row
+   count is the honest approximation; the scale steps live in fixed classes
+   for the same reason the column counts do. */
+.math-d-brace-l,
+.math-d-brace-r {
+  width: 0.5em;
+  position: relative;
+}
+.math-d-brace-l::before,
+.math-d-brace-r::before {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform-origin: left center;
+  line-height: 1;
+  font-size: 1.4em;
+}
+.math-d-brace-l::before { content: '{'; }
+.math-d-brace-r::before { content: '}'; }
+
+.math-env-rows-1 .math-delim::before { transform: translateY(-50%) scaleY(1); }
+.math-env-rows-2 .math-delim::before { transform: translateY(-50%) scaleY(1.7); }
+.math-env-rows-3 .math-delim::before { transform: translateY(-50%) scaleY(2.5); }
+.math-env-rows-4 .math-delim::before { transform: translateY(-50%) scaleY(3.3); }
+.math-env-rows-5 .math-delim::before { transform: translateY(-50%) scaleY(4.1); }
+.math-env-rows-6 .math-delim::before { transform: translateY(-50%) scaleY(4.9); }
+.math-env-rows-7 .math-delim::before { transform: translateY(-50%) scaleY(5.7); }
+.math-env-rows-8 .math-delim::before { transform: translateY(-50%) scaleY(6.5); }
+
+/* cases has an opening brace and nothing on the right, so its rows want to
+   read as a list rather than sit centred in a box. */
+.math-al-l { row-gap: 0.4em; }

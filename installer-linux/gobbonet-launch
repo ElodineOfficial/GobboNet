@@ -1,0 +1,380 @@
+#!/usr/bin/env bash
+#
+# GobboNet desktop launcher.
+#
+# A .desktop file cannot express "ask some questions the first time, then start
+# a server, then open a browser at it", so the sequencing lives here. This is
+# installed as plain text on purpose: it is the piece most likely to need
+# adjusting on an unusual desktop, and it should be readable and editable by the
+# person whose machine it is.
+#
+# `gobbonet serve` deliberately asks nothing — it is a server, and a server
+# launched from a menu entry has no terminal and therefore nobody to ask. Every
+# question happens in `gobbonet setup` before the server starts.
+#
+# Nothing here writes outside the user's own directories.
+
+set -uo pipefail
+
+OPEN_BROWSER=1
+for arg in "$@"; do
+    case "$arg" in
+        --no-browser) OPEN_BROWSER=0 ;;
+    esac
+done
+
+PREFIX="/usr/lib/gobbonet"
+BIN="$PREFIX/gobbonet"
+CATALOG="$PREFIX/models.ini"
+WEBROOT="$PREFIX/web"
+
+DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/gobbonet"
+LOG="$DATA_DIR/launch.log"
+
+mkdir -p "$DATA_DIR" 2>/dev/null || true
+chmod 700 "$DATA_DIR" 2>/dev/null || true
+
+# A menu launch has no terminal, so anything written to stdout or stderr is
+# simply lost. When someone reports "I clicked it and nothing happened", this
+# file is the only thing that can say why — so it is opened before anything
+# else can fail.
+exec >>"$LOG" 2>&1
+echo "=== $(date -Is) launching GobboNet ==="
+
+# ---------------------------------------------------------------------------
+# Failure has to be visible. Without a dialog, a failed start looks exactly
+# like a launcher that did nothing at all, which is the precise failure this
+# script exists to prevent. Try the graphical options in order of how likely
+# they are to be present, and fall back to the log message alone.
+# ---------------------------------------------------------------------------
+die() {
+    local msg="$1"
+    echo "ERROR: $msg"
+    local full="$msg
+
+Details are in:
+$LOG"
+    if   command -v zenity      >/dev/null 2>&1; then
+        zenity --error --no-wrap --title="GobboNet" --text="$full" >/dev/null 2>&1
+    elif command -v kdialog     >/dev/null 2>&1; then
+        kdialog --title "GobboNet" --error "$full" >/dev/null 2>&1
+    elif command -v notify-send >/dev/null 2>&1; then
+        notify-send -u critical "GobboNet" "$msg" >/dev/null 2>&1
+    fi
+    exit 1
+}
+
+[ -x "$BIN" ] || die "GobboNet is not installed correctly: $BIN is missing."
+
+# ---------------------------------------------------------------------------
+# Pick an engine.
+#
+# Both upstream llama.cpp Linux builds are bundled. On Windows the GPU runtime
+# arrives with the graphics driver; on Linux it needs a system-level Vulkan
+# driver we cannot ship, so the GPU build simply fails to start on a machine
+# that has none. Probing here rather than shipping GPU-only is what makes this
+# work everywhere instead of usually.
+# ---------------------------------------------------------------------------
+pick_engine() {
+    local gpu="$PREFIX/llama-cpp/llama-server"
+    local cpu="$PREFIX/llama-cpp-cpu/llama-server"
+    if [ -x "$gpu" ] && "$gpu" --version >/dev/null 2>&1; then
+        echo "$gpu"; return
+    fi
+    if [ -x "$gpu" ]; then
+        echo "note: the GPU engine would not start here; using the CPU build." >&2
+    fi
+    if [ -x "$cpu" ]; then
+        echo "$cpu"; return
+    fi
+    echo ""
+}
+ENGINE="$(pick_engine)"
+echo "engine: ${ENGINE:-<none bundled>}"
+
+# ---------------------------------------------------------------------------
+# First run. setup is idempotent and returns immediately once complete, so it
+# is safe — and intended — to call unconditionally on every launch.
+#
+# --server-exe matters: without it a fresh config leaves server_exe empty, the
+# server comes up in remote mode, and it has nothing to talk to.
+# ---------------------------------------------------------------------------
+SETUP_ARGS=(setup)
+[ -f "$CATALOG" ] && SETUP_ARGS+=(--catalog "$CATALOG")
+[ -n "$ENGINE" ]  && SETUP_ARGS+=(--server-exe "$ENGINE")
+
+# Is there a graphical session at all? xdg-open exists on plenty of systems
+# with no display attached, and backgrounding it means its exit code says
+# nothing -- so "the command is installed" is not evidence a browser can open.
+# Without this check a headless or SSH launch reports success and shows the
+# user nothing.
+have_gui() { [ -n "${DISPLAY:-}" ] || [ -n "${WAYLAND_DISPLAY:-}" ]; }
+
+# open_url is best-effort by nature; tell_url is what makes a failure visible.
+open_url() {
+    have_gui || return 1
+    if   command -v xdg-open >/dev/null 2>&1; then xdg-open "$1" >/dev/null 2>&1 &
+    elif command -v gio      >/dev/null 2>&1; then gio open "$1" >/dev/null 2>&1 &
+    else return 1
+    fi
+    return 0
+}
+
+# A first run that cannot open a browser is the worst silent failure this
+# script has: the user clicks the menu entry, the wizard is serving happily on
+# a port they cannot guess, and nothing appears. The URL has to reach them by
+# some other route, or the install is simply stuck with no explanation.
+tell_url() {
+    local msg="GobboNet setup is ready.
+
+Open this in your browser to finish:
+$1"
+    if   command -v zenity  >/dev/null 2>&1; then
+        zenity --info --no-wrap --title="GobboNet setup" --text="$msg" >/dev/null 2>&1 &
+    elif command -v kdialog >/dev/null 2>&1; then
+        kdialog --title "GobboNet setup" --msgbox "$msg" >/dev/null 2>&1 &
+    elif command -v notify-send >/dev/null 2>&1; then
+        notify-send "GobboNet setup" "Open $1 to finish setup" >/dev/null 2>&1 &
+    else
+        echo "no way to show the URL graphically; it is above and in this log"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# First run.
+#
+# Asking first, rather than calling setup unconditionally and letting it open
+# the browser, is what allows the fallback above: the launcher has to own the
+# browser step to be able to notice it failed. On every later start this is a
+# single cheap exit-code check.
+# ---------------------------------------------------------------------------
+if "$BIN" setup --status >/dev/null 2>&1; then
+    echo "setup: already complete"
+else
+    echo "setup: first run"
+    "$BIN" "${SETUP_ARGS[@]}" --no-browser &
+    SETUP_PID=$!
+
+    WIZARD=""
+    for _ in $(seq 1 60); do
+        WIZARD="$(grep -oE 'http://127\.0\.0\.1:[0-9]+/' "$LOG" 2>/dev/null | tail -1)"
+        [ -n "$WIZARD" ] && break
+        kill -0 "$SETUP_PID" 2>/dev/null || break
+        sleep 0.25
+    done
+
+    if [ -n "$WIZARD" ] && [ "$OPEN_BROWSER" = "1" ]; then
+        echo "setup wizard at $WIZARD"
+        if ! open_url "$WIZARD"; then
+            echo "could not open a browser; showing the URL instead"
+            tell_url "$WIZARD"
+        fi
+    elif [ -n "$WIZARD" ]; then
+        echo "setup wizard at $WIZARD (browser suppressed by --no-browser)"
+    fi
+
+    if ! wait "$SETUP_PID"; then
+        die "GobboNet's first-run setup did not finish."
+    fi
+fi
+
+# Point the server at the packaged web assets if nothing has yet.
+if [ -d "$WEBROOT" ] && [ -z "$("$BIN" config get web_root 2>/dev/null)" ]; then
+    "$BIN" config set web_root "$WEBROOT" >/dev/null 2>&1 || true
+fi
+
+# ---------------------------------------------------------------------------
+# The port is a config key, not a sidecar file. 9066 is the fallback rather
+# than the assumption, because a user who changed it should not be sent to the
+# wrong address.
+# ---------------------------------------------------------------------------
+PORT="$("$BIN" config get listen_port 2>/dev/null | tr -cd '0-9')"
+[ -n "$PORT" ] || PORT=9066
+URL="http://127.0.0.1:$PORT/"
+echo "port: $PORT"
+
+open_browser() {
+    [ "$OPEN_BROWSER" = "1" ] || { echo "browser suppressed by --no-browser"; return 0; }
+    if ! open_url "$URL"; then
+        # Say which of the two it was. "No browser opener found" on a machine
+        # that has xdg-open sends the next reader looking for a missing
+        # package instead of a missing display.
+        if have_gui; then
+            echo "no browser opener found (xdg-open/gio); open $URL yourself"
+        else
+            echo "no graphical session; the chat is at $URL"
+        fi
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# "Is GobboNet serving on this port?" — an identity check, not a liveness one.
+#
+# This used to be a bare TCP connect:
+#
+#     (exec 3<>"/dev/tcp/127.0.0.1/$PORT")
+#
+# which answers "did anything accept a connection", and that is the wrong
+# question for a port somebody else might own. launch.bat documents where that
+# reasoning ends up (:http_alive): a stranger answering the port made Ollama
+# look like llama.cpp, and the launcher then skipped starting the real server.
+# The same mistake here is worse, because the caller below treats a true answer
+# as "already running" and exits — so any listener on 9066 makes GobboNet
+# silently decline to start and open a browser onto whatever that listener is.
+# On a Steam Deck 9066 is not a quiet neighbourhood.
+#
+# What counts as proof it is ours. /health-fileserver sits BEHIND the auth gate
+# (internal/server/server.go), and require_auth defaults to true, so the honest
+# answer differs by configuration and both spellings have to be accepted:
+#
+#   200 + a "status" field   -- auth is off (--no-auth); the health payload
+#                               itself, exactly what :http_alive matches on.
+#   401 + "login":"/login"   -- auth is on, which is the default. Our own auth
+#                               layer talking, and the same JSON contract
+#                               chat.html detects. launch.bat's :http_probe
+#                               comment makes this call too: "a 401 there IS
+#                               proof of life".
+#
+# Requiring 200 alone — the literal reading of "match :http_alive" — would fail
+# on every default install, which is far worse than the bug being fixed: the
+# startup wait below would never succeed, the launcher would die after 30
+# seconds, and the EXIT trap would kill a server that had started perfectly.
+#
+# Everything else is rejected, which is the point: a connection refused, a
+# stranger's 200 or 404, an HTTP.SYS-style 503 from a URL reservation with no
+# listener behind it, or a socket that accepts and never speaks HTTP.
+# ---------------------------------------------------------------------------
+# "Is anything at all on this port?" — the old port_is_open, kept because it is
+# still the right tool for exactly one question: telling "nothing is there yet"
+# apart from "something is there and it isn't us". It must never again stand in
+# for "GobboNet is running".
+port_has_listener() {
+    (exec 3<>"/dev/tcp/127.0.0.1/$PORT") >/dev/null 2>&1
+}
+
+gobbonet_is_serving() {
+    local body
+    body="$(http_get_health)" || return 1
+    case "$body" in
+        # Status line first: reject anything that is not ours before looking at
+        # a body an unrelated service could contain anything in.
+        HTTP/1.[01]\ 200*)
+            case "$body" in *'"status"'*) return 0 ;; esac ;;
+        HTTP/1.[01]\ 401*)
+            case "$body" in *'"login"'*'/login'*) return 0 ;; esac ;;
+    esac
+    return 1
+}
+
+# Fetches /health-fileserver and echoes the status line followed by the body.
+#
+# curl when it is there, bash's own /dev/tcp when it is not. No third branch:
+# wget was tried and removed, because it exits non-zero on a 401 and indents
+# its -S header output, so the one response shape that matters most on a
+# default install was also the one it got wrong. Two paths that are both
+# tested beats three where one lies.
+#
+# The fallback keeps the "no dependency on ss, lsof or netstat" property the
+# original check was written for — /dev/tcp is what that check already used,
+# so this assumes nothing new about the machine.
+#
+# Accept: application/json is explicit because the server branches on it: with
+# text/html it serves the login *page* instead of the JSON 401, and there would
+# be nothing machine-readable left to match on.
+http_get_health() {
+    if command -v curl >/dev/null 2>&1; then
+        # -i keeps the status line. Deliberately no -f: a 401 is a result we
+        # want to read, not a failure to suppress.
+        curl -sS -i -m 3 -H 'Accept: application/json' \
+             "http://127.0.0.1:$PORT/health-fileserver" 2>/dev/null
+        return
+    fi
+    # Speak HTTP/1.0 directly. Version 1.0 plus "Connection: close" means the
+    # server hangs up when it is done, so the read ends on its own rather than
+    # on a guess. `timeout` wraps the whole exchange so a socket that accepts
+    # and then says nothing cannot hang the launcher.
+    # shellcheck disable=SC2016  # $1 is a positional arg to bash -c, not ours
+    timeout 3 bash -c '
+        exec 3<>"/dev/tcp/127.0.0.1/$1" || exit 1
+        printf "GET /health-fileserver HTTP/1.0\r\nHost: 127.0.0.1:$1\r\nAccept: application/json\r\nConnection: close\r\n\r\n" >&3
+        cat <&3
+    ' _ "$PORT" 2>/dev/null
+}
+
+# ---------------------------------------------------------------------------
+# Clicking the menu entry twice should land in the chat, not fail to bind a
+# port that is already serving.
+# ---------------------------------------------------------------------------
+if gobbonet_is_serving; then
+    echo "already running; opening the browser only"
+    open_browser
+    exit 0
+fi
+
+# Something holds the port, but it is not us. Starting the server would fail to
+# bind with a message nobody sees, so say which of the two problems this is —
+# the old code could not tell them apart and reported neither.
+if port_has_listener; then
+    die "Port $PORT is in use by something that is not GobboNet.
+
+Find it with:  ss -ltnp 'sport = :$PORT'
+
+Then stop it, or give GobboNet a different port:
+    gobbonet config set listen_port 9067"
+fi
+
+# ---------------------------------------------------------------------------
+# Quitting from the desktop must not orphan a server still holding the port and
+# the GPU. The trap covers a normal exit as well as a session logout.
+# ---------------------------------------------------------------------------
+SERVER_PID=""
+cleanup() {
+    if [ -n "$SERVER_PID" ] && kill -0 "$SERVER_PID" 2>/dev/null; then
+        echo "stopping server $SERVER_PID"
+        kill "$SERVER_PID" 2>/dev/null
+        for _ in $(seq 1 20); do
+            kill -0 "$SERVER_PID" 2>/dev/null || break
+            sleep 0.25
+        done
+        kill -9 "$SERVER_PID" 2>/dev/null
+    fi
+}
+trap cleanup EXIT INT TERM
+
+cd "$PREFIX" || die "Could not enter $PREFIX."
+"$BIN" serve &
+SERVER_PID=$!
+echo "server pid: $SERVER_PID"
+
+# ---------------------------------------------------------------------------
+# Wait for the port before opening the browser. Opening it first shows a
+# connection error the user has to reload past, which reads as a broken install
+# rather than a server that was still starting.
+# ---------------------------------------------------------------------------
+served=0
+for _ in $(seq 1 60); do
+    if gobbonet_is_serving; then
+        echo "server answering on $PORT; opening browser"
+        served=1
+        open_browser
+        break
+    fi
+    if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+        # The server exited. Its own reason is already in this log, above —
+        # a fatal server_exe, a failed bind — so point at the log rather than
+        # inventing a summary that could contradict it.
+        die "GobboNet's server stopped while starting up.
+
+The reason it gave is in the log, just above this line."
+    fi
+    sleep 0.5
+done
+
+if [ "$served" -ne 1 ]; then
+    die "GobboNet's server did not answer on port $PORT within 30 seconds.
+
+It is still running (pid $SERVER_PID) but not serving the chat.
+The log above has whatever it managed to report."
+fi
+
+wait "$SERVER_PID"

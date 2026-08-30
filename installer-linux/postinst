@@ -1,0 +1,38 @@
+#!/bin/sh
+# GobboNet postinst.
+#
+# Two jobs, and one deliberate omission that the next person to read this needs
+# to know about.
+set -e
+
+case "$1" in
+    configure)
+        # Without these the menu entry and its icon may not appear until the
+        # next login, which reads as a failed install.
+        if command -v update-desktop-database >/dev/null 2>&1; then
+            update-desktop-database -q /usr/share/applications || true
+        fi
+        if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+            gtk-update-icon-cache -q -f -t /usr/share/icons/hicolor || true
+        fi
+
+        # --- the omission ---------------------------------------------------
+        #
+        # Nothing here writes into any user's home directory, and that is on
+        # purpose rather than an oversight.
+        #
+        # This script runs as root. A config file created here would be
+        # root-owned, in whichever home directory it guessed at, and the user
+        # who then tried to set their own password into it could not write to
+        # it. On a multi-user machine there is no single right home to pick
+        # anyway.
+        #
+        # First launch creates the config, as the user, in that user's own
+        # directory. `gobbonet setup` does it. See installer-linux/README.md.
+        ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+esac
+
+exit 0

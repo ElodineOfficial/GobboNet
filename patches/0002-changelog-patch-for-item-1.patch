@@ -1,0 +1,2641 @@
+From 749422df36c2ca7cd885c5a994eb164750b2bea8 Mon Sep 17 00:00:00 2001
+From: Implementing AI <ai@example.com>
+Date: Sat, 29 Aug 2026 14:57:37 +0000
+Subject: [PATCH 2/4] changelog + patch for item 1
+
+---
+ CHANGELOG-1.7-item-1-latex.md                 |  191 +++
+ ...LaTeX-rendering-scoped-to-fenced-blo.patch | 1212 +++++++++++++++++
+ ...reorder-character-cards-and-personas.patch |  625 ---------
+ ...-render-as-the-character-that-produc.patch |  570 --------
+ 4 files changed, 1403 insertions(+), 1195 deletions(-)
+ create mode 100644 CHANGELOG-1.7-item-1-latex.md
+ create mode 100644 patches/0001-item-1-in-house-LaTeX-rendering-scoped-to-fenced-blo.patch
+ delete mode 100644 patches/0001-item-9-reorder-character-cards-and-personas.patch
+ delete mode 100644 patches/0002-item-10-messages-render-as-the-character-that-produc.patch
+
+diff --git a/CHANGELOG-1.7-item-1-latex.md b/CHANGELOG-1.7-item-1-latex.md
+new file mode 100644
+index 0000000..80ef0c0
+--- /dev/null
++++ b/CHANGELOG-1.7-item-1-latex.md
+@@ -0,0 +1,191 @@
++# v1.7 — item 1: LaTeX rendering
++
++Round 6. Items 1–10 of the old numbering are in the tree and untouched; this
++is item 1 of the revised roadmap.
++
++| Files | Net |
++|---|---|
++| `js/18-utils.js`, `css/16-math.css` (new), `chat.html` | +510 / −2 |
++| `test-math-render.mjs`, `math-preview.html` (new) | dev only |
++
++**141 assertions, 0 failures.** All five earlier suites still pass
++(42 + 52 + 10 + 29 + 14).
++
++---
++
++## Confirmed against the tree first
++
++All four integration claims in the roadmap hold at the current HEAD:
++
++- `escapeHtml` (`js/18-utils.js:104`) touches only `& < > " '`. Backslashes,
++  carets, underscores and dollars arrive intact. ✓
++- No `_` emphasis in their markdown — only `*` and `**`
++  (`js/18-utils.js:376-377`). Subscripts don't collide. ✓
++- `$` carries no meaning anywhere in `parseMarkdown`. ✓
++- The fenced-block handler captures the language tag. ✓
++
++One correction to the plan, not the diagnosis: the roadmap says the fence
++handler "is a natural hook", which is right, but the new pass has to run
++**before** it. Its `(\w*)` matches `latex` perfectly well and would print the
++source. The math replace is inserted above it at `js/18-utils.js:307`.
++
++## Where the code lives, and why not its own file
++
++The roadmap's framing implies a standalone module, and I started there. It
++can't go at the end of the load order: `js/24-boot.js:14` is an
++`(async function boot(){...})()` IIFE that runs at load, and its continuation
++after the first `await` lands in a microtask — before the next `<script>` tag
++is fetched. A renderer defined after it would be undefined when the first
++message renders. Inserting a file mid-order means renumbering, and this
++codebase treats "number = load order" as a contract.
++
++So it's a banner-delimited section in `js/18-utils.js` directly above
++`parseMarkdown` — its only caller, in the file the roadmap points at. The file
++goes 694 → 1148 lines, in line with `js/10-chat.js`. CSS has no load-order
++hazard and does get its own file, `css/16-math.css`.
++
++`stage-web.sh` counts `js/` and `css/` files against what `chat.html`
++references and refuses to stage a mismatch. Adding one CSS file and one link
++keeps it balanced: 24 js / 24 refs, 16 css / 16 refs. Checked.
++
++## The escaping boundary — the one genuinely new hazard
++
++`parseMarkdown` escapes the **whole message** at line 295, before it looks for
++fences. So a fence body reaches the renderer with its `< > & " '` already
++entities. That forces a choice, and both obvious options are wrong:
++
++- Parse the escaped text directly, and the tokenizer sees `&`, `l`, `t`, `;`
++  as four characters. Wrap each in a span and the browser prints a literal
++  `&lt;`.
++- Emit without re-escaping, and you have an XSS hole.
++
++The renderer takes **raw** LaTeX and re-escapes every leaf itself, so
++`renderMathHtml()` is safe to call from anywhere. `mathDecodeEntities()` is
++the thin adapter at the one boundary — the exact inverse of `escapeHtml`,
++decoding `&amp;` **last** so `&amp;lt;` yields the literal text `&lt;` rather
++than being decoded twice into `<`. Its output goes straight into the tokenizer
++and comes back through `escapeHtml`; it never builds HTML. That ordering is
++asserted directly (section B).
++
++Adding anything named like an unescape function to a codebase that just
++finished escaping hardening deserves the scrutiny — hence the comment block
++at the definition and the tests.
++
++## Two rules the renderer holds
++
++1. **Every character that reaches the output goes through `escapeHtml`** —
++   including the fixed symbol table, so there is one rule to audit rather than
++   a list of trusted sources.
++2. **Class names are fixed literals.** `\mathbb` maps to `bb` via a table;
++   nothing from input is ever interpolated into a tag, attribute or style.
++
++Nothing touches `innerHTML`, nothing evaluates anything. A thrown exception
++falls back to escaped source rather than blanking the message.
++
++## A bug the tests found in my own code
++
++`mathSourceSafe` originally chained six `.replace()` calls. The `*` step emits
++`&#42;`, and the later `#` step then rewrote the `#` **inside that entity**,
++producing `&&#35;42;`. Same class of ordering bug as decoding `&amp;` last,
++found by asserting the property rather than the symptom. It's a single-pass
++replace now, with the trap written down at the definition.
++
++## A pre-existing bug this had to work around
++
++Everything after the fence hook in `parseMarkdown` is a regex over the whole
++message, and several passes have no idea what a `<pre>` is. A source view
++containing `a * b * c` comes out as `a <em> b </em> c`.
++
++**This is not new.** A ```` ```js ```` block containing `a * b * c` is mangled
++identically today — verified before changing anything:
++
++```
++```js  →  <pre><code>a <em> b </em> c</code></pre>
++```
++
++It matters more here because `copyCodeBlock` reads `textContent`, so Copy
++would hand back LaTeX with the asterisks silently deleted. `mathSourceSafe`
++emits `* [ # - ` ` ` and newlines as numeric entities inside the source `<pre>`
++only; the HTML parser decodes them before anything reads `textContent`, so
++Copy yields the exact bytes the model sent (asserted).
++
++**The general case is left alone** — it's unrelated code, and the real fix is
++a protect mechanism in `parseMarkdown` that would change code-block behaviour
++too. Worth its own item; the mechanism is written up above `mathSourceSafe`
++for whoever takes it.
++
++## Scope: fences only, and a Source toggle
++
++Fence-scoped per the roadmap, so `$5, then $10` and `*grins*` are untouched —
++prose never reaches the math pass at all. Asserted in section H.
++
++Beyond spec: **every block carries a Source toggle.** The roadmap's earlier
++draft worried that "LaTeX in a fenced code block usually means show me the
++source", and the revised one decides to render. The toggle stops that being a
++guess. It also matters because the renderer has known gaps — a user who gets a
++mangled matrix can see what was actually sent instead of being stranded with a
++wrong picture. One word added to `copyCodeBlock`'s `closest()` selector; the
++existing `pre code` lookup finds the source unchanged.
++
++## Known gaps, unchanged from the roadmap
++
++Matrices and aligned environments, growing delimiters (`\left(` draws
++fixed-size), nested script shrinking, and real TeX spacing classes — relations
++and binary operators get one flat margin. All four are written into the SCOPE
++comment at the top of the section. Unknown commands degrade to highlighted
++source, which is what users see today, so it cannot render worse than the
++status quo.
++
++## Verification
++
++`test-math-render.mjs` — **141 assertions**, running the real renderer and the
++real `parseMarkdown`.
++
++| # | Section | Result |
++|---|---|---|
++| A | 10 injection attempts | no live markup; payload shown as inert text |
++| B | escaping boundary | decode inverts exactly once, in both directions |
++| C | 49-expression corpus | 49/49 render without falling through |
++| D | structure | fractions stack, big operators take limits, `x_i^2` stacks both scripts |
++| E | documented gaps | matrices fall through to escaped, legible source |
++| F | fences | `latex`/`math`/`tex` render; `js` and untagged are untouched |
++| G | mixed message | emphasis, bold, inline code and maths coexist |
++| H | roleplay prose | `*grins*`, `$5`, `x_i` untouched; dialogue colour still fires |
++| I | malformed input | 11 cases, no throw, no hang, 200-deep nesting under 1ms |
++| J | tag balance | unbalanced output would corrupt the rest of the message |
++
++**On the corpus figure:** the roadmap's prototype scored 48/49 with
++`\begin{pmatrix}` the single miss. My 49 expressions are my own — the
++prototype wasn't in the upload — and matrices are tested as a known-failure
++case in section E rather than counted in the corpus. So 49/49 is not the same
++measurement as 48/49 and shouldn't be read as beating it.
++
++## What needs a human at a real machine
++
++The suite proves nothing executes and that expressions parse. It cannot tell
++you whether a fraction sits on the baseline. **`math-preview.html`** is for
++that — open it in a browser, no build step. It loads the real
++`js/18-utils.js` and `css/16-math.css`, so it can't drift from what ships.
++It's a dev tool; `stage-web.sh` copies a fixed file list and won't pick it up.
++
++Worth looking at specifically:
++
++1. **Radical joins.** `.math-radicand`'s `border-top` has to meet the `√`
++   glyph. That join is font-dependent and the tuning is a guess.
++2. **`\sqrt[3]{8}`.** The index is tucked in with `margin-right: -0.45em`.
++   Almost certainly needs adjusting on a real font stack.
++3. **Baselines.** Fractions and stacked limits use `vertical-align` in `em`.
++   Check a line mixing `\frac{a}{b}` with ordinary text.
++4. **`\mathcal` and `\mathfrak`** fall back to `cursive` / `fantasy` and will
++   look different per-OS. May be better dropped to plain italic than left to
++   Comic Sans on some machines.
++5. **Mobile.** `.math-rendered` scrolls horizontally rather than wrapping
++   mid-fraction. Check a long equation on a phone.
++
++## Still not done: the `::`-in-a-block fix
++
++Unchanged from three rounds. 53 sites, and the best spam candidate
++(`launch.bat:2401`, in `:http_alive`, called from the health-monitor loop)
++contains `>=` in its comment text, so a mechanical `::`→`rem` conversion would
++create a redirection to a file named `=`. Wants its own item and one run on
++real Windows.
+diff --git a/patches/0001-item-1-in-house-LaTeX-rendering-scoped-to-fenced-blo.patch b/patches/0001-item-1-in-house-LaTeX-rendering-scoped-to-fenced-blo.patch
+new file mode 100644
+index 0000000..6bbdb19
+--- /dev/null
++++ b/patches/0001-item-1-in-house-LaTeX-rendering-scoped-to-fenced-blo.patch
+@@ -0,0 +1,1212 @@
++From 397c1ac0f92dbf440b19716663e0eaec42929b38 Mon Sep 17 00:00:00 2001
++From: Implementing AI <ai@example.com>
++Date: Sat, 29 Aug 2026 14:56:44 +0000
++Subject: [PATCH] item 1: in-house LaTeX rendering, scoped to fenced blocks
++
++~110 symbols and a recursive-descent parser in js/18-utils.js. No
++dependency, no CDN, no vendored fonts. Every leaf goes through
++escapeHtml; class names are fixed literals.
++
++- js/18-utils.js: renderer + latex/math/tex fence hook ahead of the
++  generic fence handler; mathSourceSafe for the source view
++- css/16-math.css: layout (new file, linked in chat.html)
++- math-preview.html: visual check against the real renderer + CSS
++- test-math-render.mjs: 141 assertions
++---
++ chat.html            |   1 +
++ css/16-math.css      | 179 +++++++++++++++
++ js/18-utils.js       | 506 ++++++++++++++++++++++++++++++++++++++++++-
++ math-preview.html    | 116 ++++++++++
++ test-math-render.mjs | 321 +++++++++++++++++++++++++++
++ 5 files changed, 1122 insertions(+), 1 deletion(-)
++ create mode 100644 css/16-math.css
++ create mode 100644 math-preview.html
++ create mode 100644 test-math-render.mjs
++
++diff --git a/chat.html b/chat.html
++index 6c6b0a2..9ebb210 100644
++--- a/chat.html
+++++ b/chat.html
++@@ -20,6 +20,7 @@
++ <link rel="stylesheet" href="css/13-components.css">
++ <link rel="stylesheet" href="css/14-card-code.css">
++ <link rel="stylesheet" href="css/15-lore-view.css">
+++<link rel="stylesheet" href="css/16-math.css">
++ </head>
++ <body>
++ 
++diff --git a/css/16-math.css b/css/16-math.css
++new file mode 100644
++index 0000000..be0e1ff
++--- /dev/null
+++++ b/css/16-math.css
++@@ -0,0 +1,179 @@
+++/* ================================================================
+++   MATH RENDERING
+++
+++   Layout for the in-house LaTeX renderer (js/18-utils.js). Fractions,
+++   radicals and stacked operator limits are all done with inline-flex
+++   rather than tables or absolute positioning, so they stay on the text
+++   baseline and reflow with the message.
+++
+++   No font is shipped. KaTeX's typographic quality comes substantially
+++   from bundling Computer Modern — roughly a megabyte, in artefacts that
+++   also have to fit an NSIS installer and Linux packages. A system serif
+++   is a visible step down and a deliberate one.
+++================================================================ */
+++
+++.math-block {
+++  background: var(--panel);
+++  border: 1px solid var(--border);
+++  border-radius: var(--radius);
+++  margin: 12px 0;
+++  overflow: hidden;
+++}
+++
+++.math-rendered {
+++  padding: 14px 16px;
+++  overflow-x: auto;          /* long equations scroll rather than wrap mid-fraction */
+++  font-family: var(--font-math, Georgia, 'Times New Roman', serif);
+++  font-size: 1.15em;
+++  line-height: 2.1;          /* room for stacked limits and accents */
+++  color: var(--text);
+++}
+++
+++/* Source view — hidden until the Source button is pressed. */
+++.math-source {
+++  display: none;
+++  margin: 0;
+++  padding: 14px 16px;
+++  border-top: 1px solid var(--border);
+++  background: var(--black);
+++  overflow-x: auto;
+++}
+++.math-block.math-show-source .math-source { display: block; }
+++.math-block.math-show-source .math-rendered { display: none; }
+++
+++/* ── Atoms ──────────────────────────────────────────────────────── */
+++
+++.math-var { font-style: italic; }                    /* single letters are variables */
+++.math-fn,
+++.math-text { font-style: normal; }
+++.math-fn { margin-right: 0.15em; }
+++.math-text { font-family: var(--font); font-size: 0.92em; }
+++
+++/* Approximate TeX spacing: relations and binary operators get air.
+++   Real TeX varies the amount by class; this is one flat value. */
+++.math-bin { margin: 0 0.22em; }
+++
+++.math-space { display: inline-block; }
+++
+++.math-unknown {
+++  font-family: var(--font);
+++  font-size: 0.9em;
+++  color: var(--amber, var(--label));
+++  background: rgba(255, 176, 0, 0.12);
+++  border-radius: 3px;
+++  padding: 0 3px;
+++  font-style: normal;
+++}
+++
+++/* ── Fractions ──────────────────────────────────────────────────── */
+++
+++.math-frac {
+++  display: inline-flex;
+++  flex-direction: column;
+++  vertical-align: -0.55em;    /* sits the bar near the baseline */
+++  text-align: center;
+++  margin: 0 0.15em;
+++  font-size: 0.95em;
+++}
+++.math-num {
+++  border-bottom: 1px solid currentColor;
+++  padding: 0 0.35em 0.1em;
+++  line-height: 1.35;
+++}
+++.math-den {
+++  padding: 0.1em 0.35em 0;
+++  line-height: 1.35;
+++}
+++
+++.math-binom { display: inline-flex; align-items: center; }
+++.math-binom-stack {
+++  display: inline-flex;
+++  flex-direction: column;
+++  text-align: center;
+++  padding: 0 0.2em;
+++  line-height: 1.25;
+++  font-size: 0.95em;
+++}
+++
+++/* ── Radicals ───────────────────────────────────────────────────── */
+++
+++.math-sqrt { display: inline-flex; align-items: flex-start; margin: 0 0.1em; }
+++.math-radical { font-size: 1.15em; line-height: 1; }
+++.math-radicand {
+++  border-top: 1px solid currentColor;
+++  padding: 0.12em 0.25em 0 0.15em;
+++  margin-top: 0.12em;
+++}
+++.math-root {
+++  font-size: 0.65em;
+++  align-self: flex-start;
+++  margin-right: -0.45em;      /* tucks the index into the radical's crook */
+++  margin-top: 0.1em;
+++}
+++
+++/* ── Scripts ────────────────────────────────────────────────────── */
+++
+++.math-sup-i, .math-sub-i { font-size: 0.72em; }
+++
+++/* Both scripts on one base: stacked, not sequential. */
+++.math-subsup {
+++  display: inline-flex;
+++  flex-direction: column;
+++  vertical-align: -0.35em;
+++  font-size: 0.72em;
+++  line-height: 1.15;
+++  text-align: left;
+++  margin-left: 0.05em;
+++}
+++
+++/* ── Big operators ──────────────────────────────────────────────── */
+++
+++.math-bigop { font-size: 1.45em; line-height: 1; }
+++
+++.math-limits {
+++  display: inline-flex;
+++  flex-direction: column;
+++  align-items: center;
+++  vertical-align: -0.5em;
+++  margin: 0 0.2em;
+++}
+++.math-limits .math-upper,
+++.math-limits .math-lower {
+++  font-size: 0.62em;
+++  line-height: 1.2;
+++}
+++.math-limits .math-upper:empty,
+++.math-limits .math-lower:empty { display: none; }
+++
+++/* ── Accents ────────────────────────────────────────────────────── */
+++
+++.math-accent {
+++  display: inline-flex;
+++  flex-direction: column;
+++  align-items: center;
+++  vertical-align: -0.15em;
+++}
+++.math-accent .math-mark {
+++  font-size: 0.8em;
+++  line-height: 0.6;
+++  height: 0.5em;
+++}
+++.math-accent .math-acc-base { line-height: 1.1; }
+++
+++/* ── Alphabets ──────────────────────────────────────────────────── */
+++
+++.math-f-cal  { font-family: 'Segoe Script', 'Apple Chancery', cursive; font-style: normal; }
+++.math-f-bb   { font-weight: 600; letter-spacing: 0.03em; }
+++.math-f-bf   { font-weight: 700; font-style: normal; }
+++.math-f-rm   { font-style: normal; }
+++.math-f-it   { font-style: italic; }
+++.math-f-sf   { font-family: var(--font); font-style: normal; }
+++.math-f-tt   { font-family: var(--font-mono, monospace); font-style: normal; }
+++.math-f-frak { font-family: 'UnifrakturMaguntia', 'Luminari', fantasy; font-style: normal; }
+++.math-f-cal .math-var,
+++.math-f-bb .math-var,
+++.math-f-bf .math-var,
+++.math-f-rm .math-var,
+++.math-f-sf .math-var,
+++.math-f-tt .math-var,
+++.math-f-frak .math-var { font-style: inherit; font-weight: inherit; }
++diff --git a/js/18-utils.js b/js/18-utils.js
++index 6207989..78a5469 100644
++--- a/js/18-utils.js
+++++ b/js/18-utils.js
++@@ -59,7 +59,10 @@ function copyMessage(index) {
++  * with code that contains quotes, backticks, or angle brackets.
++  */
++ function copyCodeBlock(btn) {
++-  const block = btn.closest('.code-block, .file-block');
+++  // .math-block is included so its Copy button yields the LaTeX source
+++  // rather than the rendered glyphs — the source pre is the only
+++  // <pre><code> in that block, so the existing lookup finds it unchanged.
+++  const block = btn.closest('.code-block, .file-block, .math-block');
++   const codeEl = block && block.querySelector('pre code');
++   if (!codeEl) return;
++   const text = codeEl.textContent;
++@@ -286,6 +289,495 @@ const DIALOG_QUOTE_RE = new RegExp(
++   'g'
++ );
++ 
+++/* ================================================================
+++   MATH RENDERER
+++
+++   ~110 symbols and a recursive-descent parser for the subset of LaTeX a
+++   chat model actually emits. No dependency, no CDN, no vendored fonts —
+++   which is the point: this ships inside the NSIS installer and the Linux
+++   packages, and the privacy premise means it can never fetch anything.
+++
+++   SCOPE. This renders maths recognisably, not perfectly. Known gaps, all
+++   deliberate:
+++     - No matrix or aligned environments (\begin{pmatrix} etc). They fall
+++       through to the unknown-command path and show their source.
+++     - No growing delimiters. \left( \frac{a}{b} \right) draws fixed-size
+++       parens; real TeX scales them to the fraction.
+++     - No nested script shrinking (scriptstyle / scriptscriptstyle).
+++     - Spacing is approximate. TeX distinguishes operators, relations and
+++       punctuation and spaces each differently; we give relations and
+++       binary operators a flat margin and leave it there.
+++   The trade is deliberate: "recognisably correct" with a readable 300
+++   lines beats "typographically perfect" with 280 KB of parser plus a
+++   megabyte of Computer Modern.
+++
+++   SECURITY. This consumes model output, imported character cards, and
+++   synced state from paired LAN devices — the same untrusted inputs the
+++   escaping work covered. Two rules hold throughout, and every function
+++   below obeys them:
+++     1. Every character that reaches the output goes through escapeHtml().
+++        No exceptions, including the fixed symbol table, so there is one
+++        rule to audit rather than a list of trusted sources.
+++     2. Class names are fixed literals. Nothing from the input is ever
+++        interpolated into a tag, an attribute, or a style.
+++   Nothing here touches innerHTML and nothing evaluates anything.
+++================================================================ */
+++
+++/* Command → the character it prints. Fixed table; nothing is computed. */
+++const MATH_SYMBOLS = {
+++  // Greek, lower
+++  alpha: 'α', beta: 'β', gamma: 'γ', delta: 'δ', epsilon: 'ϵ', varepsilon: 'ε',
+++  zeta: 'ζ', eta: 'η', theta: 'θ', vartheta: 'ϑ', iota: 'ι', kappa: 'κ',
+++  lambda: 'λ', mu: 'μ', nu: 'ν', xi: 'ξ', pi: 'π', varpi: 'ϖ', rho: 'ρ',
+++  varrho: 'ϱ', sigma: 'σ', varsigma: 'ς', tau: 'τ', upsilon: 'υ', phi: 'ϕ',
+++  varphi: 'φ', chi: 'χ', psi: 'ψ', omega: 'ω',
+++  // Greek, upper
+++  Gamma: 'Γ', Delta: 'Δ', Theta: 'Θ', Lambda: 'Λ', Xi: 'Ξ', Pi: 'Π',
+++  Sigma: 'Σ', Upsilon: 'Υ', Phi: 'Φ', Psi: 'Ψ', Omega: 'Ω',
+++  // Relations
+++  leq: '≤', le: '≤', geq: '≥', ge: '≥', neq: '≠', ne: '≠', equiv: '≡',
+++  approx: '≈', sim: '∼', simeq: '≃', cong: '≅', propto: '∝', ll: '≪', gg: '≫',
+++  subset: '⊂', supset: '⊃', subseteq: '⊆', supseteq: '⊇', in: '∈', notin: '∉',
+++  ni: '∋', perp: '⊥', parallel: '∥', mid: '∣', doteq: '≐',
+++  // Binary operators
+++  times: '×', div: '÷', pm: '±', mp: '∓', cdot: '·', ast: '∗', star: '⋆',
+++  circ: '∘', bullet: '∙', oplus: '⊕', ominus: '⊖', otimes: '⊗', oslash: '⊘',
+++  odot: '⊙', cap: '∩', cup: '∪', setminus: '∖', wedge: '∧', vee: '∨',
+++  triangleq: '≜',
+++  // Arrows
+++  rightarrow: '→', to: '→', leftarrow: '←', gets: '←', leftrightarrow: '↔',
+++  Rightarrow: '⇒', implies: '⟹', Leftarrow: '⇐', Leftrightarrow: '⇔',
+++  iff: '⟺', mapsto: '↦', longrightarrow: '⟶', longleftarrow: '⟵',
+++  uparrow: '↑', downarrow: '↓', nearrow: '↗', searrow: '↘',
+++  // Misc symbols
+++  infty: '∞', partial: '∂', nabla: '∇', forall: '∀', exists: '∃',
+++  nexists: '∄', emptyset: '∅', varnothing: '∅', neg: '¬', lnot: '¬',
+++  angle: '∠', triangle: '△', square: '□', diamond: '⋄', dagger: '†',
+++  prime: '′', ell: 'ℓ', hbar: 'ℏ', Re: 'ℜ', Im: 'ℑ', aleph: 'ℵ',
+++  surd: '√', top: '⊤', bot: '⊥', flat: '♭', sharp: '♯', natural: '♮',
+++  checkmark: '✓', dots: '…', ldots: '…', cdots: '⋯', vdots: '⋮', ddots: '⋱',
+++  degree: '°', percent: '%',
+++  // Delimiters that arrive as commands
+++  langle: '⟨', rangle: '⟩', lceil: '⌈', rceil: '⌉', lfloor: '⌊', rfloor: '⌋',
+++  lbrace: '{', rbrace: '}', vert: '|', Vert: '‖', backslash: '\\',
+++};
+++
+++/* Big operators. Scripts attached to these stack above and below rather
+++   than sitting beside, which is the single biggest visual cue that maths
+++   is being typeset rather than printed. */
+++const MATH_BIGOPS = {
+++  sum: '∑', prod: '∏', coprod: '∐', int: '∫', iint: '∬', iiint: '∭',
+++  oint: '∮', bigcup: '⋃', bigcap: '⋂', bigoplus: '⨁', bigotimes: '⨂',
+++  bigvee: '⋁', bigwedge: '⋀', bigsqcup: '⨆', lim: 'lim', limsup: 'lim sup',
+++  liminf: 'lim inf', max: 'max', min: 'min', sup: 'sup', inf: 'inf',
+++  argmax: 'arg max', argmin: 'arg min',
+++};
+++
+++/* Function names: upright roman, not italic. \sin x, not 𝑠𝑖𝑛 𝑥. */
+++const MATH_FUNCS = new Set([
+++  'sin', 'cos', 'tan', 'cot', 'sec', 'csc', 'arcsin', 'arccos', 'arctan',
+++  'sinh', 'cosh', 'tanh', 'coth', 'log', 'ln', 'lg', 'exp', 'det', 'dim',
+++  'ker', 'deg', 'gcd', 'hom', 'arg', 'Pr', 'mod', 'bmod',
+++]);
+++
+++/* Accents: command → the mark drawn over the base. */
+++const MATH_ACCENTS = {
+++  hat: '^', widehat: '^', tilde: '~', widetilde: '~', bar: '‾', overline: '‾',
+++  vec: '→', dot: '·', ddot: '··', acute: '´', grave: '`', check: 'ˇ',
+++  breve: '˘', mathring: '˚',
+++};
+++
+++/* Alphabet styling. Values are class-name suffixes, chosen from this fixed
+++   table only — never taken from input. */
+++const MATH_FONTS = {
+++  mathcal: 'cal', mathbb: 'bb', mathbf: 'bf', mathrm: 'rm', mathit: 'it',
+++  mathsf: 'sf', mathtt: 'tt', mathfrak: 'frak', boldsymbol: 'bf',
+++  textbf: 'bf', textit: 'it', textrm: 'rm', operatorname: 'rm',
+++};
+++
+++/* Explicit spacing commands → em widths. */
+++const MATH_SPACES = {
+++  ',': 0.17, ':': 0.22, ';': 0.28, '!': -0.17, ' ': 0.25,
+++  quad: 1, qquad: 2, thinspace: 0.17, enspace: 0.5,
+++};
+++
+++/* Characters TeX puts air around. Approximate — see SCOPE above. */
+++const MATH_SPACED = new Set([
+++  '+', '−', '=', '<', '>', '±', '∓', '×', '÷', '≤', '≥', '≠', '≈', '≡',
+++  '→', '←', '↔', '⇒', '⇐', '⇔', '∈', '∉', '⊂', '⊃', '⊆', '⊇', '∪', '∩',
+++  '∧', '∨', '⊕', '⊗', '∼', '≃', '≅', '∝', '≪', '≫', '⟹', '⟸', '⟺', '↦',
+++]);
+++
+++/* Inverse of escapeHtml, and nothing more.
+++ *
+++ * parseMarkdown escapes the whole message before it looks for fences, so by
+++ * the time a ```latex body reaches the renderer its `< > & " '` are already
+++ * entities. The renderer parses raw LaTeX and re-escapes every leaf itself
+++ * (rule 1 above), so it needs the raw text back.
+++ *
+++ * This exists for that one boundary. It must never be used to build HTML —
+++ * its output goes straight into the tokenizer and comes back out through
+++ * escapeHtml. &amp; is decoded LAST so "&amp;lt;" ends up as the literal
+++ * text "&lt;" rather than being decoded twice into "<".
+++ */
+++function mathDecodeEntities(s) {
+++  return String(s)
+++    .replace(/&lt;/g, '<')
+++    .replace(/&gt;/g, '>')
+++    .replace(/&quot;/g, '"')
+++    .replace(/&#39;/g, "'")
+++    .replace(/&amp;/g, '&');
+++}
+++
+++/* ── Tokenizer ──────────────────────────────────────────────────── */
+++
+++function mathTokenize(src) {
+++  const out = [];
+++  let i = 0;
+++  while (i < src.length) {
+++    const c = src[i];
+++    if (c === '\\') {
+++      const rest = src.slice(i + 1);
+++      const word = /^[a-zA-Z]+/.exec(rest);
+++      if (word) { out.push({ t: 'cmd', v: word[0] }); i += 1 + word[0].length; continue; }
+++      // \\ is a line break; \{ \$ \% and friends are literal characters.
+++      const next = src[i + 1];
+++      if (next === '\\') { out.push({ t: 'br' }); i += 2; continue; }
+++      if (next === undefined) { out.push({ t: 'chr', v: '\\' }); i += 1; continue; }
+++      if (Object.prototype.hasOwnProperty.call(MATH_SPACES, next)) {
+++        out.push({ t: 'space', v: MATH_SPACES[next] }); i += 2; continue;
+++      }
+++      out.push({ t: 'chr', v: next, literal: true }); i += 2; continue;
+++    }
+++    if (c === '{') { out.push({ t: '{' }); i++; continue; }
+++    if (c === '}') { out.push({ t: '}' }); i++; continue; }
+++    if (c === '^') { out.push({ t: '^' }); i++; continue; }
+++    if (c === '_') { out.push({ t: '_' }); i++; continue; }
+++    if (c === '\n') { out.push({ t: 'br' }); i++; continue; }
+++    if (c === ' ' || c === '\t' || c === '\r') { i++; continue; }  // math mode eats whitespace
+++    if (c === '-') { out.push({ t: 'chr', v: '−' }); i++; continue; }   // proper minus
+++    if (c === '*') { out.push({ t: 'chr', v: '∗' }); i++; continue; }   // never emit a literal *
+++    if (c === "'") { out.push({ t: 'chr', v: '′' }); i++; continue; }
+++    out.push({ t: 'chr', v: c }); i++;
+++  }
+++  return out;
+++}
+++
+++/* ── Parser ─────────────────────────────────────────────────────── */
+++/* Produces a node array. Node kinds: chr, sym, op, fn, frac, sqrt, accent,
+++   font, text, space, br, group, script, unknown. */
+++
+++function mathParse(tokens) {
+++  let pos = 0;
+++
+++  function atEnd() { return pos >= tokens.length; }
+++
+++  /* One atom, before any ^ / _ are attached. */
+++  function parseAtom() {
+++    const tk = tokens[pos];
+++    if (!tk) return null;
+++
+++    if (tk.t === '{') { pos++; return { k: 'group', body: parseUntilClose() }; }
+++    if (tk.t === '}') { pos++; return null; }             // stray close — drop it
+++    if (tk.t === 'br') { pos++; return { k: 'br' }; }
+++    if (tk.t === 'space') { pos++; return { k: 'space', em: tk.v }; }
+++    if (tk.t === 'chr') { pos++; return { k: 'chr', v: tk.v, literal: !!tk.literal }; }
+++    if (tk.t === '^' || tk.t === '_') return null;        // handled by the caller
+++
+++    // tk.t === 'cmd'
+++    const name = tk.v;
+++    pos++;
+++
+++    if (name === 'frac' || name === 'dfrac' || name === 'tfrac' || name === 'cfrac') {
+++      return { k: 'frac', num: parseArg(), den: parseArg() };
+++    }
+++    if (name === 'binom' || name === 'dbinom') {
+++      return { k: 'binom', top: parseArg(), bot: parseArg() };
+++    }
+++    if (name === 'sqrt') {
+++      const root = parseOptionalArg();
+++      return { k: 'sqrt', root, body: parseArg() };
+++    }
+++    if (name === 'text' || name === 'textnormal' || name === 'mbox') {
+++      return { k: 'text', v: parseRawArg() };
+++    }
+++    if (Object.prototype.hasOwnProperty.call(MATH_ACCENTS, name)) {
+++      return { k: 'accent', mark: MATH_ACCENTS[name], body: parseArg() };
+++    }
+++    if (Object.prototype.hasOwnProperty.call(MATH_FONTS, name)) {
+++      return { k: 'font', cls: MATH_FONTS[name], body: parseArg() };
+++    }
+++    if (Object.prototype.hasOwnProperty.call(MATH_BIGOPS, name)) {
+++      return { k: 'op', v: MATH_BIGOPS[name] };
+++    }
+++    if (MATH_FUNCS.has(name)) return { k: 'fn', v: name };
+++    if (Object.prototype.hasOwnProperty.call(MATH_SYMBOLS, name)) {
+++      return { k: 'sym', v: MATH_SYMBOLS[name] };
+++    }
+++    if (Object.prototype.hasOwnProperty.call(MATH_SPACES, name)) {
+++      return { k: 'space', em: MATH_SPACES[name] };
+++    }
+++    // \left and \right: consume the command, keep the delimiter at its
+++    // natural size. Documented gap — see SCOPE.
+++    if (name === 'left' || name === 'right' || name === 'bigl' || name === 'bigr' ||
+++        name === 'big' || name === 'Big' || name === 'biggl' || name === 'biggr') {
+++      const d = tokens[pos];
+++      if (d && (d.t === 'chr' || d.t === 'cmd')) {
+++        pos++;
+++        if (d.t === 'chr') return d.v === '.' ? { k: 'space', em: 0 } : { k: 'chr', v: d.v };
+++        const sym = MATH_SYMBOLS[d.v];
+++        return sym ? { k: 'sym', v: sym } : { k: 'unknown', v: d.v };
+++      }
+++      return { k: 'space', em: 0 };
+++    }
+++    if (name === 'displaystyle' || name === 'textstyle' || name === 'limits' ||
+++        name === 'nolimits' || name === 'scriptstyle') {
+++      return { k: 'space', em: 0 };   // acknowledged and ignored
+++    }
+++    return { k: 'unknown', v: name };
+++  }
+++
+++  /* An argument: either a braced group or the single next atom. */
+++  function parseArg() {
+++    if (tokens[pos] && tokens[pos].t === '{') { pos++; return parseUntilClose(); }
+++    const a = parseAtom();
+++    return a ? [a] : [];
+++  }
+++
+++  /* \sqrt[3]{x} — the bracketed index. Raw scan; it is never HTML. */
+++  function parseOptionalArg() {
+++    if (!tokens[pos] || tokens[pos].t !== 'chr' || tokens[pos].v !== '[') return null;
+++    pos++;
+++    const body = [];
+++    while (!atEnd() && !(tokens[pos].t === 'chr' && tokens[pos].v === ']')) {
+++      const a = parseAtom();
+++      if (a) body.push(a); else pos++;
+++    }
+++    if (!atEnd()) pos++;   // the ]
+++    return body;
+++  }
+++
+++  /* \text{...} keeps its spaces, so it is read off the tokens as characters
+++     rather than parsed as maths. */
+++  function parseRawArg() {
+++    let s = '';
+++    if (!tokens[pos] || tokens[pos].t !== '{') {
+++      const a = tokens[pos];
+++      if (a && a.t === 'chr') { pos++; return a.v; }
+++      return '';
+++    }
+++    pos++;
+++    let depth = 1;
+++    while (!atEnd()) {
+++      const tk = tokens[pos];
+++      if (tk.t === '{') depth++;
+++      else if (tk.t === '}') { depth--; if (depth === 0) { pos++; break; } }
+++      if (depth > 0) {
+++        if (tk.t === 'chr') s += tk.v;
+++        else if (tk.t === 'cmd') s += ' ';
+++        else if (tk.t === 'space') s += ' ';
+++        else if (tk.t === '^') s += '^';
+++        else if (tk.t === '_') s += '_';
+++      }
+++      pos++;
+++    }
+++    return s;
+++  }
+++
+++  function parseUntilClose() {
+++    const body = [];
+++    while (!atEnd() && tokens[pos].t !== '}') {
+++      const node = parseOne();
+++      if (node) body.push(node); else pos++;
+++    }
+++    if (!atEnd()) pos++;   // the }
+++    return body;
+++  }
+++
+++  /* One atom plus any scripts hanging off it. x_i^2 and x^2_i both land
+++     as a single script node with sub and sup. */
+++  function parseOne() {
+++    const base = parseAtom();
+++    if (!base) return null;
+++    let sub = null, sup = null;
+++    while (!atEnd() && (tokens[pos].t === '^' || tokens[pos].t === '_')) {
+++      const which = tokens[pos].t;
+++      pos++;
+++      const arg = parseArg();
+++      if (which === '^') sup = arg; else sub = arg;
+++    }
+++    if (!sub && !sup) return base;
+++    return { k: 'script', base, sub, sup };
+++  }
+++
+++  const out = [];
+++  while (!atEnd()) {
+++    const node = parseOne();
+++    if (node) out.push(node); else pos++;
+++  }
+++  return out;
+++}
+++
+++/* ── Emitter ────────────────────────────────────────────────────── */
+++/* Every leaf goes through escapeHtml. Every class name is a literal. */
+++
+++function mathEmit(nodes) {
+++  return (nodes || []).map(mathEmitNode).join('');
+++}
+++
+++function mathEmitNode(n) {
+++  switch (n.k) {
+++    case 'chr': {
+++      const ch = escapeHtml(n.v);
+++      // A single unstyled letter is a variable and italicises; digits,
+++      // punctuation and anything escaped with a backslash do not.
+++      if (!n.literal && /^[a-zA-Z]$/.test(n.v)) return `<i class="math-var">${ch}</i>`;
+++      if (MATH_SPACED.has(n.v)) return `<span class="math-bin">${ch}</span>`;
+++      return ch;
+++    }
+++    case 'sym': {
+++      const ch = escapeHtml(n.v);
+++      return MATH_SPACED.has(n.v) ? `<span class="math-bin">${ch}</span>` : ch;
+++    }
+++    case 'fn':  return `<span class="math-fn">${escapeHtml(n.v)}</span>`;
+++    case 'op':  return `<span class="math-bigop">${escapeHtml(n.v)}</span>`;
+++    case 'text': return `<span class="math-text">${escapeHtml(n.v)}</span>`;
+++    case 'br':  return '<br>';
+++    case 'space':
+++      if (!n.em) return '';
+++      return `<span class="math-space" style="width:${(Math.round(n.em * 100) / 100)}em"></span>`;
+++    case 'group': return mathEmit(n.body);
+++    case 'frac':
+++      return '<span class="math-frac">' +
+++               `<span class="math-num">${mathEmit(n.num)}</span>` +
+++               `<span class="math-den">${mathEmit(n.den)}</span>` +
+++             '</span>';
+++    case 'binom':
+++      return '<span class="math-binom">(' +
+++               `<span class="math-binom-stack"><span>${mathEmit(n.top)}</span>` +
+++               `<span>${mathEmit(n.bot)}</span></span>` +
+++             ')</span>';
+++    case 'sqrt':
+++      return '<span class="math-sqrt">' +
+++               (n.root ? `<span class="math-root">${mathEmit(n.root)}</span>` : '') +
+++               '<span class="math-radical">&#8730;</span>' +
+++               `<span class="math-radicand">${mathEmit(n.body)}</span>` +
+++             '</span>';
+++    case 'accent':
+++      return '<span class="math-accent">' +
+++               `<span class="math-mark">${escapeHtml(n.mark)}</span>` +
+++               `<span class="math-acc-base">${mathEmit(n.body)}</span>` +
+++             '</span>';
+++    case 'font':
+++      // n.cls comes from MATH_FONTS, never from input.
+++      return `<span class="math-f-${n.cls}">${mathEmit(n.body)}</span>`;
+++    case 'script': {
+++      const base = mathEmitNode(n.base);
+++      // Big operators take their scripts stacked above and below.
+++      if (n.base.k === 'op') {
+++        return '<span class="math-limits">' +
+++                 `<span class="math-upper">${n.sup ? mathEmit(n.sup) : ''}</span>` +
+++                 base +
+++                 `<span class="math-lower">${n.sub ? mathEmit(n.sub) : ''}</span>` +
+++               '</span>';
+++      }
+++      if (n.sub && n.sup) {
+++        return base + '<span class="math-subsup">' +
+++                 `<span class="math-sup">${mathEmit(n.sup)}</span>` +
+++                 `<span class="math-sub">${mathEmit(n.sub)}</span>` +
+++               '</span>';
+++      }
+++      if (n.sup) return base + `<sup class="math-sup-i">${mathEmit(n.sup)}</sup>`;
+++      return base + `<sub class="math-sub-i">${mathEmit(n.sub)}</sub>`;
+++    }
+++    case 'unknown':
+++      // The failure mode: show the source, highlighted, exactly as the user
+++      // sees it today. escapeHtml on the command name is not optional —
+++      // this is the one path that echoes input back verbatim.
+++      return `<span class="math-unknown">\\${escapeHtml(n.v)}</span>`;
+++    default:
+++      return '';
+++  }
+++}
+++
+++/* Render raw LaTeX to HTML. Public entry point: safe to call with any
+++   string from any source. Returns escaped, tag-balanced HTML. */
+++function renderMathHtml(src) {
+++  try {
+++    return mathEmit(mathParse(mathTokenize(String(src == null ? '' : src))));
+++  } catch (e) {
+++    // A renderer bug must not blank a message. Fall back to what the user
+++    // would have seen with no renderer at all.
+++    console.error('[math] render failed:', e);
+++    return `<span class="math-unknown">${escapeHtml(src)}</span>`;
+++  }
+++}
+++
+++/* Make an already-escaped source string survive the rest of parseMarkdown.
+++ *
+++ * Everything after this point in parseMarkdown is a regex over the whole
+++ * message, and several of those passes have no idea what a <pre> is. The
+++ * emphasis pass turns a source line reading `a * b * c` into
+++ * `a <em> b </em> c` — and since Copy reads textContent, the user would be
+++ * handed LaTeX with the asterisks silently deleted.
+++ *
+++ * This is not a new bug: a ```js block containing `a * b * c` is mangled the
+++ * same way today. That is worth its own item, since the real fix is a protect
+++ * mechanism in parseMarkdown that would change code blocks too. Here we only
+++ * need our own source view to be faithful, so the five trigger characters go
+++ * out as numeric entities. The HTML parser decodes them back before anything
+++ * reads textContent, so Copy still yields the exact bytes the model sent.
+++ *
+++ * Newlines go too: \n\n+ becomes </p><p> further down, which would put
+++ * broken markup inside the <pre>. &#10; renders as a line break in a <pre>.
+++ *
+++ * ONE pass, not six chained replaces. Chaining re-scans its own output: the
+++ * * step emits &#42;, and a later # step then rewrote the # inside it to
+++ * give &&#35;42;. Same class of ordering bug as decoding &amp; last in
+++ * mathDecodeEntities, and the reason both are done deliberately.
+++ */
+++const MATH_SOURCE_ENTITIES = {
+++  '*': '&#42;',    // ** bold ** and * em *
+++  '[': '&#91;',    // [text](url)
+++  '#': '&#35;',    // ^### headings
+++  '-': '&#45;',    // ^- bullets
+++  '`': '&#96;',    // inline code
+++  '\n': '&#10;',   // \n\n -> </p><p>, \n -> <br>
+++};
+++function mathSourceSafe(escaped) {
+++  return String(escaped).replace(/[*[#\-`\n]/g, ch => MATH_SOURCE_ENTITIES[ch]);
+++}
+++
+++/* A ```latex fence. `body` arrives ALREADY HTML-escaped, because
+++   parseMarkdown escapes the whole message before it looks for fences.
+++   It is decoded for the parser and reused for the source view. */
+++function renderMathBlock(body, lang) {
+++  const escapedSource = String(body).replace(/^\n+|\s+$/g, '');
+++  const rendered = renderMathHtml(mathDecodeEntities(escapedSource));
+++  const label = /^[a-z]+$/.test(lang) ? lang : 'latex';
+++  return '<div class="math-block">' +
+++           '<div class="code-block-header">' +
+++             `<span class="code-lang">${label}</span>` +
+++             '<div class="code-btns">' +
+++               '<button class="btn btn-sm" onclick="toggleMathSource(this)">Source</button>' +
+++               '<button class="btn btn-sm code-copy-btn" onclick="copyCodeBlock(this)">Copy</button>' +
+++             '</div>' +
+++           '</div>' +
+++           `<div class="math-rendered">${rendered}</div>` +
+++           `<pre class="math-source"><code>${mathSourceSafe(escapedSource)}</code></pre>` +
+++         '</div>';
+++}
+++
+++/* Flip a rendered block to its source and back. The renderer has known
+++   gaps (matrices, growing delimiters), so every block carries an escape
+++   hatch rather than stranding the user with a wrong picture. */
+++function toggleMathSource(btn) {
+++  const block = btn.closest('.math-block');
+++  if (!block) return;
+++  const showing = block.classList.toggle('math-show-source');
+++  btn.textContent = showing ? 'Rendered' : 'Source';
+++}
+++
++ function parseMarkdown(text, dialogColor) {
++   if (!text) return '';
++   // dialogColor rides in from a character card, which can arrive from an
++@@ -302,6 +794,17 @@ function parseMarkdown(text, dialogColor) {
++     return `<div class="file-block"><div class="file-header"><span class="file-name">&#128196; ${fn}</span><div class="code-btns"><button class="btn btn-sm code-copy-btn" onclick="copyCodeBlock(this)">Copy</button><button class="btn btn-sm" data-filename="${fn}" onclick="downloadFile(this)">Save</button></div></div><pre><code id="${id}">${raw}</code></pre></div>`;
++   });
++ 
+++  // Math fences: ```latex / ```math / ```tex → rendered, with a Source
+++  // toggle. MUST run before the generic code-block handler below, whose
+++  // (\w*) would otherwise swallow the language tag and print the source.
+++  //
+++  // Scoped to fences deliberately. Scanning prose for $...$ turns "it cost
+++  // $5, then $10 later" into a formula — a false-positive problem that is
+++  // identical whether you use KaTeX or roll your own. Inline math can be an
+++  // opt-in setting later, once the renderer has proven itself here.
+++  html = html.replace(/```(latex|math|tex)\n([\s\S]*?)```/g, (_, lang, body) =>
+++    renderMathBlock(body, lang));
+++
++   // Regular code blocks → wrapped with a header bar carrying a Copy button.
++   // The label shows the language tag when one was given (```js etc).
++   html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => {
++@@ -387,6 +890,7 @@ function parseMarkdown(text, dialogColor) {
++   html = html.replace(/<\/pre>\s*<\/p>/g, '</pre>');
++   html = html.replace(/<p>\s*<div class="file-block">/g, '<div class="file-block">');
++   html = html.replace(/<p>\s*<div class="code-block">/g, '<div class="code-block">');
+++  html = html.replace(/<p>\s*<div class="math-block">/g, '<div class="math-block">');
++   html = html.replace(/<\/div>\s*<\/p>/g, '</div>');
++   return html;
++ }
++diff --git a/math-preview.html b/math-preview.html
++new file mode 100644
++index 0000000..2678b10
++--- /dev/null
+++++ b/math-preview.html
++@@ -0,0 +1,116 @@
+++<!DOCTYPE html>
+++<!--
+++  Visual check for the math renderer. Open it in a browser; nothing to build.
+++
+++  Loads the REAL js/18-utils.js and css/16-math.css, so it cannot drift from
+++  what ships. Dev tool only — stage-web.sh copies a fixed file list and will
+++  not pick this up.
+++
+++  The automated suite proves nothing executes and that expressions parse.
+++  It cannot tell you whether a fraction sits on the baseline or whether the
+++  radical overline meets the radical. That is what this is for.
+++-->
+++<html lang="en">
+++<head>
+++<meta charset="utf-8">
+++<meta name="viewport" content="width=device-width, initial-scale=1">
+++<title>GobboNet — math renderer preview</title>
+++<link rel="stylesheet" href="css/01-tokens.css">
+++<link rel="stylesheet" href="css/16-math.css">
+++<style>
+++  body { background: var(--black, #0a0a0f); color: var(--text, #d0d0d8);
+++         font-family: var(--font, monospace); padding: 24px; margin: 0; }
+++  h1 { color: var(--cyan-bright, #0ff); font-size: 18px; }
+++  h2 { color: var(--magenta, #f0f); font-size: 13px; margin: 28px 0 8px;
+++       border-bottom: 1px solid var(--border, #333); padding-bottom: 4px; }
+++  .row { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr);
+++         gap: 12px; align-items: center; border-bottom: 1px solid rgba(255,255,255,.06);
+++         padding: 6px 0; }
+++  .src { font-family: var(--font-mono, monospace); font-size: 11px;
+++         color: var(--label, #888); word-break: break-all; }
+++  .out { font-family: var(--font-math, Georgia, serif); font-size: 1.15em;
+++         line-height: 2.1; overflow-x: auto; }
+++  .note { color: var(--label, #888); font-size: 12px; margin: 4px 0 16px; }
+++  @media (max-width: 700px) { .row { grid-template-columns: 1fr; } }
+++</style>
+++</head>
+++<body>
+++<h1>GOBBONET // MATH RENDERER PREVIEW</h1>
+++<p class="note">
+++  Left: what the model sent. Right: what the user sees. Anything highlighted in
+++  amber fell through to source — that is the intended failure mode, not a crash.
+++</p>
+++<div id="out"></div>
+++
+++<script src="js/18-utils.js"></script>
+++<script>
+++const GROUPS = [
+++  ['Everyday arithmetic', [
+++    '2 + 2 = 4', '3 \\times 4 \\div 2', 'x \\pm y', '50\\%', '\\$5',
+++  ]],
+++  ['School algebra', [
+++    'x^2 + y^2 = z^2', 'a_1, a_2, \\ldots, a_n', 'x_i^2',
+++    '\\frac{a}{b}', '\\frac{-b \\pm \\sqrt{b^2-4ac}}{2a}',
+++    '\\sqrt{2}', '\\sqrt[3]{8}', '(x+1)(x-1)', '\\frac{1}{2} + \\frac{1}{3}',
+++  ]],
+++  ['Calculus', [
+++    '\\int_0^1 x^2 dx', '\\int_{-\\infty}^{\\infty} e^{-x^2} dx',
+++    '\\sum_{i=1}^{n} i', '\\prod_{k=1}^{n} k',
+++    '\\lim_{x \\to 0} \\frac{\\sin x}{x}', '\\frac{d}{dx} f(x)',
+++    '\\frac{\\partial f}{\\partial x}', '\\nabla f',
+++  ]],
+++  ['Linear algebra', [
+++    'A^T A', '\\mathbf{v} \\cdot \\mathbf{w}', '\\vec{v}', '\\hat{x}', '\\bar{x}',
+++    '\\det(A) \\neq 0', '\\lambda_1 \\geq \\lambda_2',
+++  ]],
+++  ['Sets and logic', [
+++    'x \\in \\mathbb{R}', 'A \\cup B', 'A \\cap B \\subseteq C',
+++    '\\forall x \\exists y', 'P \\Rightarrow Q', '\\emptyset',
+++  ]],
+++  ['ML notation', [
+++    '\\mathcal{L}(\\theta)', '\\hat{y} = \\sigma(w^T x + b)',
+++    '\\frac{1}{N} \\sum_{i=1}^{N} (y_i - \\hat{y}_i)^2',
+++    '\\arg\\max_{\\theta} P(D \\mid \\theta)',
+++    '\\alpha \\nabla_\\theta J(\\theta)', '\\mathbb{E}[X]',
+++    '\\sigma^2 = \\text{Var}(X)', 'p(x \\mid y) \\propto p(y \\mid x) p(x)',
+++  ]],
+++  ['Greek and misc', [
+++    '\\alpha \\beta \\gamma \\delta', '\\Omega \\Sigma \\Delta',
+++    '\\theta \\approx 3.14', 'f: X \\to Y', '\\log_2 n',
+++  ]],
+++  ['Known gaps — these SHOULD show amber source', [
+++    '\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}',
+++    '\\left( \\frac{a}{b} \\right)',
+++    '\\somethingnobodyimplemented{q}',
+++  ]],
+++  ['Hostile input — nothing here may execute', [
+++    '\\unknown{<img src=x onerror=alert(1)>}',
+++    '\\text{<script>alert(1)<\/script>}',
+++    '\\frac{<img src=x onerror=alert(1)>}{2}',
+++  ]],
+++];
+++
+++const root = document.getElementById('out');
+++for (const [title, items] of GROUPS) {
+++  const h = document.createElement('h2');
+++  h.textContent = title;
+++  root.appendChild(h);
+++  for (const src of items) {
+++    const row = document.createElement('div');
+++    row.className = 'row';
+++    const a = document.createElement('div');
+++    a.className = 'src';
+++    a.textContent = src;                    // textContent: the preview itself never injects
+++    const b = document.createElement('div');
+++    b.className = 'out';
+++    b.innerHTML = renderMathHtml(src);      // the real renderer's output, as it ships
+++    row.appendChild(a); row.appendChild(b);
+++    root.appendChild(row);
+++  }
+++}
+++
+++// If any of the hostile rows had executed, this would have fired first.
+++console.log('[preview] rendered without executing anything');
+++</script>
+++</body>
+++</html>
++diff --git a/test-math-render.mjs b/test-math-render.mjs
++new file mode 100644
++index 0000000..ea0137c
++--- /dev/null
+++++ b/test-math-render.mjs
++@@ -0,0 +1,321 @@
+++/**
+++ * Item 1 — LaTeX rendering.
+++ *
+++ * Runs the REAL renderer and the REAL parseMarkdown out of js/18-utils.js.
+++ *
+++ * Three things are being checked, in order of how much they matter:
+++ *   1. Nothing executes. Every leaf goes through escapeHtml, and the
+++ *      unknown-command path — the one that echoes input back — is the one
+++ *      most worth hammering.
+++ *   2. A corpus of expressions a chat model actually emits renders, rather
+++ *      than falling through to source.
+++ *   3. The pass coexists with the rest of parseMarkdown: emphasis, code
+++ *      fences, dialogue quotes and paragraph wrapping.
+++ */
+++import fs from 'fs';
+++import vm from 'vm';
+++
+++const ROOT = '/home/claude/work/GobboNet';
+++const UTILS = fs.readFileSync(ROOT + '/js/18-utils.js', 'utf8');
+++
+++const block = UTILS.slice(
+++  UTILS.indexOf('/* ================================================================\n   MATH RENDERER'),
+++  UTILS.indexOf('/* ================================================================\n   COLOR PICKER HELPERS')
+++);
+++
+++let pass = 0, fail = 0;
+++const ok = (c, l) => { if (c) { pass++; console.log('  \u2713 ' + l); } else { fail++; console.log('  \u2717 ' + l); } };
+++const eq = (a, b, l) => ok(a === b, l + (a === b ? '' : `\n      got:  ${JSON.stringify(a)}\n      want: ${JSON.stringify(b)}`));
+++
+++/* escapeHtml is DOM-based in the browser. Reimplement it exactly here —
+++   textContent->innerHTML escapes & < >, then " and ' are added. */
+++const ctx = {
+++  console,
+++  escapeHtml: (str) => String(str == null ? '' : str)
+++    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+++    .replace(/"/g, '&quot;').replace(/'/g, '&#39;'),
+++  safeCssColor: (v) => (typeof v === 'string' && /^#[0-9a-f]{3,8}$/i.test(v) ? v : ''),
+++  DIALOG_QUOTE_RE: /(?:&quot;)(?:(?!\n\n)[\s\S]){1,400}?(?:&quot;)/g,
+++};
+++ctx.globalThis = ctx;
+++vm.createContext(ctx);
+++vm.runInContext(block, ctx);
+++// parseMarkdown itself, for the integration section.
+++vm.runInContext(UTILS.slice(UTILS.indexOf('function parseMarkdown(text, dialogColor) {'),
+++                            UTILS.indexOf('/* ================================================================\n   COLOR PICKER HELPERS')), ctx);
+++
+++const render = (s) => ctx.renderMathHtml(s);
+++const text = (html) => html.replace(/<[^>]*>/g, '')
+++  .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')
+++  .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&#8730;/g, '\u221a');
+++
+++/* ================================================================
+++   1. SECURITY — the rules the renderer claims to hold
+++================================================================ */
+++console.log('\n=== A. nothing executes ===');
+++{
+++  const attacks = [
+++    ['\\unknown{<img src=x onerror=alert(1)>}',        'roadmap\'s stated case'],
+++    ['<script>alert(1)</script>',                       'bare script tag'],
+++    ['\\text{<script>alert(1)</script>}',               'script inside \\text'],
+++    ['\\frac{<img src=x onerror=alert(1)>}{2}',         'inside a fraction numerator'],
+++    ['x^{<svg onload=alert(1)>}',                       'inside a superscript'],
+++    ['\\mathbb{"><img src=x onerror=alert(1)>}',        'attribute-breakout attempt'],
+++    ['\\sqrt[<b>3</b>]{x}',                             'inside a root index'],
+++    ['\\hat{<iframe src=javascript:alert(1)>}',         'inside an accent'],
+++    ['\\<img src=x onerror=alert(1)>',                  'unknown command name is a tag'],
+++    ['\\onerror=alert(1)',                              'command name looks like a handler'],
+++  ];
+++  for (const [src, label] of attacks) {
+++    const out = render(src);
+++    const bad = /<(script|img|svg|iframe|b)\b/i.test(out) || /on\w+\s*=/i.test(out) ||
+++                /javascript:/i.test(out);
+++    ok(!bad, `no live markup: ${label}`);
+++  }
+++  // The payload still survives as text so the user can see what was sent.
+++  // Math mode eats whitespace, so it comes back without its spaces.
+++  const shown = text(render('\\unknown{<img src=x onerror=alert(1)>}'));
+++  ok(shown.includes('img') && shown.includes('onerror') && shown.includes('<'),
+++     'payload is shown as inert literal text, not swallowed');
+++}
+++
+++console.log('\n=== B. no double-escaping across the parseMarkdown boundary ===');
+++{
+++  // parseMarkdown escapes the whole message first, so the fence body arrives
+++  // as entities. mathDecodeEntities must invert that exactly — once.
+++  eq(ctx.mathDecodeEntities('x &lt; y'), 'x < y', '&lt; decodes');
+++  eq(ctx.mathDecodeEntities('a &amp;&amp; b'), 'a && b', '&amp; decodes');
+++  eq(ctx.mathDecodeEntities('&amp;lt;'), '&lt;', '&amp;lt; decodes ONCE, to literal "&lt;"');
+++  eq(ctx.mathDecodeEntities('&quot;q&quot; &#39;s&#39;'), '"q" \'s\'', 'quote entities decode');
+++
+++  // A raw < typed into a fence: escaped by parseMarkdown, decoded for the
+++  // parser, re-escaped on the way out. Exactly once, not twice.
+++  const out = ctx.parseMarkdown('```latex\nx < y\n```', '');
+++  ok(!out.includes('&amp;lt;'), 'a raw < in a fence is not double-escaped');
+++  ok(out.includes('&lt;'), 'and is still escaped exactly once in the output');
+++  // And a literal "&lt;" typed as text stays literal rather than becoming <.
+++  const lit = ctx.parseMarkdown('```latex\nx &lt; y\n```', '');
+++  ok(lit.includes('&amp;lt;'), 'a typed &lt; entity stays literal text');
+++}
+++
+++/* ================================================================
+++   2. CORPUS — expressions a chat model actually emits
+++================================================================ */
+++console.log('\n=== C. corpus ===');
+++{
+++  // [source, substrings that must appear in the visible text, label]
+++  const corpus = [
+++    // everyday arithmetic
+++    ['2 + 2 = 4',                       ['2', '+', '4'],        'arithmetic'],
+++    ['3 \\times 4 \\div 2',             ['×', '÷'],             'times / div'],
+++    ['x \\pm y',                        ['±'],                  'plus-minus'],
+++    ['50\\%',                           ['%'],                  'escaped percent'],
+++    ['\\$5',                            ['$'],                  'escaped dollar'],
+++    // school algebra
+++    ['x^2 + y^2 = z^2',                 ['2', 'x', 'z'],        'superscripts'],
+++    ['a_1, a_2, \\ldots, a_n',          ['…', 'a'],             'subscripts + ellipsis'],
+++    ['x_i^2',                           ['x', 'i', '2'],        'sub and sup on one base'],
+++    ['\\frac{a}{b}',                    ['a', 'b'],             'fraction'],
+++    ['\\frac{-b \\pm \\sqrt{b^2-4ac}}{2a}', ['±', '√', 'b'],    'quadratic formula'],
+++    ['\\sqrt{2}',                       ['√', '2'],             'square root'],
+++    ['\\sqrt[3]{8}',                    ['√', '3', '8'],        'cube root'],
+++    ['(x+1)(x-1)',                      ['(', ')', '−'],        'parens and minus'],
+++    ['\\frac{1}{2} + \\frac{1}{3}',     ['1', '2', '3'],        'two fractions'],
+++    // calculus
+++    ['\\int_0^1 x^2 dx',                ['∫', '0', '1'],        'definite integral'],
+++    ['\\int_{-\\infty}^{\\infty} e^{-x^2} dx', ['∫', '∞', 'e'], 'gaussian integral'],
+++    ['\\sum_{i=1}^{n} i',               ['∑', 'n', 'i'],        'summation'],
+++    ['\\prod_{k=1}^{n} k',              ['∏', 'k'],             'product'],
+++    ['\\lim_{x \\to 0} \\frac{\\sin x}{x}', ['lim', '→', 'sin'], 'limit'],
+++    ['\\frac{d}{dx} f(x)',              ['d', 'f'],             'derivative'],
+++    ['\\frac{\\partial f}{\\partial x}', ['∂', 'f'],            'partial derivative'],
+++    ['\\nabla f',                       ['∇'],                  'gradient'],
+++    // linear algebra
+++    ['A^T A',                           ['A', 'T'],             'transpose'],
+++    ['\\mathbf{v} \\cdot \\mathbf{w}',  ['v', '·', 'w'],        'dot product'],
+++    ['\\vec{v}',                        ['→', 'v'],             'vector accent'],
+++    ['\\hat{x}',                        ['^', 'x'],             'hat accent'],
+++    ['\\bar{x}',                        ['‾', 'x'],             'bar accent'],
+++    ['\\|x\\|_2',                       ['x', '2'],             'norm'],
+++    ['\\det(A) \\neq 0',                ['det', '≠'],           'determinant'],
+++    ['\\lambda_1 \\geq \\lambda_2',     ['λ', '≥'],             'eigenvalues'],
+++    // sets and logic
+++    ['x \\in \\mathbb{R}',              ['∈', 'R'],             'element of reals'],
+++    ['A \\cup B',                       ['∪'],                  'union'],
+++    ['A \\cap B \\subseteq C',          ['∩', '⊆'],             'intersection / subset'],
+++    ['\\forall x \\exists y',           ['∀', '∃'],             'quantifiers'],
+++    ['P \\Rightarrow Q',                ['⇒'],                  'implication'],
+++    ['\\emptyset',                      ['∅'],                  'empty set'],
+++    // ML / stats notation
+++    ['\\mathcal{L}(\\theta)',           ['L', 'θ'],             'loss function'],
+++    ['\\hat{y} = \\sigma(w^T x + b)',   ['^', 'σ', 'w'],        'logistic unit'],
+++    ['\\frac{1}{N} \\sum_{i=1}^{N} (y_i - \\hat{y}_i)^2', ['∑', 'N', '−'], 'MSE'],
+++    ['\\arg\\max_{\\theta} P(D \\mid \\theta)', ['arg', 'max', 'θ', '∣'], 'MAP estimate'],
+++    ['\\alpha \\nabla_\\theta J(\\theta)', ['α', '∇', 'J'],     'gradient step'],
+++    ['\\mathbb{E}[X]',                  ['E', 'X'],             'expectation'],
+++    ['\\sigma^2 = \\text{Var}(X)',      ['σ', 'Var'],           'variance with \\text'],
+++    ['p(x \\mid y) \\propto p(y \\mid x) p(x)', ['∣', '∝'],     'Bayes proportionality'],
+++    // greek and misc
+++    ['\\alpha \\beta \\gamma \\delta',  ['α', 'β', 'γ', 'δ'],   'greek lowercase'],
+++    ['\\Omega \\Sigma \\Delta',         ['Ω', 'Σ', 'Δ'],        'greek uppercase'],
+++    ['\\theta \\approx 3.14',           ['θ', '≈'],             'approx'],
+++    ['f: X \\to Y',                     ['→', 'f'],             'function signature'],
+++    ['\\log_2 n',                       ['log', '2', 'n'],      'log with base'],
+++  ];
+++
+++  let rendered = 0;
+++  for (const [src, wants, label] of corpus) {
+++    const out = render(src);
+++    const vis = text(out);
+++    const missing = wants.filter(w => !vis.includes(w));
+++    const clean = !out.includes('math-unknown');
+++    ok(missing.length === 0 && clean,
+++       `${label}${missing.length ? '  missing ' + JSON.stringify(missing) : ''}${clean ? '' : '  [fell through to source]'}`);
+++    if (missing.length === 0 && clean) rendered++;
+++  }
+++  console.log(`  — ${rendered}/${corpus.length} rendered without falling through`);
+++}
+++
+++console.log('\n=== D. structure, not just characters ===');
+++{
+++  ok(/math-frac[\s\S]*math-num[\s\S]*math-den/.test(render('\\frac{a}{b}')),
+++     'fraction emits a stacked numerator and denominator');
+++  ok(/math-radicand/.test(render('\\sqrt{x}')), 'root emits a radicand with an overline');
+++  ok(/math-limits[\s\S]*math-upper[\s\S]*math-lower/.test(render('\\sum_{i=1}^{n}')),
+++     'big operator stacks its limits above and below');
+++  ok(/math-sup-i/.test(render('x^2')) && !/math-limits/.test(render('x^2')),
+++     'an ordinary base takes an inline superscript, not stacked limits');
+++  ok(/math-subsup[\s\S]*math-sup[\s\S]*math-sub/.test(render('x_i^2')),
+++     'a base with both scripts stacks them rather than printing them in sequence');
+++  ok(/<i class="math-var">x<\/i>/.test(render('x')), 'a lone letter is italicised as a variable');
+++  ok(!/math-var/.test(render('\\sin')), 'a function name is not italicised');
+++  ok(/math-f-bb/.test(render('\\mathbb{R}')), 'alphabet commands emit their fixed class');
+++  ok(/math-f-cal/.test(render('\\mathcal{L}')), 'and \\mathcal likewise');
+++}
+++
+++console.log('\n=== E. the documented gaps fail the documented way ===');
+++{
+++  const m = render('\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}');
+++  ok(m.includes('math-unknown'), 'matrices fall through to highlighted source');
+++  ok(text(m).includes('begin'), 'and the source is legible, not blank');
+++  ok(!/<(script|img)\b/i.test(m), 'the fall-through path is still escaped');
+++
+++  // Never worse than the status quo: unknown input must still show its text.
+++  const junk = render('\\somethingnobodyimplemented{q}');
+++  ok(text(junk).includes('somethingnobodyimplemented') && text(junk).includes('q'),
+++     'unknown command shows its name and its argument');
+++}
+++
+++/* ================================================================
+++   3. INTEGRATION — coexistence with the rest of parseMarkdown
+++================================================================ */
+++console.log('\n=== F. fences ===');
+++{
+++  const out = ctx.parseMarkdown('```latex\n\\frac{a}{b}\n```', '');
+++  ok(out.includes('math-block'), '```latex renders as a math block');
+++  ok(out.includes('math-frac'), 'and the fraction is rendered');
+++  ok(out.includes('toggleMathSource'), 'with a Source toggle');
+++  ok(out.includes('copyCodeBlock'), 'and a Copy button');
+++  ok(/<pre class="math-source"><code>[\s\S]*frac/.test(out), 'source is retained for the toggle');
+++
+++  ok(ctx.parseMarkdown('```math\nx^2\n```', '').includes('math-block'), '```math is accepted too');
+++  ok(ctx.parseMarkdown('```tex\nx^2\n```', '').includes('math-block'), '```tex is accepted too');
+++
+++  const js = ctx.parseMarkdown('```js\nconst x = 1;\n```', '');
+++  ok(js.includes('code-block') && !js.includes('math-block'), '```js is untouched');
+++  const plain = ctx.parseMarkdown('```\nplain\n```', '');
+++  ok(plain.includes('code-block') && !plain.includes('math-block'), 'an untagged fence is untouched');
+++}
+++
+++console.log('\n=== G. maths, emphasis and code in one message ===');
+++{
+++  const msg = 'Here is *emphasis* and **bold**:\n\n```latex\n\\sum_{i=1}^{n} i = \\frac{n(n+1)}{2}\n```\n\nAnd `inline code` after.';
+++  const out = ctx.parseMarkdown(msg, '');
+++  ok(/<em>emphasis<\/em>/.test(out), 'italic still works around a math block');
+++  ok(/<strong>bold<\/strong>/.test(out), 'bold still works');
+++  ok(/<code>inline code<\/code>/.test(out), 'inline code still works');
+++  ok(out.includes('math-limits'), 'the maths still rendered');
+++  ok(!/<p>\s*<div class="math-block">/.test(out), 'the math block is not left wrapped in a stray <p>');
+++
+++  // The renderer must never emit a bare * — parseMarkdown's emphasis pass
+++  // runs over its output and would eat it.
+++  const star = render('a * b \\ast c \\star d');
+++  ok(!star.includes('*'), 'renderer emits no literal asterisk for the emphasis pass to catch');
+++  const roundTrip = ctx.parseMarkdown('```latex\na * b * c\n```', '');
+++  ok(!/<em>/.test(roundTrip) && !/<strong>/.test(roundTrip),
+++     'asterisks in the source view do not become emphasis');
+++  ok(roundTrip.includes('&#42;'), 'the source view neutralises them as entities');
+++  // Copy reads textContent, so the entities must decode back to real bytes.
+++  const src = /<pre class="math-source"><code>([\s\S]*?)<\/code>/.exec(roundTrip)[1];
+++  const asTextContent = src.replace(/&#(\d+);/g, (_, d) => String.fromCharCode(+d))
+++                           .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+++  eq(asTextContent, 'a * b * c', 'Copy yields the exact bytes the model sent');
+++
+++  ok(!/&&#/.test(roundTrip), 'entity escaping does not re-scan its own output');
+++  eq(ctx.mathSourceSafe('a * b # c - d'), 'a &#42; b &#35; c &#45; d',
+++     'each trigger character maps once, in a single pass');
+++
+++  const multi = ctx.parseMarkdown('```latex\n\\frac{a}{b}\n# not a heading\n- not a bullet\n```', '');
+++  ok(!/<strong style="font-size:1.2em/.test(multi), 'a # line in the source is not turned into a heading');
+++  ok(!multi.includes('&bull;'), 'a - line in the source is not turned into a bullet');
+++  ok(!/<pre class="math-source">[\s\S]*<\/p><p>/.test(multi), 'blank lines do not inject </p><p> into the pre');
+++}
+++
+++console.log('\n=== H. roleplay text is unharmed ===');
+++{
+++  // The delimiter worry from the roadmap, checked from the other side: the
+++  // math pass is fence-scoped, so prose must be completely untouched.
+++  const rp = '*grins* It cost $5, then $10 later. x_i and a^b in prose.';
+++  const out = ctx.parseMarkdown(rp, '');
+++  ok(/<em>grins<\/em>/.test(out), '*grins* still italicises');
+++  ok(out.includes('$5') && out.includes('$10'), 'dollar amounts are left alone');
+++  ok(!out.includes('math-'), 'no math markup leaks into prose');
+++  ok(out.includes('x_i'), 'underscores in prose are untouched');
+++
+++  const dlg = ctx.parseMarkdown('"Hello there," she said.', '#ff00ff');
+++  ok(dlg.includes('dialog-text'), 'dialogue colouring still fires');
+++}
+++
+++console.log('\n=== I. malformed input does not throw or hang ===');
+++{
+++  const nasty = [
+++    ['\\frac{a', 'unclosed brace'],
+++    ['}}}{{{', 'unbalanced braces'],
+++    ['\\frac', 'command with no arguments'],
+++    ['x^', 'trailing caret'],
+++    ['x_', 'trailing underscore'],
+++    ['\\', 'lone backslash'],
+++    ['\\sqrt[', 'unclosed optional argument'],
+++    ['^^^___', 'only scripts'],
+++    ['', 'empty string'],
+++    ['{'.repeat(200), 'deeply nested open braces'],
+++    ['\\frac{'.repeat(60) + 'x', 'deeply nested fractions'],
+++  ];
+++  for (const [src, label] of nasty) {
+++    let threw = false, out = '';
+++    const t0 = Date.now();
+++    try { out = render(src); } catch (e) { threw = true; }
+++    const ms = Date.now() - t0;
+++    ok(!threw && ms < 1000, `${label} — no throw, ${ms}ms`);
+++    ok(typeof out === 'string', `${label} — returns a string`);
+++  }
+++  ok(render(null) === '' || typeof render(null) === 'string', 'null input is tolerated');
+++  ok(typeof render(undefined) === 'string', 'undefined input is tolerated');
+++}
+++
+++console.log('\n=== J. tags are balanced ===');
+++{
+++  // Unbalanced output would corrupt the rest of the message, which is a
+++  // worse failure than rendering the maths wrong.
+++  const samples = ['\\frac{a}{b}', '\\sqrt[3]{x}', '\\sum_{i=1}^{n}', 'x_i^2',
+++                   '\\hat{x}', '\\mathbb{R}', '\\frac{a', '}}}{{{', '\\text{hi}'];
+++  for (const s of samples) {
+++    const out = render(s);
+++    const open = (out.match(/<(?!\/)([a-z]+)[^>]*>/g) || []).filter(t => !/\/>$/.test(t) && !/^<br/.test(t)).length;
+++    const close = (out.match(/<\/[a-z]+>/g) || []).length;
+++    ok(open === close, `balanced tags: ${JSON.stringify(s)} (${open} open, ${close} close)`);
+++  }
+++}
+++
+++console.log(`\n${pass} passed, ${fail} failed\n`);
+++process.exit(fail ? 1 : 0);
++-- 
++2.43.0
++
+diff --git a/patches/0001-item-9-reorder-character-cards-and-personas.patch b/patches/0001-item-9-reorder-character-cards-and-personas.patch
+deleted file mode 100644
+index e6410a7..0000000
+--- a/patches/0001-item-9-reorder-character-cards-and-personas.patch
++++ /dev/null
+@@ -1,625 +0,0 @@
+-From f485c817fb316c336e8306ab30d7126096cd5b2f Mon Sep 17 00:00:00 2001
+-From: Implementing AI <ai@example.com>
+-Date: Fri, 28 Aug 2026 22:48:39 +0000
+-Subject: [PATCH] item 9: reorder character cards and personas
+-
+-Array position is the order. No schema change, no migration.
+-
+-- js/15-cards.js: moveCastEntry/refreshMoveButtons/moveColumnHtml + moveCard
+-- js/17-personas.js: movePersona, move column in renderPersonaGrid
+-- css/06-cards.css, css/10-responsive.css, css/11-panels.css: reorder column
+-- test-cast-order.mjs: 42 assertions
+----
+- css/06-cards.css      |  57 +++++++
+- css/10-responsive.css |   5 +
+- css/11-panels.css     |   8 +
+- js/15-cards.js        | 102 ++++++++++++-
+- js/17-personas.js     |  12 +-
+- test-cast-order.mjs   | 337 ++++++++++++++++++++++++++++++++++++++++++
+- 6 files changed, 519 insertions(+), 2 deletions(-)
+- create mode 100644 test-cast-order.mjs
+-
+-diff --git a/css/06-cards.css b/css/06-cards.css
+-index 9683236..ea07548 100644
+---- a/css/06-cards.css
+-+++ b/css/06-cards.css
+-@@ -74,6 +74,63 @@
+- }
+- .card-item:hover .card-actions { opacity: 1; }
+- 
+-+/* Keyboard: the actions row is opacity:0 until hover, so tabbing into a card
+-+   used to focus buttons nobody could see. It also matters for reordering —
+-+   clicking an arrow moves the row, and if the cursor lands off it the whole
+-+   strip would fade out mid-interaction. Focus keeps it up. */
+-+.card-item:focus-within .card-actions,
+-+.card-item:focus-within .card-move { opacity: 1; }
+-+
+-+/* ── Reorder column ───────────────────────────────────────────────
+-+   Left of the avatar rather than appended to .card-actions. That row is
+-+   Edit / Copy / Del and already wraps on a narrow phone — see the
+-+   max-width:400px + pointer:coarse note in css/11-panels.css, which exists
+-+   because two extra buttons is exactly what broke it last time. A stacked
+-+   arrow pair costs ~22px of row width instead of ~90px, and up/down reads
+-+   better vertically anyway.
+-+
+-+   Same hover-reveal as the actions, so an untouched list stays quiet, and
+-+   the column holds its width at opacity 0 so nothing shifts on hover. */
+-+.card-item .card-move {
+-+  display: flex;
+-+  flex-direction: column;
+-+  gap: 2px;
+-+  flex-shrink: 0;
+-+  opacity: 0;
+-+  transition: opacity var(--transition);
+-+}
+-+.card-item:hover .card-move { opacity: 1; }
+-+.card-move-btn {
+-+  background: rgba(0,0,0,0.6);
+-+  border: 1px solid var(--cyan-dim);
+-+  color: var(--cyan-mid);
+-+  font-size: 9px;
+-+  line-height: 1;
+-+  width: 22px;
+-+  padding: 3px 0;
+-+  border-radius: var(--radius);
+-+  cursor: pointer;
+-+  font-family: var(--font);
+-+  transition: all var(--transition);
+-+}
+-+.card-move-btn:hover:not(:disabled) {
+-+  background: var(--cyan-bright);
+-+  color: var(--black);
+-+  box-shadow: var(--glow-cyan);
+-+}
+-+/* Disabled = this end of the list. Dimmed rather than hidden so the column
+-+   keeps its height and the rows don't jitter as things move past the ends. */
+-+.card-move-btn:disabled {
+-+  opacity: 0.25;
+-+  cursor: default;
+-+  border-color: var(--border);
+-+}
+-+.card-grid-persona .card-move-btn:hover:not(:disabled) {
+-+  background: var(--green-neon);
+-+  color: var(--black);
+-+  box-shadow: 0 0 8px rgba(0, 255, 65, 0.4);
+-+}
+-+
+- /* ─────────────────────────────────────────────────────────────
+-    Cast modal — split sections for Characters (top) and Personas (bottom)
+-    The shared .card-item styles apply to both grids; the .card-grid-persona
+-diff --git a/css/10-responsive.css b/css/10-responsive.css
+-index 352c177..ed94acc 100644
+---- a/css/10-responsive.css
+-+++ b/css/10-responsive.css
+-@@ -293,6 +293,11 @@
+-   .card-item .card-avatar { width: calc(50px * var(--avatar-scale, 1)); height: calc(50px * var(--avatar-scale, 1)); font-size: calc(20px * var(--avatar-scale, 1)); }
+-   /* Touch: always show card actions */
+-   .card-item .card-actions { opacity: 1; }
+-+  /* Same for the reorder arrows — there is no hover to reveal them with.
+-+     Taller targets for a thumb; the pair still costs less row width than
+-+     one more button in the actions strip would. */
+-+  .card-item .card-move { opacity: 1; }
+-+  .card-move-btn { width: 26px; min-height: 26px; font-size: 10px; }
+- 
+-   /* --- Lore panel --- */
+-   .lore-panel { padding: 10px 12px; }
+-diff --git a/css/11-panels.css b/css/11-panels.css
+-index c07c83a..92f1897 100644
+---- a/css/11-panels.css
+-+++ b/css/11-panels.css
+-@@ -255,6 +255,14 @@
+-   .btn { min-height: 44px; }
+-   .msg-action-btn { min-height: 36px; padding: 6px 12px; }
+-   .toggle-sidebar { padding: 6px 12px; }
+-+
+-+  /* Reorder arrows are revealed by hover on desktop. The width query in
+-+     css/10-responsive.css catches phones, but a touchscreen laptop is wide
+-+     AND touch, and there is no hover to reveal them with — so key off the
+-+     pointer here as well. (.card-actions has the same gap; left alone
+-+     deliberately, it predates this change.) */
+-+  .card-item .card-move { opacity: 1; }
+-+  .card-move-btn { width: 26px; min-height: 26px; font-size: 10px; }
+- }
+- 
+- /* ── Narrow-phone padding override that actually wins ─────────────
+-diff --git a/js/15-cards.js b/js/15-cards.js
+-index 6f14968..9e4a6e0 100644
+---- a/js/15-cards.js
+-+++ b/js/15-cards.js
+-@@ -90,12 +90,112 @@ function closeCharacters() {
+-   renderMessages();
+- }
+- 
+-+/* ── Cast ordering ────────────────────────────────────────────────
+-+   Array position IS the order. There is no `order` field on a card and
+-+   there is no migration, because there is nothing to migrate: every card
+-+   that exists already has an index.
+-+
+-+   The roadmap leaned the other way, on the grounds that an explicit field
+-+   "survives merge-imports cleanly". Checked, and it's the reverse. Import
+-+   merges by id and appends (js/21-data.js:107), so exporting cards ranked
+-+   0,1,2 into a profile that already has cards ranked 0,1,2 produces two of
+-+   each rank; sorting that gives you the imported roster interleaved through
+-+   your own. Avoiding it means renumbering the incoming cards to sit after
+-+   the existing ones — which is what appending to an array already does, for
+-+   free. The field would buy a backfill, a collision rule and a sort on every
+-+   read path, to arrive at the same list.
+-+
+-+   The one real argument for a field is the threads store: cards persist as a
+-+   JSON array inside the meta record (js/05-persistence.js:570), so order
+-+   round-trips, but `threads` moved to an IDB store keyed by id and lost its
+-+   array order — hence `threadOrder` (js/05-persistence.js:567). If cards ever
+-+   move to a keyed store, the answer is the same six lines, not a schema
+-+   change. Noted rather than pre-built.
+-+
+-+   Nine sites read `[0]` as a fallback (getActiveCard, getActivePersona, the
+-+   four delete paths, two import paths). None of them means "the built-in
+-+   default" — they all mean "some card, deterministically". Under user
+-+   ordering they resolve to the user's top card, which is a better answer than
+-+   the oldest one, so all nine were left alone. */
+-+
+-+/* Move one entry within its array and slide the matching row to match.
+-+   Deliberately not a re-render: renderCardGrid() replaces the button that
+-+   was just clicked, and the row underneath a stationary cursor becomes the
+-+   row that got displaced — so clicking ▲ twice without moving the mouse
+-+   moves a card up and then straight back down. Moving the node keeps the
+-+   button under the pointer, and keeps focus for the keyboard path.
+-+   The array is still the source of truth: if the DOM has drifted from it for
+-+   any reason, this bails to a full render rather than guessing. */
+-+function moveCastEntry(list, id, delta, gridId, rerender, btn) {
+-+  if (!Array.isArray(list)) return;
+-+  const from = list.findIndex(x => x && x.id === id);
+-+  if (from === -1) return;
+-+  const to = from + delta;
+-+  if (to < 0 || to >= list.length) return;   // already at an end
+-+
+-+  const [moved] = list.splice(from, 1);
+-+  list.splice(to, 0, moved);
+-+  saveState();
+-+
+-+  const grid = document.getElementById(gridId);
+-+  const rows = grid ? Array.from(grid.children) : [];
+-+  if (!grid || rows.length !== list.length) { rerender(); return; }
+-+
+-+  grid.insertBefore(rows[from], delta < 0 ? rows[to] : rows[to].nextSibling);
+-+  refreshMoveButtons(grid);
+-+
+-+  // The clicked arrow travelled with its row. Put focus back on it, or on
+-+  // its partner if this move disabled it, so the keyboard path doesn't drop
+-+  // the user out to <body> on reaching an end.
+-+  if (btn && btn.isConnected) {
+-+    const partner = btn.parentNode && btn.parentNode.querySelector(
+-+      btn.dataset.move === 'up' ? '[data-move="down"]' : '[data-move="up"]');
+-+    const target = btn.disabled ? partner : btn;
+-+    if (target) target.focus({ preventScroll: true });
+-+  }
+-+}
+-+
+-+/* End-caps only: the top row can't go up, the bottom row can't go down.
+-+   Re-derived from live positions so it matches what a full render produces. */
+-+function refreshMoveButtons(grid) {
+-+  const rows = grid.children;
+-+  for (let i = 0; i < rows.length; i++) {
+-+    const up = rows[i].querySelector('[data-move="up"]');
+-+    const dn = rows[i].querySelector('[data-move="down"]');
+-+    if (up) up.disabled = (i === 0);
+-+    if (dn) dn.disabled = (i === rows.length - 1);
+-+  }
+-+}
+-+
+-+/* Shared markup for the reorder column. Omitted entirely for a list of one,
+-+   matching how Del is omitted at length 1. */
+-+function moveColumnHtml(id, name, idx, total, fn) {
+-+  if (total < 2) return '';
+-+  const who = escapeHtml(name || 'this entry');
+-+  const eid = escapeJsAttr(id);
+-+  return `
+-+      <div class="card-move">
+-+        <button class="card-move-btn" data-move="up" ${idx === 0 ? 'disabled' : ''}
+-+                onclick="event.stopPropagation();${fn}('${eid}',-1,this)"
+-+                title="Move up" aria-label="Move ${who} up">&#9650;</button>
+-+        <button class="card-move-btn" data-move="down" ${idx === total - 1 ? 'disabled' : ''}
+-+                onclick="event.stopPropagation();${fn}('${eid}',1,this)"
+-+                title="Move down" aria-label="Move ${who} down">&#9660;</button>
+-+      </div>`;
+-+}
+-+
+-+function moveCard(id, delta, btn) {
+-+  moveCastEntry(state.characterCards, id, delta, 'card-grid', renderCardGrid, btn);
+-+}
+-+
+- function renderCardGrid() {
+-   const grid = document.getElementById('card-grid');
+--  grid.innerHTML = state.characterCards.map(c => {
+-+  const total = state.characterCards.length;
+-+  grid.innerHTML = state.characterCards.map((c, i) => {
+-     const av = renderAvatar(c.avatar, c.name);
+-     return `
+-     <div class="card-item ${c.id === state.activeCardId ? 'active' : ''}" onclick="activateCard('${escapeJsAttr(c.id)}')">
+-+      ${moveColumnHtml(c.id, c.name, i, total, 'moveCard')}
+-       <div class="card-avatar">${av}</div>
+-       <div class="card-info">
+-         <div class="card-name">${escapeHtml(c.name)}</div>
+-diff --git a/js/17-personas.js b/js/17-personas.js
+-index 6ef7efc..7b77f24 100644
+---- a/js/17-personas.js
+-+++ b/js/17-personas.js
+-@@ -18,7 +18,8 @@ function renderPersonaGrid() {
+-     grid.innerHTML = '<div class="landing-empty" style="padding:10px 4px;">No personas yet. Click below to add one.</div>';
+-     return;
+-   }
+--  grid.innerHTML = state.personaCards.map(p => {
+-+  const total = state.personaCards.length;
+-+  grid.innerHTML = state.personaCards.map((p, i) => {
+-     const av = renderAvatar(p.avatar, p.name);
+-     const freq = (typeof p.injectionFrequency === 'number') ? p.injectionFrequency : 5;
+-     const freqLabel = freq === 0
+-@@ -32,6 +33,7 @@ function renderPersonaGrid() {
+-       : freqLabel;
+-     return `
+-     <div class="card-item ${p.id === state.activePersonaId ? 'active' : ''}" onclick="activatePersona('${escapeJsAttr(p.id)}')">
+-+      ${moveColumnHtml(p.id, p.name, i, total, 'movePersona')}
+-       <div class="card-avatar">${av}</div>
+-       <div class="card-info">
+-         <div class="card-name">${escapeHtml(p.name || 'Unnamed')}</div>
+-@@ -46,6 +48,14 @@ function renderPersonaGrid() {
+-   }).join('');
+- }
+- 
+-+/* Reorder engine is shared with character cards — see moveCastEntry() in
+-+   js/15-cards.js, which loads first. Array position is the order here too:
+-+   personaCards persists as an array in the same blob, so nothing extra is
+-+   needed to make it stick. */
+-+function movePersona(id, delta, btn) {
+-+  moveCastEntry(state.personaCards, id, delta, 'persona-grid', renderPersonaGrid, btn);
+-+}
+-+
+- function activatePersona(id) {
+-   state.activePersonaId = id;
+-   saveState();
+-diff --git a/test-cast-order.mjs b/test-cast-order.mjs
+-new file mode 100644
+-index 0000000..270ae6f
+---- /dev/null
+-+++ b/test-cast-order.mjs
+-@@ -0,0 +1,337 @@
+-+/**
+-+ * Item 9 — cast reordering.
+-+ *
+-+ * Executes the REAL moveCastEntry / refreshMoveButtons / moveColumnHtml from
+-+ * js/15-cards.js and the REAL renderCardGrid / renderPersonaGrid, in a minimal
+-+ * fake DOM whose innerHTML setter parses the generated markup back into nodes.
+-+ *
+-+ * That parse is the point: the tests drive the grid by finding the arrow in the
+-+ * rendered HTML and evaluating its actual onclick attribute, so a wrong
+-+ * argument order or a broken attribute fails here rather than in a browser.
+-+ */
+-+import fs from 'fs';
+-+import vm from 'vm';
+-+
+-+const ROOT = '/home/claude/work/GobboNet';
+-+const CARDS = fs.readFileSync(ROOT + '/js/15-cards.js', 'utf8');
+-+const PERSONAS = fs.readFileSync(ROOT + '/js/17-personas.js', 'utf8');
+-+
+-+// Pull the reorder block + renderCardGrid out of 15-cards.js. The rest of the
+-+// file is settings and the card editor and wants a much larger fake DOM.
+-+const cardsBlock = CARDS.slice(
+-+  CARDS.indexOf('/* ── Cast ordering'),
+-+  CARDS.indexOf('function activateCard(')
+-+);
+-+// renderPersonaGrid + movePersona out of 17-personas.js.
+-+const personaBlock = PERSONAS.slice(
+-+  PERSONAS.indexOf('function renderPersonaGrid()'),
+-+  PERSONAS.indexOf('function createPersona()')
+-+);
+-+
+-+let pass = 0, fail = 0;
+-+const ok = (cond, label) => {
+-+  if (cond) { pass++; console.log('  \u2713 ' + label); }
+-+  else { fail++; console.log('  \u2717 ' + label); }
+-+};
+-+const eq = (a, b, label) => ok(JSON.stringify(a) === JSON.stringify(b),
+-+  label + (JSON.stringify(a) === JSON.stringify(b) ? '' : `  (got ${JSON.stringify(a)}, want ${JSON.stringify(b)})`));
+-+
+-+/* ── Fake DOM ─────────────────────────────────────────────────────────────
+-+   Only what the reorder path touches: a grid with children + insertBefore,
+-+   rows that can find their arrows, buttons that carry disabled/dataset/focus. */
+-+
+-+const decode = s => s.replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+-+                     .replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+-+                     .replace(/&amp;/g, '&');
+-+
+-+function parseButtons(rowHtml, row) {
+-+  const out = [];
+-+  for (const m of rowHtml.matchAll(/<button\b([^>]*)>/g)) {
+-+    const attrs = {};
+-+    for (const a of m[1].matchAll(/([a-zA-Z-]+)="([^"]*)"/g)) attrs[a[1]] = a[2];
+-+    const bare = m[1].replace(/[a-zA-Z-]+="[^"]*"/g, '');
+-+    out.push({
+-+      attrs,
+-+      dataset: { move: attrs['data-move'] },
+-+      disabled: /\bdisabled\b/.test(bare),
+-+      isConnected: true,
+-+      parentNode: row,
+-+      focus() { row._grid._focused = this; },
+-+    });
+-+  }
+-+  return out;
+-+}
+-+
+-+function makeGrid(id) {
+-+  const grid = {
+-+    id,
+-+    children: [],
+-+    _focused: null,
+-+    set innerHTML(html) {
+-+      // Rows are the top-level .card-item divs.
+-+      const chunks = html.split(/(?=<div class="card-item)/).filter(c => c.includes('card-item'));
+-+      grid.children = chunks.map(chunk => {
+-+        const row = { _html: chunk, _grid: grid, _buttons: [] };
+-+        row._buttons = parseButtons(chunk, row);
+-+        row.querySelector = sel => {
+-+          const want = /\[data-move="(\w+)"\]/.exec(sel);
+-+          if (!want) return null;
+-+          return row._buttons.find(b => b.dataset.move === want[1]) || null;
+-+        };
+-+        return row;
+-+      });
+-+    },
+-+    get innerHTML() { return grid.children.map(r => r._html).join(''); },
+-+    insertBefore(node, ref) {
+-+      const cur = grid.children.indexOf(node);
+-+      if (cur !== -1) grid.children.splice(cur, 1);
+-+      const at = ref ? grid.children.indexOf(ref) : grid.children.length;
+-+      grid.children.splice(at === -1 ? grid.children.length : at, 0, node);
+-+      return node;
+-+    },
+-+  };
+-+  // nextSibling is read off the pre-move snapshot in moveCastEntry.
+-+  Object.defineProperty(grid, '_ns', { value: true });
+-+  return grid;
+-+}
+-+
+-+function attachSiblings(grid) {
+-+  grid.children.forEach((row, i) => {
+-+    Object.defineProperty(row, 'nextSibling', {
+-+      configurable: true,
+-+      get: () => grid.children[grid.children.indexOf(row) + 1] || null,
+-+    });
+-+  });
+-+}
+-+
+-+function build(cards, personas) {
+-+  const grids = { 'card-grid': makeGrid('card-grid'), 'persona-grid': makeGrid('persona-grid') };
+-+  const saves = [];
+-+  const ctx = {
+-+    console,
+-+    state: {
+-+      characterCards: cards.map(c => ({ ...c })),
+-+      personaCards: personas.map(p => ({ ...p })),
+-+      activeCardId: cards[0] && cards[0].id,
+-+      activePersonaId: personas[0] && personas[0].id,
+-+    },
+-+    document: { getElementById: id => grids[id] || null },
+-+    saveState: () => saves.push(1),
+-+    renderAvatar: (a, n) => `<span>${(n || '?')[0]}</span>`,
+-+    escapeHtml: s => String(s == null ? '' : s)
+-+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+-+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;'),
+-+    DEFAULT_PERSONA: {},
+-+  };
+-+  ctx.escapeJsString = s => String(s == null ? '' : s).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+-+  ctx.escapeJsAttr = s => ctx.escapeHtml(ctx.escapeJsString(s));
+-+  ctx.renderMessages = () => {};
+-+  ctx.globalThis = ctx;
+-+  vm.createContext(ctx);
+-+  vm.runInContext(cardsBlock + '\n' + personaBlock, ctx);
+-+  return { ctx, grids, saves };
+-+}
+-+
+-+/* Render, then click an arrow by evaluating the attribute the renderer wrote. */
+-+function clickArrow(env, gridId, rowIdx, dir) {
+-+  const grid = env.grids[gridId];
+-+  attachSiblings(grid);
+-+  const btn = grid.children[rowIdx].querySelector(`[data-move="${dir}"]`);
+-+  if (!btn) return null;
+-+  const src = decode(btn.attrs.onclick);
+-+  const fn = vm.runInContext(`(function(event){ ${src} })`, env.ctx);
+-+  fn.call(btn, { stopPropagation() {} });
+-+  return btn;
+-+}
+-+
+-+const names = grid => grid.children.map(r => /card-name">([^<]*)</.exec(r._html)[1]);
+-+const caps = grid => grid.children.map(r => {
+-+  const u = r.querySelector('[data-move="up"]');
+-+  const d = r.querySelector('[data-move="down"]');
+-+  return (u && u.disabled ? 'U' : '-') + (d && d.disabled ? 'D' : '-');
+-+});
+-+
+-+const CARDS4 = [
+-+  { id: 'a', name: 'Alpha', writingStyle: '' },
+-+  { id: 'b', name: 'Bravo', writingStyle: '' },
+-+  { id: 'c', name: 'Charlie', writingStyle: '' },
+-+  { id: 'd', name: 'Delta', writingStyle: '' },
+-+];
+-+const PERS3 = [
+-+  { id: 'p1', name: 'Pip', description: '', injectionFrequency: 5 },
+-+  { id: 'p2', name: 'Quill', description: '', injectionFrequency: 5 },
+-+  { id: 'p3', name: 'Rook', description: '', injectionFrequency: 5 },
+-+];
+-+
+-+console.log('\n=== A. ordering mechanics (characters) ===');
+-+{
+-+  const env = build(CARDS4, PERS3);
+-+  env.ctx.renderCardGrid();
+-+  eq(names(env.grids['card-grid']), ['Alpha', 'Bravo', 'Charlie', 'Delta'], 'renders in array order');
+-+
+-+  clickArrow(env, 'card-grid', 2, 'up');
+-+  eq(env.ctx.state.characterCards.map(c => c.name), ['Alpha', 'Charlie', 'Bravo', 'Delta'], 'move up: array spliced');
+-+  eq(names(env.grids['card-grid']), ['Alpha', 'Charlie', 'Bravo', 'Delta'], 'move up: DOM follows array');
+-+  eq(env.saves.length, 1, 'move up: saved once');
+-+
+-+  clickArrow(env, 'card-grid', 0, 'down');
+-+  eq(env.ctx.state.characterCards.map(c => c.name), ['Charlie', 'Alpha', 'Bravo', 'Delta'], 'move down: array spliced');
+-+  eq(names(env.grids['card-grid']), ['Charlie', 'Alpha', 'Bravo', 'Delta'], 'move down: DOM follows array');
+-+}
+-+
+-+console.log('\n=== B. refusals at the ends ===');
+-+{
+-+  const env = build(CARDS4, PERS3);
+-+  env.ctx.renderCardGrid();
+-+  const before = env.ctx.state.characterCards.map(c => c.name);
+-+
+-+  const topUp = clickArrow(env, 'card-grid', 0, 'up');
+-+  ok(topUp.disabled, 'top row: up arrow renders disabled');
+-+  eq(env.ctx.state.characterCards.map(c => c.name), before, 'top row: up is a no-op');
+-+
+-+  const botDown = clickArrow(env, 'card-grid', 3, 'down');
+-+  ok(botDown.disabled, 'bottom row: down arrow renders disabled');
+-+  eq(env.ctx.state.characterCards.map(c => c.name), before, 'bottom row: down is a no-op');
+-+
+-+  eq(env.saves.length, 0, 'refused moves do not write state');
+-+
+-+  env.ctx.moveCard('nope', -1, null);
+-+  eq(env.ctx.state.characterCards.map(c => c.name), before, 'unknown id is a no-op');
+-+  eq(env.saves.length, 0, 'unknown id does not write state');
+-+}
+-+
+-+console.log('\n=== C. end-caps track the live positions ===');
+-+{
+-+  const env = build(CARDS4, PERS3);
+-+  env.ctx.renderCardGrid();
+-+  eq(caps(env.grids['card-grid']), ['U-', '--', '--', '-D'], 'initial caps: top locked up, bottom locked down');
+-+
+-+  clickArrow(env, 'card-grid', 3, 'up');           // Delta to index 2
+-+  eq(caps(env.grids['card-grid']), ['U-', '--', '--', '-D'], 'caps recomputed after a move');
+-+
+-+  clickArrow(env, 'card-grid', 2, 'up');           // Delta to 1
+-+  clickArrow(env, 'card-grid', 1, 'up');           // Delta to 0
+-+  eq(names(env.grids['card-grid']), ['Delta', 'Alpha', 'Bravo', 'Charlie'], 'three moves walk a card to the top');
+-+  eq(caps(env.grids['card-grid']), ['U-', '--', '--', '-D'], 'caps still correct at the top');
+-+}
+-+
+-+console.log('\n=== D. in-place move matches a full re-render ===');
+-+{
+-+  // The divergence guard. moveCastEntry moves a node instead of re-rendering,
+-+  // so the two paths must agree or the grid drifts from state.
+-+  const env = build(CARDS4, PERS3);
+-+  env.ctx.renderCardGrid();
+-+  clickArrow(env, 'card-grid', 3, 'up');
+-+  clickArrow(env, 'card-grid', 1, 'down');
+-+  const afterMoves = names(env.grids['card-grid']);
+-+  const capsAfterMoves = caps(env.grids['card-grid']);
+-+
+-+  env.ctx.renderCardGrid();                        // full rebuild from state
+-+  eq(names(env.grids['card-grid']), afterMoves, 'row order identical after a full re-render');
+-+  eq(caps(env.grids['card-grid']), capsAfterMoves, 'end-caps identical after a full re-render');
+-+}
+-+
+-+console.log('\n=== E. DOM drift falls back to a full render ===');
+-+{
+-+  const env = build(CARDS4, PERS3);
+-+  env.ctx.renderCardGrid();
+-+  attachSiblings(env.grids['card-grid']);
+-+  const btn = env.grids['card-grid'].children[2].querySelector('[data-move="up"]');
+-+  env.grids['card-grid'].children.pop();           // desync the DOM from state
+-+  env.ctx.moveCard('c', -1, btn);
+-+  eq(env.ctx.state.characterCards.map(c => c.name), ['Alpha', 'Charlie', 'Bravo', 'Delta'], 'array still spliced');
+-+  eq(names(env.grids['card-grid']), ['Alpha', 'Charlie', 'Bravo', 'Delta'], 'grid rebuilt from state, drift discarded');
+-+}
+-+
+-+console.log('\n=== F. focus survives the move ===');
+-+{
+-+  const env = build(CARDS4, PERS3);
+-+  env.ctx.renderCardGrid();
+-+  const b1 = clickArrow(env, 'card-grid', 2, 'up');
+-+  ok(env.grids['card-grid']._focused === b1, 'focus stays on the clicked arrow');
+-+
+-+  const b2 = clickArrow(env, 'card-grid', 1, 'up');   // Bravo reaches the top
+-+  ok(b2.disabled, 'arrow disables on reaching the end');
+-+  ok(env.grids['card-grid']._focused &&
+-+     env.grids['card-grid']._focused.dataset.move === 'down',
+-+     'focus hands off to the partner arrow instead of dropping to <body>');
+-+}
+-+
+-+console.log('\n=== G. a list of one has no reorder column ===');
+-+{
+-+  const env = build([{ id: 'a', name: 'Alpha', writingStyle: '' }], PERS3);
+-+  env.ctx.renderCardGrid();
+-+  ok(!env.grids['card-grid'].children[0].querySelector('[data-move="up"]'), 'single card: no arrows rendered');
+-+  ok(env.grids['card-grid'].children[0]._html.includes('card-avatar'), 'single card: row otherwise unchanged');
+-+}
+-+
+-+console.log('\n=== H. personas use the same engine ===');
+-+{
+-+  const env = build(CARDS4, PERS3);
+-+  env.ctx.renderPersonaGrid();
+-+  eq(names(env.grids['persona-grid']), ['Pip', 'Quill', 'Rook'], 'persona grid renders in array order');
+-+
+-+  clickArrow(env, 'persona-grid', 2, 'up');
+-+  eq(env.ctx.state.personaCards.map(p => p.name), ['Pip', 'Rook', 'Quill'], 'persona move up: array spliced');
+-+  eq(names(env.grids['persona-grid']), ['Pip', 'Rook', 'Quill'], 'persona move up: DOM follows');
+-+  eq(caps(env.grids['persona-grid']), ['U-', '--', '-D'], 'persona end-caps correct');
+-+
+-+  clickArrow(env, 'persona-grid', 0, 'up');
+-+  eq(env.ctx.state.personaCards.map(p => p.name), ['Pip', 'Rook', 'Quill'], 'persona top row up is a no-op');
+-+
+-+  // Reordering personas must not disturb characters and vice versa.
+-+  eq(env.ctx.state.characterCards.map(c => c.name), ['Alpha', 'Bravo', 'Charlie', 'Delta'], 'character order untouched by persona moves');
+-+}
+-+
+-+console.log('\n=== I. persona empty / single list ===');
+-+{
+-+  const env = build(CARDS4, []);
+-+  env.ctx.renderPersonaGrid();
+-+  eq(env.grids['persona-grid'].children.length, 0, 'no personas: empty-state message, no rows');
+-+
+-+  const env2 = build(CARDS4, [{ id: 'p1', name: 'Pip', description: '' }]);
+-+  env2.ctx.renderPersonaGrid();
+-+  ok(!env2.grids['persona-grid'].children[0].querySelector('[data-move="up"]'), 'single persona: no arrows rendered');
+-+}
+-+
+-+console.log('\n=== J. hostile id and name survive the new markup ===');
+-+{
+-+  const hostile = [
+-+    { id: 'x" onmouseover="alert(1)', name: '<img src=x onerror=alert(1)>', writingStyle: '' },
+-+    { id: 'b', name: 'Bravo', writingStyle: '' },
+-+  ];
+-+  const env = build(hostile, PERS3);
+-+  env.ctx.renderCardGrid();
+-+  const html = env.grids['card-grid'].children[0]._html;
+-+  // The attribute parser stops at the first raw quote, exactly like a browser.
+-+  // If escaping failed, the onclick would be truncated and a stray attribute
+-+  // would appear alongside it.
+-+  const up = env.grids['card-grid'].children[0].querySelector('[data-move="up"]');
+-+  ok(up.attrs.onmouseover === undefined, 'hostile id does not become a second attribute');
+-+  ok(decode(up.attrs.onclick).includes('alert(1)\',-1,this)'),
+-+     'onclick carries the whole id through to the closing paren');
+-+  ok(!html.includes('<img src=x'), 'hostile name does not reach the DOM as a tag');
+-+  ok(html.includes('aria-label="Move &lt;img'), 'hostile name is escaped inside aria-label');
+-+
+-+  // And it still moves.
+-+  clickArrow(env, 'card-grid', 1, 'up');
+-+  eq(env.ctx.state.characterCards.map(c => c.id), ['b', 'x" onmouseover="alert(1)'], 'hostile id still reorders correctly');
+-+}
+-+
+-+console.log('\n=== K. assumption guard: import still appends ===');
+-+{
+-+  // The whole design rests on merge-import landing new entries at the end
+-+  // rather than interleaving them. If that ever changes, ordering breaks and
+-+  // this is the cheapest place to notice.
+-+  const DATA = fs.readFileSync(ROOT + '/js/21-data.js', 'utf8');
+-+  ok(DATA.includes('state.characterCards = [...state.characterCards, ...newCards]'),
+-+     'card import appends (js/21-data.js)');
+-+  ok(DATA.includes('state.personaCards = [...state.personaCards, ...newPersonas]'),
+-+     'persona import appends (js/21-data.js)');
+-+  const PERSIST = fs.readFileSync(ROOT + '/js/05-persistence.js', 'utf8');
+-+  ok(/characterCards: state\.characterCards/.test(PERSIST) && /personaCards: state\.personaCards/.test(PERSIST),
+-+     'both arrays still persist whole, so array order round-trips');
+-+}
+-+
+-+console.log(`\n${pass} passed, ${fail} failed\n`);
+-+process.exit(fail ? 1 : 0);
+--- 
+-2.43.0
+-
+diff --git a/patches/0002-item-10-messages-render-as-the-character-that-produc.patch b/patches/0002-item-10-messages-render-as-the-character-that-produc.patch
+deleted file mode 100644
+index 07e7923..0000000
+--- a/patches/0002-item-10-messages-render-as-the-character-that-produc.patch
++++ /dev/null
+@@ -1,570 +0,0 @@
+-From 2db80397b36273afaa45c4278d9a92082de4c437 Mon Sep 17 00:00:00 2001
+-From: Implementing AI <ai@example.com>
+-Date: Fri, 28 Aug 2026 22:54:02 +0000
+-Subject: [PATCH] item 10: messages render as the character that produced them
+-
+-Issue #19. Per-message identity instead of one getActiveCard() for the list.
+-
+-- js/09-threads.js: makeCastResolver + stamps on createThread and forkAt
+-- js/07-prompt.js, js/10-chat.js, js/22-scheduler.js: stamp sites
+-- js/13-dashboard.js: render path resolves per message
+-- js/05-persistence.js: no-backfill decision recorded
+-- test-cast-identity.mjs: 52 assertions
+----
+- js/05-persistence.js   |   7 ++
+- js/07-prompt.js        |   5 +-
+- js/09-threads.js       |  75 ++++++++++++
+- js/10-chat.js          |  16 ++-
+- js/13-dashboard.js     |  49 +++++---
+- js/22-scheduler.js     |   3 +-
+- test-cast-identity.mjs | 267 +++++++++++++++++++++++++++++++++++++++++
+- 7 files changed, 402 insertions(+), 20 deletions(-)
+- create mode 100644 test-cast-identity.mjs
+-
+-diff --git a/js/05-persistence.js b/js/05-persistence.js
+-index 205fb34..57227de 100644
+---- a/js/05-persistence.js
+-+++ b/js/05-persistence.js
+-@@ -289,6 +289,13 @@ function applyLoadedState(saved) {
+-         if (!t.hasOwnProperty('tags'))        t.tags        = [];
+-         if (!t.hasOwnProperty('forkSource'))  t.forkSource  = null;
+-       }
+-+      // cardId / personaId are deliberately NOT backfilled here. Which
+-+      // character produced a pre-1.7 message is information the app never
+-+      // recorded, so any value invented now would be a guess presented as
+-+      // fact — and the most available guess (the active card) is exactly the
+-+      // wrong answer that issue #19 is about. Unstamped threads fall through
+-+      // makeCastResolver() to getActiveCard() and render exactly as they do
+-+      // today; anything sent from here on is stamped and correct.
+- 
+-       // --- MIGRATIONS ---
+- 
+-diff --git a/js/07-prompt.js b/js/07-prompt.js
+-index bf15ac3..31f28fe 100644
+---- a/js/07-prompt.js
+-+++ b/js/07-prompt.js
+-@@ -164,7 +164,10 @@ function injectGreeting(thread, card) {
+-   const msg = {
+-     role: 'assistant',
+-     content: resolved[0],
+--    timestamp: ts
+-+    timestamp: ts,
+-+    // The greeting is this card's words, verbatim from its own field. Stamp
+-+    // it so it keeps that face if the user later switches characters.
+-+    cardId: card.id
+-   };
+- 
+-   // Multiple openings? Promote to the variants shape. Single greeting
+-diff --git a/js/09-threads.js b/js/09-threads.js
+-index 7eb9ef4..1b3c8fb 100644
+---- a/js/09-threads.js
+-+++ b/js/09-threads.js
+-@@ -80,6 +80,14 @@ function forkAt(messageIndex) {
+-     name: `⑂ ${baseName}`,
+-     messages: sharedMessages,
+-     lore: thread.lore || '',
+-+    // Inherited from the source, NOT from getActiveCard(). A fork is the same
+-+    // conversation up to the cut; taking today's active card here would put a
+-+    // stranger's name on every copied turn that predates the per-message
+-+    // stamp. The copied messages carry their own cardId where they have one.
+-+    cardId: thread.cardId,
+-+    cardName: thread.cardName,
+-+    personaId: thread.personaId,
+-+    personaName: thread.personaName,
+-     createdAt: Date.now(),
+-     pinned: false,
+-     folderId: thread.folderId,
+-@@ -163,12 +171,79 @@ function generateId() {
+-   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+- }
+- 
+-+/* ── Who said this? ───────────────────────────────────────────────
+-+   Threads used to carry no card reference at all, so renderMessages()
+-+   resolved getActiveCard() once for the whole list — every assistant turn
+-+   in every thread wore whichever character happened to be selected right
+-+   now (issue #19).
+-+
+-+   The reported symptom is the avatar, but the same two variables also feed
+-+   the speaker name, the assistant text and dialogue colours, and the
+-+   {{char}} expansion inside the message body — so switching characters
+-+   didn't just change the face on old replies, it renamed the speaker,
+-+   recoloured the prose, and rewrote {{char}} in dialogue that was written
+-+   before that character existed. All of it resolves through here now.
+-+
+-+   Resolution order, most specific first:
+-+     1. m.cardId      — stamped on assistant turns from here on
+-+     2. thread.cardId — stamped at thread creation; covers any message a
+-+                        path I didn't stamp produced, and inherited by forks
+-+     3. thread.cardName — tombstone. The card was deleted; show the name it
+-+                        had with a neutral avatar rather than dressing the
+-+                        history in whoever is active now. Drop this branch
+-+                        (and the one line in createThread) if you'd rather
+-+                        not carry a denormalised name.
+-+     4. getActiveCard() — legacy threads, which have none of the above and
+-+                        therefore behave exactly as they do today.
+-+
+-+   Built once per render rather than per message: a long thread against a
+-+   large roster would otherwise be a linear scan per turn. */
+-+function makeCastResolver(thread) {
+-+  const cardById = new Map((state.characterCards || []).map(c => [c.id, c]));
+-+  const personaById = new Map((state.personaCards || []).map(p => [p.id, p]));
+-+  const activeCard = getActiveCard();
+-+  const activePersona = getActivePersona();
+-+
+-+  return {
+-+    cardFor(m) {
+-+      const stamped = (m && m.cardId) || (thread && thread.cardId);
+-+      if (stamped) {
+-+        const found = cardById.get(stamped);
+-+        if (found) return found;
+-+        if (thread && thread.cardName) {
+-+          return { ...DEFAULT_CARD, id: null, name: thread.cardName, avatar: '' };
+-+        }
+-+      }
+-+      return activeCard;
+-+    },
+-+    personaFor(m) {
+-+      const stamped = (m && m.personaId) || (thread && thread.personaId);
+-+      if (stamped) {
+-+        const found = personaById.get(stamped);
+-+        if (found) return found;
+-+        if (thread && thread.personaName) {
+-+          return { ...DEFAULT_PERSONA, id: null, name: thread.personaName, avatar: '' };
+-+        }
+-+      }
+-+      return activePersona;
+-+    },
+-+  };
+-+}
+-+
+- function createThread() {
+-   const card = getActiveCard();
+-+  const persona = getActivePersona();
+-   const thread = {
+-     id: generateId(),
+-     name: 'New Thread',
+-     messages: [],
+-+    // Who this thread belongs to. Read as the per-message fallback by
+-+    // makeCastResolver(); see the note above it. cardName/personaName are
+-+    // tombstones, used only if the card or persona is later deleted.
+-+    cardId: card.id,
+-+    cardName: card.name,
+-+    personaId: persona.id,
+-+    personaName: persona.name,
+-     // thread.lore now holds ONLY the running conversation summary (built up
+-     // by compression). Authored world/setting lore lives on the card
+-     // (card.startingLore) and is injected fresh each build, so we no longer
+-diff --git a/js/10-chat.js b/js/10-chat.js
+-index 047d710..5e5c76b 100644
+---- a/js/10-chat.js
+-+++ b/js/10-chat.js
+-@@ -85,7 +85,8 @@ async function sendMessage(overrideContent) {
+-                                          { card: getActiveCard(), thread: thread });
+-   } catch (e) { console.error('[card-code] send hook:', e); }
+- 
+--  const userMessage = { role: 'user', content: storedContent, timestamp: Date.now() };
+-+  const userMessage = { role: 'user', content: storedContent, timestamp: Date.now(),
+-+                        personaId: getActivePersona().id };
+-   if (attachmentText) userMessage.attachmentText = attachmentText;
+-   if (attachmentMeta.length) userMessage.attachments = attachmentMeta;
+-   thread.messages.push(userMessage);
+-@@ -139,7 +140,8 @@ async function sendMessage(overrideContent) {
+- 
+-   // genStartedAt is persisted (unlike genMs it's temporary): if the tab
+-   // reloads mid-generation, the resume path can keep the clock honest.
+--  const assistantMsg = { role: 'assistant', content: '', timestamp: Date.now(), genStartedAt: Date.now() };
+-+  const assistantMsg = { role: 'assistant', content: '', timestamp: Date.now(),
+-+                         genStartedAt: Date.now(), cardId: card.id };
+-   thread.messages.push(assistantMsg);
+-   renderMessages();
+-   scrollToBottom();
+-@@ -755,8 +757,11 @@ async function regenerateFromThread(options = {}) {
+-     delete assistantMsg._smartLimitAt;
+-     delete assistantMsg.genMs;
+-     assistantMsg.timestamp = Date.now();
+-+    // Reroll re-authors the turn: the new text comes from whatever card is
+-+    // active now, so the stamp moves with it rather than keeping the old one.
+-+    assistantMsg.cardId = card.id;
+-   } else {
+--    assistantMsg = { role: 'assistant', content: '', timestamp: Date.now() };
+-+    assistantMsg = { role: 'assistant', content: '', timestamp: Date.now(), cardId: card.id };
+-     thread.messages.push(assistantMsg);
+-   }
+-   assistantMsg.genStartedAt = Date.now();   // response timer starts now (persisted — see sendMessage)
+-@@ -872,6 +877,11 @@ async function finalizeJobIntoThread(thread, jobId, { live = false } = {}) {
+-     if (last && last.role === 'assistant') msg = last;
+-   }
+-   if (!msg) {
+-+    // Deliberately unstamped. Both callers are the resume-after-reload sweep,
+-+    // which replays jobs across arbitrary threads — getActiveCard() here is
+-+    // whatever is selected now, quite possibly for a different conversation.
+-+    // Leaving it blank falls through to thread.cardId, which is at least the
+-+    // right thread. See makeCastResolver() in js/09-threads.js.
+-     msg = { role: 'assistant', content: '', timestamp: Date.now() };
+-     thread.messages.push(msg);
+-   }
+-diff --git a/js/13-dashboard.js b/js/13-dashboard.js
+-index 90bafc9..c32faa4 100644
+---- a/js/13-dashboard.js
+-+++ b/js/13-dashboard.js
+-@@ -151,21 +151,33 @@ function renderMessages() {
+-     return;
+-   }
+- 
+--  const card = getActiveCard();
+--  const persona = getActivePersona();
+--  const userName = persona.name || 'Anonymous';
+--  const cardName = card.name || 'Assistant';
+--
+--  // Resolve text/dialog colors
+-+  // Identity is resolved PER MESSAGE, not once for the list. Resolving it
+-+  // once here was issue #19: every assistant turn wore the currently-selected
+-+  // character. See makeCastResolver() in js/09-threads.js for the order.
+-+  //
+-+  // The four colours below used to be four consts. They are now derived from
+-+  // whichever card/persona a given turn belongs to, memoised per identity so
+-+  // safeCssColor still runs a handful of times per render rather than once
+-+  // per message.
+-+  //
+-   // Cards and personas can arrive from an imported file or a synced peer, and
+--  // these four values land directly in style="color:..." attributes below.
+-+  // these values land directly in style="color:..." attributes below.
+-   // Allowlist the shapes a colour picker produces; anything else falls back to
+-   // the 1.5.8 defaults rather than to empty, so a hostile value degrades to the
+-   // correct colour instead of to no colour.
+--  const userTextColor   = safeCssColor(persona.textColor,   FALLBACK_PERSONA_TEXT_COLOR);
+--  const userDialogColor = safeCssColor(persona.dialogColor, FALLBACK_PERSONA_DIALOG_COLOR);
+--  const aiTextColor     = safeCssColor(card.textColor,      FALLBACK_CARD_TEXT_COLOR);
+--  const aiDialogColor   = safeCssColor(card.dialogColor,    FALLBACK_CARD_DIALOG_COLOR);
+-+  const cast = makeCastResolver(thread);
+-+  const _colorMemo = new Map();
+-+  const colorsOf = (who, isUser) => {
+-+    if (_colorMemo.has(who)) return _colorMemo.get(who);
+-+    const pair = {
+-+      text: safeCssColor(who.textColor,
+-+        isUser ? FALLBACK_PERSONA_TEXT_COLOR : FALLBACK_CARD_TEXT_COLOR),
+-+      dialog: safeCssColor(who.dialogColor,
+-+        isUser ? FALLBACK_PERSONA_DIALOG_COLOR : FALLBACK_CARD_DIALOG_COLOR),
+-+    };
+-+    _colorMemo.set(who, pair);
+-+    return pair;
+-+  };
+- 
+-   // ── Branch origin banner ────────────────────────────────────────
+-   let branchBannerHtml = '';
+-@@ -231,14 +243,21 @@ function renderMessages() {
+- 
+-     if (m.role === 'system') return '';
+-     const isUser = m.role === 'user';
+-+    // Whoever actually produced THIS turn. cardName/userName are still used
+-+    // below for {{char}}/{{user}} expansion, so a line written by CodeGoblin
+-+    // keeps saying CodeGoblin after you switch away from it.
+-+    const msgCard = cast.cardFor(m);
+-+    const msgPersona = cast.personaFor(m);
+-+    const cardName = msgCard.name || 'Assistant';
+-+    const userName = msgPersona.name || 'Anonymous';
+-     const roleLabel = isUser ? userName : cardName;
+-     const avatar = isUser
+--      ? renderAvatar(persona.avatar, userName)
+--      : renderAvatar(card.avatar, cardName);
+-+      ? renderAvatar(msgPersona.avatar, userName)
+-+      : renderAvatar(msgCard.avatar, cardName);
+-     const archivedClass = m.archived ? ' archived' : '';
+-     const className = `message message-${m.role}${archivedClass}`;
+--    const textColor = isUser ? userTextColor : aiTextColor;
+--    const dialogColor = isUser ? userDialogColor : aiDialogColor;
+-+    const { text: textColor, dialog: dialogColor } =
+-+      colorsOf(isUser ? msgPersona : msgCard, isUser);
+-     // Display-time safety net: assistant messages saved before the unwrap fix
+-     // (or produced by any path that bypasses finalize) may still hold a raw
+-     // tool-call envelope. Unwrap for display only; stored content is untouched.
+-diff --git a/js/22-scheduler.js b/js/22-scheduler.js
+-index 1b6766e..2bf1939 100644
+---- a/js/22-scheduler.js
+-+++ b/js/22-scheduler.js
+-@@ -177,7 +177,8 @@ function checkSchedules() {
+-     state.activeThreadId = s.threadId;
+- 
+-     // Inject the prompt as a user message
+--    thread.messages.push({ role: 'user', content: s.prompt, timestamp: Date.now(), scheduled: true });
+-+    thread.messages.push({ role: 'user', content: s.prompt, timestamp: Date.now(), scheduled: true,
+-+                           personaId: getActivePersona().id });
+- 
+-     // Auto-name if first message
+-     if (thread.messages.length === 1) {
+-diff --git a/test-cast-identity.mjs b/test-cast-identity.mjs
+-new file mode 100644
+-index 0000000..a6859f7
+---- /dev/null
+-+++ b/test-cast-identity.mjs
+-@@ -0,0 +1,267 @@
+-+/**
+-+ * Item 10 — the agent icon shows the character that produced the message.
+-+ *
+-+ * Drives the REAL makeCastResolver / createThread / forkAt from js/09-threads.js
+-+ * in a minimal fake DOM, plus source-level guards that the render path and the
+-+ * send paths actually use them.
+-+ *
+-+ * The matrix that matters is the fallback chain: message stamp → thread stamp →
+-+ * tombstone → active card. Every rung is exercised, including the two rungs a
+-+ * pre-1.7 backup lands on.
+-+ */
+-+import fs from 'fs';
+-+import vm from 'vm';
+-+
+-+const ROOT = '/home/claude/work/GobboNet';
+-+const THREADS = fs.readFileSync(ROOT + '/js/09-threads.js', 'utf8');
+-+
+-+// makeCastResolver + createThread come as one block; forkAt is above them.
+-+const resolverBlock = THREADS.slice(
+-+  THREADS.indexOf('/* ── Who said this?'),
+-+  THREADS.indexOf('/**\n * Activity-based ordering')
+-+);
+-+const forkBlock = THREADS.slice(
+-+  THREADS.indexOf('function forkAt('),
+-+  THREADS.indexOf('/** All fork threads that branched')
+-+);
+-+
+-+let pass = 0, fail = 0;
+-+const ok = (cond, label) => {
+-+  if (cond) { pass++; console.log('  \u2713 ' + label); }
+-+  else { fail++; console.log('  \u2717 ' + label); }
+-+};
+-+const eq = (a, b, label) => ok(a === b, label + (a === b ? '' : `  (got ${JSON.stringify(a)}, want ${JSON.stringify(b)})`));
+-+
+-+const CARD_A = { id: 'ca', name: 'Assistant', avatar: 'A.png', textColor: '#111111', dialogColor: '#222222' };
+-+const CARD_B = { id: 'cb', name: 'CodeGoblin', avatar: 'B.png', textColor: '#333333', dialogColor: '#444444' };
+-+const PER_1 = { id: 'p1', name: 'Elodine', avatar: 'E.png', textColor: '#555555', dialogColor: '#666666' };
+-+const PER_2 = { id: 'p2', name: 'Ghost', avatar: 'G.png', textColor: '#777777', dialogColor: '#888888' };
+-+
+-+function build({ cards = [CARD_A, CARD_B], personas = [PER_1, PER_2],
+-+                 activeCardId = 'ca', activePersonaId = 'p1' } = {}) {
+-+  const ctx = {
+-+    console,
+-+    state: {
+-+      threads: [],
+-+      characterCards: cards.map(c => ({ ...c })),
+-+      personaCards: personas.map(p => ({ ...p })),
+-+      activeCardId, activePersonaId,
+-+      activeThreadId: null,
+-+      sidebarOpen: false,
+-+    },
+-+    DEFAULT_CARD: { id: 'default', name: 'Assistant', avatar: '', textColor: '#aaaaaa', dialogColor: '#bbbbbb' },
+-+    DEFAULT_PERSONA: { id: 'default-persona', name: 'Anonymous', avatar: '', textColor: '#cccccc', dialogColor: '#dddddd' },
+-+    window: { innerWidth: 1400 },
+-+    document: { getElementById: () => ({ focus: () => {}, style: {}, value: '', scrollHeight: 0 }) },
+-+    saveState: () => {},
+-+    render: () => {},
+-+    renderSidebar: () => {},
+-+    applyActiveCardBackground: () => {},
+-+    updateSidebarVisibility: () => {},
+-+    scrollToBottom: () => {},
+-+    injectGreeting: () => {},
+-+    getAllForksOf: () => [],
+-+    generateId: () => 'gen' + (build._n = (build._n || 0) + 1),
+-+  };
+-+  ctx.getActiveCard = () =>
+-+    ctx.state.characterCards.find(c => c.id === ctx.state.activeCardId) ||
+-+    ctx.state.characterCards[0] || ctx.DEFAULT_CARD;
+-+  ctx.getActivePersona = () =>
+-+    ctx.state.personaCards.find(p => p.id === ctx.state.activePersonaId) ||
+-+    ctx.state.personaCards[0] || { ...ctx.DEFAULT_PERSONA };
+-+  ctx.getActiveThread = () => ctx.state.threads.find(t => t.id === ctx.state.activeThreadId) || null;
+-+  ctx.globalThis = ctx;
+-+  vm.createContext(ctx);
+-+  vm.runInContext(resolverBlock + '\n' + forkBlock, ctx);
+-+  return ctx;
+-+}
+-+
+-+console.log('\n=== A. the reported bug: an old thread keeps its own face ===');
+-+{
+-+  const ctx = build();
+-+  // A thread started under CodeGoblin, with its replies stamped.
+-+  const thread = { id: 't1', cardId: 'cb', cardName: 'CodeGoblin', personaId: 'p1', personaName: 'Elodine',
+-+    messages: [
+-+      { role: 'user', content: 'hi', personaId: 'p1' },
+-+      { role: 'assistant', content: 'yo', cardId: 'cb' },
+-+    ] };
+-+  // ...viewed while Assistant is the selected card. This is issue #19's setup.
+-+  ctx.state.activeCardId = 'ca';
+-+  const cast = ctx.makeCastResolver(thread);
+-+  eq(cast.cardFor(thread.messages[1]).name, 'CodeGoblin', 'assistant turn keeps the card that wrote it');
+-+  eq(cast.cardFor(thread.messages[1]).avatar, 'B.png', 'and its avatar');
+-+  eq(cast.cardFor(thread.messages[1]).dialogColor, '#444444', 'and its dialogue colour');
+-+  eq(ctx.getActiveCard().name, 'Assistant', 'while the active card is still something else');
+-+}
+-+
+-+console.log('\n=== B. fallback chain, rung by rung ===');
+-+{
+-+  const ctx = build();
+-+  const thread = { id: 't1', cardId: 'cb', cardName: 'CodeGoblin', messages: [] };
+-+  const cast = ctx.makeCastResolver(thread);
+-+
+-+  eq(cast.cardFor({ role: 'assistant', cardId: 'ca' }).name, 'Assistant', '1. message stamp wins');
+-+  eq(cast.cardFor({ role: 'assistant' }).name, 'CodeGoblin', '2. unstamped message falls to the thread stamp');
+-+
+-+  // 3. tombstone: the card was deleted out from under the thread.
+-+  ctx.state.characterCards = [{ ...CARD_A }];
+-+  const cast2 = ctx.makeCastResolver(thread);
+-+  eq(cast2.cardFor({ role: 'assistant' }).name, 'CodeGoblin', '3. deleted card falls to the tombstone name');
+-+  eq(cast2.cardFor({ role: 'assistant' }).avatar, '', '   tombstone renders a neutral avatar, not the active one');
+-+  eq(cast2.cardFor({ role: 'assistant' }).id, null, '   tombstone is not mistaken for a real card');
+-+
+-+  // 4. legacy thread: no stamps anywhere. Must behave exactly as pre-1.7.
+-+  const legacy = { id: 't0', messages: [{ role: 'assistant', content: 'old' }] };
+-+  const cast3 = ctx.makeCastResolver(legacy);
+-+  eq(cast3.cardFor(legacy.messages[0]).name, 'Assistant', '4. legacy thread falls to the active card (unchanged behaviour)');
+-+}
+-+
+-+console.log('\n=== C. a thread that legitimately switched cards ===');
+-+{
+-+  const ctx = build();
+-+  const thread = { id: 't1', cardId: 'ca', cardName: 'Assistant', messages: [
+-+    { role: 'assistant', content: 'first', cardId: 'ca' },
+-+    { role: 'assistant', content: 'second', cardId: 'cb' },
+-+    { role: 'assistant', content: 'unstamped' },
+-+  ] };
+-+  const cast = ctx.makeCastResolver(thread);
+-+  eq(cast.cardFor(thread.messages[0]).name, 'Assistant', 'turn 1 renders as Assistant');
+-+  eq(cast.cardFor(thread.messages[1]).name, 'CodeGoblin', 'turn 2 renders as CodeGoblin in the same thread');
+-+  eq(cast.cardFor(thread.messages[2]).name, 'Assistant', 'unstamped turn uses the thread stamp, not the neighbour');
+-+}
+-+
+-+console.log('\n=== D. personas resolve the same way ===');
+-+{
+-+  const ctx = build();
+-+  const thread = { id: 't1', personaId: 'p2', personaName: 'Ghost', messages: [] };
+-+  ctx.state.activePersonaId = 'p1';
+-+  const cast = ctx.makeCastResolver(thread);
+-+  eq(cast.personaFor({ role: 'user', personaId: 'p2' }).name, 'Ghost', 'user turn keeps the persona that wrote it');
+-+  eq(cast.personaFor({ role: 'user' }).name, 'Ghost', 'unstamped user turn falls to the thread stamp');
+-+
+-+  ctx.state.personaCards = [{ ...PER_1 }];
+-+  eq(ctx.makeCastResolver(thread).personaFor({ role: 'user' }).name, 'Ghost', 'deleted persona falls to the tombstone');
+-+
+-+  const legacy = { id: 't0', messages: [] };
+-+  eq(ctx.makeCastResolver(legacy).personaFor({ role: 'user' }).name, 'Elodine', 'legacy thread uses the active persona');
+-+
+-+  // Card and persona resolve independently. Fresh context: the tombstone case
+-+  // above deleted p2, which would put this on a different rung.
+-+  const ctx2 = build();
+-+  const mixed = { id: 't2', cardId: 'cb', personaId: 'p2', messages: [] };
+-+  const c = ctx2.makeCastResolver(mixed);
+-+  eq(c.cardFor({}).name, 'CodeGoblin', 'card side unaffected by persona state');
+-+  eq(c.personaFor({}).name, 'Ghost', 'persona side unaffected by card state');
+-+}
+-+
+-+console.log('\n=== E. no personas at all ===');
+-+{
+-+  const ctx = build({ personas: [] });
+-+  const thread = { id: 't1', messages: [] };
+-+  eq(ctx.makeCastResolver(thread).personaFor({ role: 'user' }).name, 'Anonymous', 'empty roster falls to DEFAULT_PERSONA');
+-+  const stamped = { id: 't2', personaId: 'gone', messages: [] };
+-+  eq(ctx.makeCastResolver(stamped).personaFor({ role: 'user' }).name, 'Anonymous', 'stamp pointing at nothing, no tombstone: active persona');
+-+}
+-+
+-+console.log('\n=== F. createThread stamps identity ===');
+-+{
+-+  const ctx = build();
+-+  ctx.state.activeCardId = 'cb';
+-+  ctx.state.activePersonaId = 'p2';
+-+  ctx.createThread();
+-+  const t = ctx.state.threads[0];
+-+  eq(t.cardId, 'cb', 'thread records the card it was started under');
+-+  eq(t.cardName, 'CodeGoblin', 'thread records the tombstone name');
+-+  eq(t.personaId, 'p2', 'thread records the persona');
+-+  eq(t.personaName, 'Ghost', 'thread records the persona tombstone name');
+-+
+-+  // Switching cards afterwards must not retroactively change the thread.
+-+  ctx.state.activeCardId = 'ca';
+-+  eq(ctx.state.threads[0].cardId, 'cb', 'switching the active card leaves the thread stamp alone');
+-+  eq(ctx.makeCastResolver(t).cardFor({ role: 'assistant' }).name, 'CodeGoblin', 'and the thread still renders as CodeGoblin');
+-+}
+-+
+-+console.log('\n=== G. forks inherit from the source, not from whoever is active ===');
+-+{
+-+  const ctx = build();
+-+  const src = { id: 't1', name: 'Deep Dive', cardId: 'cb', cardName: 'CodeGoblin',
+-+    personaId: 'p2', personaName: 'Ghost', folderId: null, tags: [], lore: 'x',
+-+    messages: [
+-+      { role: 'user', content: 'q', personaId: 'p2' },
+-+      { role: 'assistant', content: 'a', cardId: 'cb' },
+-+      { role: 'user', content: 'q2', personaId: 'p2' },
+-+    ] };
+-+  ctx.state.threads = [src];
+-+  ctx.state.activeThreadId = 't1';
+-+  ctx.state.activeCardId = 'ca';          // user has since switched away
+-+  ctx.state.activePersonaId = 'p1';
+-+
+-+  ctx.forkAt(2);
+-+  const fork = ctx.state.threads[0];
+-+  ok(fork.id !== 't1', 'fork is a new thread');
+-+  eq(fork.cardId, 'cb', 'fork inherits the source card, not the active one');
+-+  eq(fork.cardName, 'CodeGoblin', 'fork inherits the tombstone name');
+-+  eq(fork.personaId, 'p2', 'fork inherits the source persona');
+-+  eq(fork.messages.length, 2, 'fork copied the shared history');
+-+  eq(fork.messages[1].cardId, 'cb', 'copied messages keep their own stamps');
+-+  eq(ctx.makeCastResolver(fork).cardFor(fork.messages[1]).name, 'CodeGoblin', 'fork renders as CodeGoblin throughout');
+-+}
+-+
+-+console.log('\n=== H. render path actually uses the resolver ===');
+-+{
+-+  const DASH = fs.readFileSync(ROOT + '/js/13-dashboard.js', 'utf8');
+-+  const body = DASH.slice(DASH.indexOf('const cast = makeCastResolver'), DASH.indexOf('function updateContextInfo'));
+-+  ok(/const msgCard = cast\.cardFor\(m\)/.test(body), 'renderMessages resolves the card per message');
+-+  ok(/const msgPersona = cast\.personaFor\(m\)/.test(body), 'renderMessages resolves the persona per message');
+-+  ok(!/renderAvatar\(card\.avatar/.test(body), 'the list-level card avatar is gone');
+-+  ok(!/renderAvatar\(persona\.avatar/.test(body), 'the list-level persona avatar is gone');
+-+  ok(!/const aiTextColor\s*=/.test(body), 'the four list-level colour consts are gone');
+-+  ok(/translateTemplates\(displayContent, cardName, userName, true\)/.test(body) &&
+-+     /const cardName = msgCard\.name/.test(body),
+-+     '{{char}} expands to the message\'s own card, not the active one');
+-+}
+-+
+-+console.log('\n=== I. every send path stamps ===');
+-+{
+-+  const CHAT = fs.readFileSync(ROOT + '/js/10-chat.js', 'utf8');
+-+  const PROMPT = fs.readFileSync(ROOT + '/js/07-prompt.js', 'utf8');
+-+  const SCHED = fs.readFileSync(ROOT + '/js/22-scheduler.js', 'utf8');
+-+
+-+  ok(/role: 'user', content: storedContent, timestamp: Date\.now\(\),\s*\n\s*personaId: getActivePersona\(\)\.id/.test(CHAT),
+-+     'sendMessage stamps the user turn');
+-+  ok(/genStartedAt: Date\.now\(\), cardId: card\.id/.test(CHAT),
+-+     'sendMessage stamps the assistant turn');
+-+  ok(/assistantMsg\.cardId = card\.id/.test(CHAT),
+-+     'reroll re-stamps: new text, current card');
+-+  ok(/role: 'assistant', content: '', timestamp: Date\.now\(\), cardId: card\.id/.test(CHAT),
+-+     'regenerate stamps a fresh assistant turn');
+-+  ok(/timestamp: ts,[\s\S]{0,220}cardId: card\.id/.test(PROMPT),
+-+     'injectGreeting stamps the opening message');
+-+  ok(/scheduled: true,\s*\n\s*personaId: getActivePersona\(\)\.id/.test(SCHED),
+-+     'the scheduler stamps its injected user turn');
+-+
+-+  // The one deliberate omission.
+-+  const recovery = CHAT.slice(CHAT.indexOf('async function finalizeJobIntoThread'));
+-+  ok(/Deliberately unstamped/.test(recovery),
+-+     'the resume-after-reload recovery path is documented as intentionally unstamped');
+-+}
+-+
+-+console.log('\n=== J. the new fields survive a save ===');
+-+{
+-+  const PERSIST = fs.readFileSync(ROOT + '/js/05-persistence.js', 'utf8');
+-+  const clean = PERSIST.slice(PERSIST.indexOf('function cleanThread'), PERSIST.indexOf('function buildStateBlob'));
+-+  ok(/\.\.\.t,/.test(clean), 'cleanThread spreads the thread, so cardId/cardName persist');
+-+  ok(!/delete clean\.cardId|delete clean\.personaId/.test(clean), 'no message stamp is stripped on save');
+-+  ok(/cardId \/ personaId are deliberately NOT backfilled/.test(PERSIST),
+-+     'the no-backfill decision is recorded at the migration site');
+-+
+-+  // Round-trip a stamped thread the way a save/load does.
+-+  const t = { id: 't', cardId: 'cb', cardName: 'CodeGoblin', personaId: 'p2', personaName: 'Ghost',
+-+              messages: [{ role: 'assistant', content: 'a', cardId: 'cb' }] };
+-+  const back = JSON.parse(JSON.stringify(t));
+-+  eq(back.cardId, 'cb', 'thread stamp round-trips through JSON');
+-+  eq(back.messages[0].cardId, 'cb', 'message stamp round-trips through JSON');
+-+}
+-+
+-+console.log(`\n${pass} passed, ${fail} failed\n`);
+-+process.exit(fail ? 1 : 0);
+--- 
+-2.43.0
+-
+-- 
+2.43.0
+

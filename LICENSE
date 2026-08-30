@@ -1,4 +1,24 @@
-GNU AFFERO GENERAL PUBLIC LICENSE
+GobboNet
+Copyright (C) 2026 Elodine / GoblinCorps
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published
+by the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+The full text of the licence follows.
+
+---
+
+                    GNU AFFERO GENERAL PUBLIC LICENSE
                        Version 3, 19 November 2007
 
  Copyright (C) 2007 Free Software Foundation, Inc. <https://fsf.org/>
@@ -629,8 +649,8 @@ to attach them to the start of each source file to most effectively
 state the exclusion of warranty; and each file should have at least
 the "copyright" line and a pointer to where the full notice is found.
 
-    <GobboNet: A front end for goblins>
-    Copyright (C) <2026>  <Elodine>
+    <one line to give the program's name and a brief idea of what it does.>
+    Copyright (C) <year>  <name of author>
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Affero General Public License as published
@@ -659,15 +679,19 @@ specific requirements.
 if any, to sign a "copyright disclaimer" for the program, if necessary.
 For more information on this, and how to apply and follow the GNU AGPL, see
 <https://www.gnu.org/licenses/>.
+
 ---
 
 NOTE ON BUNDLED COMPONENTS
 
-This license covers GobboNet itself: the launcher, the PowerShell services
-and the web front end. It does not cover things GobboNet downloads for you
-at runtime, which carry their own terms:
+The AGPL above covers GobboNet itself: the launcher, the PowerShell services
+and the web front end. It does not cover things GobboNet bundles or downloads
+for you at runtime, which carry their own terms:
 
-  llama.cpp  - MIT, from the ggml-org/llama.cpp releases
+  llama.cpp  - MIT, from the ggml-org/llama.cpp releases. MIT terms are
+               compatible with the AGPL, so llama.cpp can be shipped
+               alongside GobboNet; its own licence file travels with it
+               and is not replaced by this one.
   models     - each GGUF has its own licence set by whoever trained it.
                Some are permissive, some restrict commercial use, some
                require you to accept terms on Hugging Face first. Check

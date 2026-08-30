@@ -74,6 +74,63 @@
 }
 .card-item:hover .card-actions { opacity: 1; }
 
+/* Keyboard: the actions row is opacity:0 until hover, so tabbing into a card
+   used to focus buttons nobody could see. It also matters for reordering —
+   clicking an arrow moves the row, and if the cursor lands off it the whole
+   strip would fade out mid-interaction. Focus keeps it up. */
+.card-item:focus-within .card-actions,
+.card-item:focus-within .card-move { opacity: 1; }
+
+/* ── Reorder column ───────────────────────────────────────────────
+   Left of the avatar rather than appended to .card-actions. That row is
+   Edit / Copy / Del and already wraps on a narrow phone — see the
+   max-width:400px + pointer:coarse note in css/11-panels.css, which exists
+   because two extra buttons is exactly what broke it last time. A stacked
+   arrow pair costs ~22px of row width instead of ~90px, and up/down reads
+   better vertically anyway.
+
+   Same hover-reveal as the actions, so an untouched list stays quiet, and
+   the column holds its width at opacity 0 so nothing shifts on hover. */
+.card-item .card-move {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity var(--transition);
+}
+.card-item:hover .card-move { opacity: 1; }
+.card-move-btn {
+  background: rgba(0,0,0,0.6);
+  border: 1px solid var(--cyan-dim);
+  color: var(--cyan-mid);
+  font-size: 9px;
+  line-height: 1;
+  width: 22px;
+  padding: 3px 0;
+  border-radius: var(--radius);
+  cursor: pointer;
+  font-family: var(--font);
+  transition: all var(--transition);
+}
+.card-move-btn:hover:not(:disabled) {
+  background: var(--cyan-bright);
+  color: var(--black);
+  box-shadow: var(--glow-cyan);
+}
+/* Disabled = this end of the list. Dimmed rather than hidden so the column
+   keeps its height and the rows don't jitter as things move past the ends. */
+.card-move-btn:disabled {
+  opacity: 0.25;
+  cursor: default;
+  border-color: var(--border);
+}
+.card-grid-persona .card-move-btn:hover:not(:disabled) {
+  background: var(--green-neon);
+  color: var(--black);
+  box-shadow: 0 0 8px rgba(0, 255, 65, 0.4);
+}
+
 /* ─────────────────────────────────────────────────────────────
    Cast modal — split sections for Characters (top) and Personas (bottom)
    The shared .card-item styles apply to both grids; the .card-grid-persona

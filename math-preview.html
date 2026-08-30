@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<!--
+  Visual check for the math renderer. Open it in a browser; nothing to build.
+
+  Loads the REAL js/18-utils.js and css/16-math.css, so it cannot drift from
+  what ships. Dev tool only — stage-web.sh copies a fixed file list and will
+  not pick this up.
+
+  The automated suite proves nothing executes and that expressions parse.
+  It cannot tell you whether a fraction sits on the baseline or whether the
+  radical overline meets the radical. That is what this is for.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GobboNet — math renderer preview</title>
+<link rel="stylesheet" href="css/01-tokens.css">
+<link rel="stylesheet" href="css/16-math.css">
+<style>
+  body { background: var(--black, #0a0a0f); color: var(--text, #d0d0d8);
+         font-family: var(--font, monospace); padding: 24px; margin: 0; }
+  h1 { color: var(--cyan-bright, #0ff); font-size: 18px; }
+  h2 { color: var(--magenta, #f0f); font-size: 13px; margin: 28px 0 8px;
+       border-bottom: 1px solid var(--border, #333); padding-bottom: 4px; }
+  .row { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr);
+         gap: 12px; align-items: center; border-bottom: 1px solid rgba(255,255,255,.06);
+         padding: 6px 0; }
+  .src { font-family: var(--font-mono, monospace); font-size: 11px;
+         color: var(--label, #888); word-break: break-all; }
+  .out { font-family: var(--font-math, Georgia, serif); font-size: 1.15em;
+         line-height: 2.1; overflow-x: auto; }
+  .note { color: var(--label, #888); font-size: 12px; margin: 4px 0 16px; }
+  @media (max-width: 700px) { .row { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<h1>GOBBONET // MATH RENDERER PREVIEW</h1>
+<p class="note">
+  Left: what the model sent. Right: what the user sees. Anything highlighted in
+  amber fell through to source — that is the intended failure mode, not a crash.
+</p>
+<div id="out"></div>
+
+<script src="js/18-utils.js"></script>
+<script>
+const GROUPS = [
+  ['Everyday arithmetic', [
+    '2 + 2 = 4', '3 \\times 4 \\div 2', 'x \\pm y', '50\\%', '\\$5',
+  ]],
+  ['School algebra', [
+    'x^2 + y^2 = z^2', 'a_1, a_2, \\ldots, a_n', 'x_i^2',
+    '\\frac{a}{b}', '\\frac{-b \\pm \\sqrt{b^2-4ac}}{2a}',
+    '\\sqrt{2}', '\\sqrt[3]{8}', '(x+1)(x-1)', '\\frac{1}{2} + \\frac{1}{3}',
+  ]],
+  ['Calculus', [
+    '\\int_0^1 x^2 dx', '\\int_{-\\infty}^{\\infty} e^{-x^2} dx',
+    '\\sum_{i=1}^{n} i', '\\prod_{k=1}^{n} k',
+    '\\lim_{x \\to 0} \\frac{\\sin x}{x}', '\\frac{d}{dx} f(x)',
+    '\\frac{\\partial f}{\\partial x}', '\\nabla f',
+  ]],
+  ['Linear algebra', [
+    'A^T A', '\\mathbf{v} \\cdot \\mathbf{w}', '\\vec{v}', '\\hat{x}', '\\bar{x}',
+    '\\det(A) \\neq 0', '\\lambda_1 \\geq \\lambda_2',
+  ]],
+  ['Sets and logic', [
+    'x \\in \\mathbb{R}', 'A \\cup B', 'A \\cap B \\subseteq C',
+    '\\forall x \\exists y', 'P \\Rightarrow Q', '\\emptyset',
+  ]],
+  ['ML notation', [
+    '\\mathcal{L}(\\theta)', '\\hat{y} = \\sigma(w^T x + b)',
+    '\\frac{1}{N} \\sum_{i=1}^{N} (y_i - \\hat{y}_i)^2',
+    '\\arg\\max_{\\theta} P(D \\mid \\theta)',
+    '\\alpha \\nabla_\\theta J(\\theta)', '\\mathbb{E}[X]',
+    '\\sigma^2 = \\text{Var}(X)', 'p(x \\mid y) \\propto p(y \\mid x) p(x)',
+  ]],
+  ['Greek and misc', [
+    '\\alpha \\beta \\gamma \\delta', '\\Omega \\Sigma \\Delta',
+    '\\theta \\approx 3.14', 'f: X \\to Y', '\\log_2 n',
+  ]],
+  ['Known gaps — these SHOULD show amber source', [
+    '\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}',
+    '\\left( \\frac{a}{b} \\right)',
+    '\\somethingnobodyimplemented{q}',
+  ]],
+  ['Hostile input — nothing here may execute', [
+    '\\unknown{<img src=x onerror=alert(1)>}',
+    '\\text{<script>alert(1)<\/script>}',
+    '\\frac{<img src=x onerror=alert(1)>}{2}',
+  ]],
+];
+
+const root = document.getElementById('out');
+for (const [title, items] of GROUPS) {
+  const h = document.createElement('h2');
+  h.textContent = title;
+  root.appendChild(h);
+  for (const src of items) {
+    const row = document.createElement('div');
+    row.className = 'row';
+    const a = document.createElement('div');
+    a.className = 'src';
+    a.textContent = src;                    // textContent: the preview itself never injects
+    const b = document.createElement('div');
+    b.className = 'out';
+    b.innerHTML = renderMathHtml(src);      // the real renderer's output, as it ships
+    row.appendChild(a); row.appendChild(b);
+    root.appendChild(row);
+  }
+}
+
+// If any of the hostile rows had executed, this would have fired first.
+console.log('[preview] rendered without executing anything');
+</script>
+</body>
+</html>

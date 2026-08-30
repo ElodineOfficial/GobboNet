@@ -272,6 +272,13 @@ if defined PORT_RESERVED (
     echo  [OK] Port !WEB_PORT! is not inside a reserved range.
 )
 
+
+:: Record that LAN access was configured, and for which port. The uninstaller
+:: reads this to decide whether to offer the elevated teardown at all: someone
+:: who never ran this script has no rules to remove and should not be asked to
+:: approve an Administrator prompt for nothing.
+> "%~dp0.gobbonet-lan" echo !WEB_PORT!
+
 echo.
 echo  ====================================================
 echo   All done! You can now run launch.bat normally.
@@ -286,13 +293,16 @@ echo   bookmark and saved chats never break.
 echo.
 echo   launch.bat will show the exact URLs when it starts.
 echo.
-echo   To UNDO these changes later, run:
-echo     netsh advfirewall firewall delete rule name="Gemma4-LLM"
-echo     netsh advfirewall firewall delete rule name="Gemma4-Search"
-echo     netsh advfirewall firewall delete rule name="Gemma4-Web"
-echo     netsh advfirewall firewall delete rule name="Gemma4-mDNS"
-echo     netsh http delete urlacl url=http://+:11435/
-echo     netsh http delete urlacl url=http://+:!WEB_PORT!/
+echo   To UNDO these changes later, right-click this and
+echo   choose "Run as administrator":
+echo     teardown-lan.bat
+echo.
+echo   That matters more than it sounds. The URL reservation
+echo   made above lives in the Windows kernel, not in this
+echo   folder -- uninstalling, deleting the folder and
+echo   reinstalling all leave it in place, and a reservation
+echo   with nothing behind it makes Windows answer this port
+echo   with 503 by itself. teardown-lan.bat is what clears it.
 echo  ====================================================
 
 :: ===============================================================

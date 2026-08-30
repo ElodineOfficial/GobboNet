@@ -85,7 +85,8 @@ async function sendMessage(overrideContent) {
                                          { card: getActiveCard(), thread: thread });
   } catch (e) { console.error('[card-code] send hook:', e); }
 
-  const userMessage = { role: 'user', content: storedContent, timestamp: Date.now() };
+  const userMessage = { role: 'user', content: storedContent, timestamp: Date.now(),
+                        personaId: getActivePersona().id };
   if (attachmentText) userMessage.attachmentText = attachmentText;
   if (attachmentMeta.length) userMessage.attachments = attachmentMeta;
   thread.messages.push(userMessage);
@@ -139,7 +140,8 @@ async function sendMessage(overrideContent) {
 
   // genStartedAt is persisted (unlike genMs it's temporary): if the tab
   // reloads mid-generation, the resume path can keep the clock honest.
-  const assistantMsg = { role: 'assistant', content: '', timestamp: Date.now(), genStartedAt: Date.now() };
+  const assistantMsg = { role: 'assistant', content: '', timestamp: Date.now(),
+                         genStartedAt: Date.now(), cardId: card.id };
   thread.messages.push(assistantMsg);
   renderMessages();
   scrollToBottom();
@@ -755,8 +757,11 @@ async function regenerateFromThread(options = {}) {
     delete assistantMsg._smartLimitAt;
     delete assistantMsg.genMs;
     assistantMsg.timestamp = Date.now();
+    // Reroll re-authors the turn: the new text comes from whatever card is
+    // active now, so the stamp moves with it rather than keeping the old one.
+    assistantMsg.cardId = card.id;
   } else {
-    assistantMsg = { role: 'assistant', content: '', timestamp: Date.now() };
+    assistantMsg = { role: 'assistant', content: '', timestamp: Date.now(), cardId: card.id };
     thread.messages.push(assistantMsg);
   }
   assistantMsg.genStartedAt = Date.now();   // response timer starts now (persisted — see sendMessage)
@@ -872,6 +877,11 @@ async function finalizeJobIntoThread(thread, jobId, { live = false } = {}) {
     if (last && last.role === 'assistant') msg = last;
   }
   if (!msg) {
+    // Deliberately unstamped. Both callers are the resume-after-reload sweep,
+    // which replays jobs across arbitrary threads — getActiveCard() here is
+    // whatever is selected now, quite possibly for a different conversation.
+    // Leaving it blank falls through to thread.cardId, which is at least the
+    // right thread. See makeCastResolver() in js/09-threads.js.
     msg = { role: 'assistant', content: '', timestamp: Date.now() };
     thread.messages.push(msg);
   }
