@@ -923,13 +923,13 @@ goto :write_model_json
 :: detected), then parse hardware.json into HW_* vars plus per-model
 :: markers (MK_1..MK_8) and a recommended option number (REC).
 ::
-:: REC = best model that fits detected VRAM (flagship-first):
-::   >=16 GB -> 5 (Gemma 4 26B)   >=12 -> 8 (gpt-oss 20B)
+:: REC = best model that fits the probe's usable memory budget (flagship-first):
+::   >=16 GB -> 5 (Gemma 4 26B)   >=14 -> 8 (gpt-oss 20B)
 ::   >=8  GB -> 4 (Qwen3.5 9B)    >=6  -> 1 (Gemma 4 E4B)
 ::   cpu_only / tiny -> 2 (Llama 3.2 3B)
 :: MK_n is one of:
 ::   "[ RECOMMENDED FOR YOUR PC ]"      (the REC option)
-::   "[ needs ~N GB VRAM - will be slow ]"  (model bigger than VRAM)
+::   "[ needs ~N GB usable GPU memory - will be slow ]"  (model exceeds budget)
 ::   "[ likely too slow without a GPU ]"    (cpu_only + non-tiny model)
 ::   ""                                  (fits fine, no marker)
 ::
@@ -955,6 +955,7 @@ echo.
 set "HW_OK=0"
 set "HW_TIER=unknown"
 set "HW_VRAM=0"
+set "HW_BUDGET=0"
 set "HW_RAM=0"
 set "HW_DISK=0"
 set "REC=0"
@@ -1017,6 +1018,7 @@ echo.
 echo     [8] gpt-oss 20B            MXFP4   ~12 GB   !MK_8!
 echo         OpenAI - open-weights reasoning model
 echo         Uses Harmony channel format for CoT
+echo         Requires headroom beyond model size; 12 GB cards are too tight
 echo.
 echo   -- LARGE (16 GB VRAM and up) --------------------
 echo.
@@ -1050,8 +1052,8 @@ set "MODEL_CHOICE="
 set /p "MODEL_CHOICE=  Your choice [1-11]: "
 if not defined MODEL_CHOICE if not "!REC!"=="0" set "MODEL_CHOICE=!REC!"
 
-:: VRAM safety net -- if the chosen model wants more GPU memory than we
-:: detected, warn and confirm rather than letting a non-technical user
+:: VRAM safety net -- if the chosen model wants more usable GPU memory than
+:: the probe budgeted, warn and confirm rather than letting a non-technical user
 :: download 16 GB of model that will crawl. Skipped when VRAM is unknown
 :: (HW_VRAM=0) so we never block on a failed probe.
 set "PICK_MIN=0"
@@ -1062,18 +1064,22 @@ if "!MODEL_CHOICE!"=="4" set "PICK_MIN=8"
 if "!MODEL_CHOICE!"=="5" set "PICK_MIN=16"
 if "!MODEL_CHOICE!"=="6" set "PICK_MIN=24"
 if "!MODEL_CHOICE!"=="7" set "PICK_MIN=10"
-if "!MODEL_CHOICE!"=="8" set "PICK_MIN=12"
+:: gpt-oss is 11.28 GiB on disk. Its 16K KV cache, compute buffers, and the
+:: display's existing allocation make an exact 12 GB card an unsafe fit.
+if "!MODEL_CHOICE!"=="8" set "PICK_MIN=14"
 :: 9 and 10 had no gate at all, so the VRAM warning never fired for them --
 :: including for slot 10, which is the second-largest model in the list.
 if "!MODEL_CHOICE!"=="9" set "PICK_MIN=8"
 if "!MODEL_CHOICE!"=="10" set "PICK_MIN=24"
 if not defined HW_VRAM set "HW_VRAM=0"
-if !HW_VRAM! gtr 0 if !PICK_MIN! gtr 0 if !HW_VRAM! lss !PICK_MIN! (
+if not defined HW_BUDGET set "HW_BUDGET=!HW_VRAM!"
+if "!HW_BUDGET!"=="0" if !HW_VRAM! gtr 0 set "HW_BUDGET=!HW_VRAM!"
+if !HW_VRAM! gtr 0 if !HW_BUDGET! gtr 0 if !PICK_MIN! gtr 0 if !HW_BUDGET! lss !PICK_MIN! (
     echo.
-    echo  [*] Heads up: this model wants about !PICK_MIN! GB of GPU
-    echo       memory, but only !HW_VRAM! GB was detected. It can still
-    echo       run by spilling into system RAM, but expect it to be
-    echo       noticeably slower than a model that fits your GPU.
+    echo  [*] Heads up: this model needs about !PICK_MIN! GB of usable GPU
+    echo       memory, but this PC's safe budget is !HW_BUDGET! GB
+    echo       ^(!HW_VRAM! GB VRAM detected^). It can still run by spilling
+    echo       into system RAM, but expect it to be noticeably slower.
     echo.
     call :prompt_yn "  Download it anyway?" GO_BIG
     if /i "!GO_BIG!"=="N" goto :show_catalog

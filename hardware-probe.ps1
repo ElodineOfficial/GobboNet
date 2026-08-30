@@ -122,9 +122,8 @@
 #   }
 #
 # recommended_tier keeps its exact v1 meaning (GPU-driven, and
-# cpu_only still means "no usable GPU offload") so launch.bat's
-# existing markers do not change behaviour. usable_budget_gb is
-# the improved number to switch to when you're ready.
+# cpu_only still means "no usable GPU offload") for compatibility.
+# launch.bat uses usable_budget_gb for model selection and warnings.
 #
 # EXIT CODES:
 #   0 = a usable hardware.json was written (a machine with no GPU

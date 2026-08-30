@@ -25,7 +25,7 @@
 
 $ErrorActionPreference = 'SilentlyContinue'
 
-# Minimum VRAM in GB per catalogue slot.
+# Minimum usable GPU-memory budget in GB per catalogue slot.
 #
 # MUST match the PICK_MIN list in launch.bat. They are separate because one
 # is consumed by batch and one by PowerShell; if they drift, the menu warns
@@ -38,7 +38,10 @@ $min = @{
     5 = 16     # Gemma 4 26B-A4B MoE       ~16 GB
     6 = 24     # Qwen3.6 35B-A3B MoE       ~22 GB  (largest in the catalogue)
     7 = 10     # DeepSeek-R1 8B            ~8.5 GB
-    8 = 12     # gpt-oss 20B               ~12 GB
+    # The file is 11.28 GiB before KV cache, compute buffers, and Windows'
+    # display allocation. A 12 GB card therefore cannot safely run the default
+    # 16K context with every layer forced onto the GPU. Require real headroom.
+    8 = 14     # gpt-oss 20B               11.28 GiB weights + runtime headroom
     9 = 8      # Command R 7B              ~6.6 GB
     10 = 24    # Command R 35B             ~19 GB
 }
@@ -60,6 +63,7 @@ if (-not $h) {
     'REC=0'
     'HW_TIER=unknown'
     'HW_VRAM=0'
+    'HW_BUDGET=0'
     'HW_RAM=0'
     'HW_DISK=0'
     foreach ($i in 1..10) { 'MK_' + $i + '=' }
@@ -70,22 +74,25 @@ $v    = [int]$h.gpu.vram_gb
 $t    = [string]$h.recommended_tier
 $ram  = [int]$h.ram_gb
 $disk = [int]$h.disk.free_gb
+$budget = [int]$h.usable_budget_gb
+if ($budget -le 0 -and $v -gt 0) { $budget = $v }
 
 # Flagship-first: the best model that fits, not the smallest that works.
 # Deliberately stops at slot 5 rather than recommending slot 6 to a 24 GB
 # card -- 22 GB of weights leaves under 2 GB for the KV cache, and a
 # recommendation that fails to load is worse than a conservative one.
 $rec = 0
-if     ($t -eq 'cpu_only') { $rec = 2 }
-elseif ($v -ge 16)         { $rec = 5 }
-elseif ($v -ge 12)         { $rec = 8 }
-elseif ($v -ge 8)          { $rec = 4 }
-elseif ($v -ge 6)          { $rec = 1 }
-else                       { $rec = 2 }
+if     ($t -eq 'cpu_only')   { $rec = 2 }
+elseif ($budget -ge 16)      { $rec = 5 }
+elseif ($budget -ge $min[8]) { $rec = 8 }
+elseif ($budget -ge 8)       { $rec = 4 }
+elseif ($budget -ge 6)       { $rec = 1 }
+else                         { $rec = 2 }
 
 'HW_OK=1'
 'HW_TIER=' + $t
 'HW_VRAM=' + $v
+'HW_BUDGET=' + $budget
 'HW_RAM=' + $ram
 'HW_DISK=' + $disk
 'REC=' + $rec
@@ -98,10 +105,10 @@ foreach ($i in 1..10) {
         # rather than merely slower, so say so instead of showing a VRAM
         # figure that does not apply.
         if ($min[$i] -le 6) { $m = '' } else { $m = '[ likely too slow without a GPU ]' }
-    } elseif ($v -ge $min[$i]) {
+    } elseif ($budget -ge $min[$i]) {
         $m = ''
     } else {
-        $m = '[ needs ~' + $min[$i] + ' GB VRAM - will be slow ]'
+        $m = '[ needs ~' + $min[$i] + ' GB usable GPU memory - will be slow ]'
     }
     'MK_' + $i + '=' + $m
 }
