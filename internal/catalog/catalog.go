@@ -12,6 +12,7 @@ package catalog
 import (
 	"bufio"
 	"fmt"
+	"log"
 	"os"
 	"sort"
 	"strconv"
@@ -168,6 +169,28 @@ func Load(path string) (*Catalog, error) {
 		}
 		if v, err := strconv.ParseFloat(kv["size_gb"], 64); err == nil {
 			e.SizeGB = v
+		}
+		// sha256 is optional and local. models.ini is the catalogue an operator
+		// controls — bundled by the installer, or hand-edited for a private or
+		// air-gapped set of models — so a hash written here is a genuinely
+		// independent pin rather than a number fetched from the same host that
+		// serves the weights.
+		//
+		// Validated at the boundary for the same reason remote.go validates the
+		// JSON field: a typo must be dropped here, where it can be reported as
+		// a bad catalogue, rather than surface later as a checksum mismatch on
+		// a download that was fine.
+		//
+		// A rejected pin is logged rather than dropped quietly. Silently
+		// ignoring a malformed security control leaves an operator believing a
+		// download is pinned when it is not, which is worse than not offering
+		// the field at all.
+		if h := strings.ToLower(strings.TrimSpace(kv["sha256"])); h != "" {
+			if isHex64(h) {
+				e.SHA256 = h
+			} else {
+				log.Printf("[catalog] ignoring sha256 for %s: not 64 hex characters", kv["file"])
+			}
 		}
 		// A section with no repo or file cannot be downloaded, so it is not a
 		// model however well-formed the rest of it looks.

@@ -89,13 +89,13 @@ func (d *downloads) clear() (cleared bool) {
 
 // begin starts a download unless one is already running. running reports which
 // case happened, so the caller can tell the user it ignored their pick.
-func (d *downloads) begin(e catalog.Entry, dir string) (running bool) {
+func (d *downloads) begin(e catalog.Entry, dir string, opts ...modelfetch.Option) (running bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.current != nil && d.current.Status().State == "running" {
 		return true
 	}
-	dl := modelfetch.New(e, dir)
+	dl := modelfetch.New(e, dir, opts...)
 	d.current = dl
 	go dl.Run()
 	return false
@@ -264,7 +264,8 @@ func (s *Server) modelDownloadPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if running := s.downloads.begin(entry, dir); running {
+	if running := s.downloads.begin(entry, dir,
+		modelfetch.RequireChecksum(s.cfg.RequireChecksum)); running {
 		// Lost the race against another request between the check above and
 		// here. Same answer, same shape.
 		httpx.WriteJSON(w, r, http.StatusOK, map[string]any{

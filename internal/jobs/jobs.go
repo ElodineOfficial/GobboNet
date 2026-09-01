@@ -53,9 +53,11 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"regexp"
 	"sort"
@@ -87,11 +89,48 @@ const (
 	// jobTimeout is the hard runtime cap for one generation. Generous — huge
 	// contexts on big models can sit in prompt processing for minutes — but
 	// finite, so a wedged upstream can't leave a job running forever.
+	//
+	// It is the outermost bound and deliberately not the only one. Thirty
+	// minutes of a spinner is not meaningfully better than forever to someone
+	// waiting on a reply, so the stages below catch the common wedges first.
 	jobTimeout = 30 * time.Minute
+
+	// dialTimeout is short: either the upstream is there or it isn't. Matches
+	// internal/proxy.
+	dialTimeout = 10 * time.Second
+
+	// responseHeaderTimeout must clear the worst realistic prompt-processing
+	// delay. A 40K-context prefill on a large model can run well past thirty
+	// seconds before llama.cpp emits its first byte, and cutting that off looks
+	// like a broken server rather than a busy one. Matches internal/proxy.
+	//
+	// This is the bound that catches the wedge this file previously had no
+	// answer for: a socket that accepts and then says nothing — llama.cpp
+	// deadlocked, a GPU hang, or a firewall dropping rather than rejecting.
+	// http.Client.Timeout cannot express it, because that clock covers the
+	// streaming body too.
+	responseHeaderTimeout = 5 * time.Minute
+
+	// idleTimeout bounds the gap BETWEEN chunks once a stream is flowing, not
+	// the total duration. A long generation is healthy and may run for many
+	// minutes; ten minutes of complete silence mid-stream is a dead upstream
+	// that will never send its EOF. Matches internal/proxy.
+	idleTimeout = 10 * time.Minute
 
 	// maxJobBytes caps one job's buffer. A runaway upstream that never stops
 	// emitting must not be able to exhaust memory.
 	maxJobBytes = 128 << 20 // 128 MiB
+)
+
+// Why a job stopped, when the reason is ours rather than the caller's.
+//
+// These travel as context causes so the run loop can tell a watchdog trip from
+// a user pressing stop. Both arrive as the same cancellation on the wire; only
+// the cause distinguishes them, and reporting a timeout as "cancelled" would
+// tell someone their own click stopped a generation they were waiting on.
+var (
+	errIdleUpstream = errors.New("upstream stopped sending mid-generation")
+	errJobExpired   = errors.New("generation exceeded the maximum runtime")
 )
 
 // Job is one detached generation.
@@ -190,6 +229,12 @@ type Manager struct {
 	maxConcurrent int
 	maxAge        time.Duration
 
+	// idle is the tolerated gap between chunks once a stream is flowing, and
+	// maxRuntime the outermost cap on one generation. Fields rather than
+	// constants so tests can shrink them to observable lengths.
+	idle       time.Duration
+	maxRuntime time.Duration
+
 	client *http.Client
 
 	nextSeq atomic.Uint64
@@ -198,15 +243,45 @@ type Manager struct {
 	jobs map[string]*Job
 }
 
+// newJobClient builds the streaming client with its dial and first-byte bounds.
+//
+// Separated from NewManager so tests can rebuild it with windows short enough
+// to observe. A watchdog whose only proof is a five-minute test is a watchdog
+// nobody runs.
+func newJobClient(dial, header time.Duration) *http.Client {
+	return &http.Client{
+		Transport: &http.Transport{
+			DialContext: (&net.Dialer{
+				Timeout:   dial,
+				KeepAlive: 30 * time.Second,
+			}).DialContext,
+			ResponseHeaderTimeout: header,
+			IdleConnTimeout:       90 * time.Second,
+			// The stream is SSE and uncompressed; asking for gzip would only
+			// add work and defeat incremental reads.
+			DisableCompression: true,
+			ForceAttemptHTTP2:  false,
+		},
+	}
+}
+
 func NewManager(llmURL, apiKey string, maxConcurrent, maxAgeHours int) *Manager {
 	return &Manager{
 		llmURL:        llmURL,
 		apiKey:        apiKey,
 		maxConcurrent: maxConcurrent,
 		maxAge:        time.Duration(maxAgeHours) * time.Hour,
-		// No client timeout: a generation legitimately runs for a long time.
-		// The per-job context carries jobTimeout instead.
-		client: &http.Client{},
+		idle:          idleTimeout,
+		maxRuntime:    jobTimeout,
+		// No overall client timeout: a generation legitimately runs for a long
+		// time, and http.Client.Timeout covers the whole request INCLUDING the
+		// streaming body read, so any value large enough for a long generation
+		// is too large to catch a wedged upstream.
+		//
+		// The bounds are staged instead, matching internal/proxy: a short dial,
+		// a generous wait for the first byte, and a watchdog on the gap between
+		// chunks (see run). maxRuntime remains the outermost cap.
+		client: newJobClient(dialTimeout, responseHeaderTimeout),
 		jobs:   make(map[string]*Job),
 	}
 }
@@ -359,6 +434,14 @@ func (m *Manager) run(ctx context.Context, job *Job, body []byte) {
 		}
 	}()
 
+	// The stall context must wrap the request, not just the read loop. It is
+	// created here, before the request is built, because cancelling a context
+	// the request was not made with does nothing at all: the socket stays open
+	// and Read goes on blocking. An earlier arrangement of this had the
+	// watchdog firing correctly into the void.
+	ctx, stalled := context.WithCancelCause(ctx)
+	defer stalled(nil)
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, m.llmURL+"/v1/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		job.setStatus(StatusError, err.Error())
@@ -372,11 +455,8 @@ func (m *Manager) run(ctx context.Context, job *Job, body []byte) {
 
 	resp, err := m.client.Do(req)
 	if err != nil {
-		if ctx.Err() != nil {
-			job.setStatus(StatusCancelled, "")
-		} else {
-			job.setStatus(StatusError, err.Error())
-		}
+		status, msg := m.terminalFailure(ctx, err)
+		job.setStatus(status, msg)
 		return
 	}
 	defer resp.Body.Close()
@@ -393,10 +473,21 @@ func (m *Manager) run(ctx context.Context, job *Job, body []byte) {
 		return
 	}
 
+	// From here the response headers have arrived, so ResponseHeaderTimeout is
+	// spent and nothing else bounds the wait between chunks. A stream that
+	// stops mid-generation — llama.cpp crashing, a GPU hang, a dropped route —
+	// leaves Read blocked with no error to report, which is the shape of hang
+	// this whole path exists to prevent. The watchdog starts only now, so a
+	// long prompt-processing pause before the first byte is not mistaken for a
+	// stalled stream.
+	progress := newProgressClock()
+	go watchForStall(ctx, progress, m.idle, stalled)
+
 	buf := make([]byte, 8192)
 	for {
 		n, readErr := resp.Body.Read(buf)
 		if n > 0 {
+			progress.mark()
 			if _, err := job.write(buf[:n]); err != nil {
 				job.setStatus(StatusError, err.Error())
 				return
@@ -409,12 +500,72 @@ func (m *Manager) run(ctx context.Context, job *Job, body []byte) {
 			}
 			// A cancelled context surfaces here as a read error on the closed
 			// connection; report the cause, not the symptom.
-			if ctx.Err() != nil {
-				job.setStatus(StatusCancelled, "")
-			} else {
-				job.setStatus(StatusError, readErr.Error())
-			}
+			status, msg := m.terminalFailure(ctx, readErr)
+			job.setStatus(status, msg)
 			return
+		}
+	}
+}
+
+// terminalFailure decides what a failed request or read means to the person
+// waiting on it.
+//
+// The context's cause is consulted before its error, because every one of these
+// arrives as the same cancellation at the socket. Only the cause separates "you
+// pressed stop" from "we gave up on a silent upstream", and the previous
+// version of this code reported both as "cancelled" — which told a user their
+// own click had stopped a generation that in fact died on its own, and left the
+// real failure unrecorded anywhere.
+func (m *Manager) terminalFailure(ctx context.Context, err error) (status, message string) {
+	switch cause := context.Cause(ctx); {
+	case errors.Is(cause, errIdleUpstream):
+		return StatusError, fmt.Sprintf(
+			"the model server stopped sending after %s. It may have crashed or run out of memory -- check the llama-server log.",
+			m.idle)
+
+	case errors.Is(cause, errJobExpired):
+		return StatusError, fmt.Sprintf(
+			"this generation ran past the %s limit and was stopped.", m.maxRuntime)
+
+	case ctx.Err() != nil:
+		// A plain cancellation: the caller asked for it.
+		return StatusCancelled, ""
+	}
+	return StatusError, err.Error()
+}
+
+// progressClock records when the stream last moved.
+type progressClock struct{ last atomic.Int64 }
+
+func newProgressClock() *progressClock {
+	p := &progressClock{}
+	p.mark()
+	return p
+}
+
+func (p *progressClock) mark() { p.last.Store(time.Now().UnixNano()) }
+
+func (p *progressClock) idleFor() time.Duration {
+	return time.Since(time.Unix(0, p.last.Load()))
+}
+
+// watchForStall cancels the stream when nothing has arrived for idleTimeout.
+//
+// It ticks rather than sleeping for the full window so that a stall is noticed
+// within a quarter of it, and exits with the context so a healthy job does not
+// leave a goroutine behind.
+func watchForStall(ctx context.Context, p *progressClock, idle time.Duration, stalled context.CancelCauseFunc) {
+	t := time.NewTicker(idle / 4)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if p.idleFor() >= idle {
+				stalled(errIdleUpstream)
+				return
+			}
 		}
 	}
 }
@@ -506,7 +657,10 @@ func (m *Manager) handleCreate(w http.ResponseWriter, r *http.Request) {
 		done:      make(chan struct{}),
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), jobTimeout)
+	// WithTimeoutCause, not WithTimeout: hitting the cap is a failure the user
+	// needs told about, and without a cause it is indistinguishable at the
+	// socket from them pressing stop.
+	ctx, cancel := context.WithTimeoutCause(context.Background(), m.maxRuntime, errJobExpired)
 	job.cancel = cancel
 
 	// Register before starting the worker: a poll landing one millisecond after

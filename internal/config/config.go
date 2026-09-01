@@ -151,6 +151,20 @@ type Config struct {
 	ModelCatalogURL    string `toml:"model_catalog_url"`
 	ModelCatalogRemote bool   `toml:"model_catalog_remote"`
 
+	// RequireChecksum refuses to download a model that no source can vouch
+	// for, instead of falling back to the size floor.
+	//
+	// Off by default, and that is a compatibility decision rather than a
+	// preference: the shipped models.ini carries no hashes and the live
+	// catalogue publishes null for every entry, so defaulting it on would
+	// refuse every download on a stock install. It is here for a catalogue the
+	// operator controls, where a missing pin means the catalogue is wrong.
+	//
+	// A plain bool for the same reason as ModelCatalogRemote above: Load seeds
+	// from Default() before decoding, so an absent key keeps the default and an
+	// explicit value still wins, while `config set` keeps working.
+	RequireChecksum bool `toml:"require_checksum"`
+
 	// --- Chat template overrides -------------------------------------------
 	ChatTemplateName string `toml:"chat_template_name"`
 	ChatTemplateFile string `toml:"chat_template_file"`
@@ -221,6 +235,10 @@ func Default() Config {
 		// config panel makes it one click to turn off.
 		ModelCatalogURL:    catalog.DefaultURL,
 		ModelCatalogRemote: true,
+		// Explicitly false: see the field comment. Stated here rather than
+		// left to the zero value so that flipping the default later is a
+		// visible edit in this list.
+		RequireChecksum: false,
 	}
 }
 

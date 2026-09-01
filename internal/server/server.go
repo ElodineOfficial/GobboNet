@@ -23,6 +23,7 @@
 package server
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -30,6 +31,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/jmccardle/gobbonet/internal/auth"
@@ -87,6 +89,17 @@ type Server struct {
 	downloads downloads
 
 	upstream upstreamHealth
+
+	// bind is what Listen actually got, published so /health-fileserver can
+	// report whether LAN access exists. Guarded because it is written once at
+	// startup and read by every health request thereafter.
+	//
+	// It is reported over HTTP because the startup banner scrolls away, and
+	// "I can't reach it from my phone" arrives long after it did. A user who
+	// cannot read a terminal can still open /health-fileserver in the browser
+	// — the same reason the build stamp is served there.
+	bindMu sync.RWMutex
+	bind   *Bind
 }
 
 // New builds a Server. sup may be nil, which selects remote mode behaviour for
@@ -392,7 +405,7 @@ func (s *Server) upstreamOK() bool {
 // diagnostic endpoint would say "ok" in precisely the scenario you'd use it to
 // debug.
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{
+	body := map[string]any{
 		"status":      "ok",
 		"version":     version.String(),
 		"pid":         os.Getpid(),
@@ -400,7 +413,34 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"mode":        string(s.mode),
 		"upstream":    s.cfg.LLMURL,
 		"upstream_ok": s.upstreamOK(),
-	})
+	}
+
+	// Absent when nothing published a bind — a Server driven directly by a test
+	// harness, say. Reporting an unknown bind as "no LAN access" would be a
+	// guess, and the fields are omitted rather than guessed at.
+	if b := s.Bind(); b != nil {
+		body["listen_host"] = b.Host
+		body["listen_port"] = b.Port
+		body["lan_access"] = b.LANReachable()
+		if b.FellBack {
+			body["lan_bind_denied"] = b.WideErr.Error()
+		}
+	}
+	httpx.WriteJSON(w, r, http.StatusOK, body)
+}
+
+// SetBind publishes the bind for the health endpoint to report.
+func (s *Server) SetBind(b *Bind) {
+	s.bindMu.Lock()
+	defer s.bindMu.Unlock()
+	s.bind = b
+}
+
+// Bind returns the published bind, or nil if none was set.
+func (s *Server) Bind() *Bind {
+	s.bindMu.RLock()
+	defer s.bindMu.RUnlock()
+	return s.bind
 }
 
 // handleSearch forwards /search/* to the web-search API, answering /health here.
@@ -434,6 +474,35 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, path strin
 
 // --- Listening -------------------------------------------------------------
 
+// Bind is the outcome of Listen: the socket, and what had to be given up to
+// get it.
+//
+// The caller needs more than a net.Listener because the two outcomes are not
+// interchangeable to a user. Binding 0.0.0.0 means the phone on the sofa can
+// reach this; binding 127.0.0.1 means it cannot. A banner that prints the
+// configured host rather than the bound one would promise phone access that
+// does not exist, which is the specific wrong-but-reassuring status this whole
+// path exists to remove.
+type Bind struct {
+	Listener net.Listener
+
+	// Host is the address actually bound, which is not always cfg.ListenHost.
+	Host string
+	Port int
+
+	// FellBack is set when a wide bind was refused and loopback was taken
+	// instead. WideErr is why, kept so the caller can print the real OS error
+	// rather than a paraphrase of it.
+	FellBack bool
+	WideErr  error
+}
+
+// LANReachable reports whether the bound address is one another device can
+// reach. Loopback is not, whether it was configured or fallen back to.
+func (b *Bind) LANReachable() bool {
+	return !isLoopbackHost(b.Host)
+}
+
 // Listen binds the configured address without serving.
 //
 // Split from Serve so the caller can fail before it prints "serving on ...".
@@ -441,9 +510,107 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, path strin
 // which reads as a server that started and then broke rather than one that
 // never got the port — the same confusion launch.bat's port-holder check was
 // added to clear up in 1.6.0.
-func (s *Server) Listen() (net.Listener, error) {
-	address := net.JoinHostPort(s.cfg.ListenHost, fmt.Sprintf("%d", s.cfg.ListenPort))
-	return net.Listen("tcp", address)
+//
+// When the configured host is network-facing and the kernel refuses it, this
+// retries on loopback instead of failing. The file server SERVES THE CHAT PAGE:
+// before the retry a user whose machine would not allow a wide bind lost
+// desktop chat entirely, while llama.cpp on its own port stayed healthy — which
+// reads as a front-end bug and is the hardest kind of report to act on. Phone
+// access genuinely needs the wide bind; chat on this machine never did.
+//
+// The retry only ever NARROWS what is exposed. There is no path here from
+// loopback out to the network, so a machine that was configured to stay local
+// cannot be widened by a failure.
+func (s *Server) Listen() (*Bind, error) {
+	host := s.cfg.ListenHost
+	port := s.cfg.ListenPort
+	ln, err := net.Listen("tcp", net.JoinHostPort(host, fmt.Sprintf("%d", port)))
+	if err == nil {
+		return &Bind{Listener: ln, Host: host, Port: port}, nil
+	}
+
+	// Already loopback, or a failure loopback would hit too: report it as it
+	// is. Retrying an in-use port on a narrower address would either fail the
+	// same way or, worse, quietly succeed while another GobboNet holds the
+	// address the user was told to visit.
+	if isLoopbackHost(host) || !recoverableOnLoopback(err) {
+		return nil, err
+	}
+
+	wideErr := err
+	fallbackHost := loopbackFor(host)
+	ln, err = net.Listen("tcp", net.JoinHostPort(fallbackHost, fmt.Sprintf("%d", port)))
+	if err != nil {
+		// Both failed. The wide error is the one that describes the user's
+		// actual problem; the loopback attempt was diagnosis, and saying so
+		// keeps the caller from reporting the narrower failure as the cause.
+		return nil, wideErr
+	}
+	return &Bind{
+		Listener: ln,
+		Host:     fallbackHost,
+		Port:     port,
+		FellBack: true,
+		WideErr:  wideErr,
+	}, nil
+}
+
+// recoverableOnLoopback reports whether a wide-bind failure is the kind that a
+// loopback bind might survive.
+//
+// Permission and address-availability failures are: they are properties of the
+// address, and loopback is a different address. "Already in use" is not — the
+// port is occupied, the user needs to hear that rather than be moved somewhere
+// quieter, and portInUseError already says it well.
+//
+// The Windows numbers are checked directly because WSA errors are their own
+// Errno values that do not compare equal to the syscall constants of the same
+// name: WSAEACCES is 10013, not EACCES's 13.
+func recoverableOnLoopback(err error) bool {
+	for _, target := range []syscall.Errno{
+		syscall.EACCES,        // policy, privileged port, or a reserved range
+		syscall.EADDRNOTAVAIL, // configured address is not on this machine
+		syscall.EAFNOSUPPORT,  // e.g. "::" where IPv6 is switched off
+	} {
+		if errors.Is(err, target) {
+			return true
+		}
+	}
+	var errno syscall.Errno
+	if errors.As(err, &errno) {
+		switch uintptr(errno) {
+		case 10013, // WSAEACCES
+			10047, // WSAEAFNOSUPPORT
+			10049: // WSAEADDRNOTAVAIL
+			return true
+		}
+	}
+	return false
+}
+
+// isLoopbackHost reports whether host names only this machine.
+func isLoopbackHost(host string) bool {
+	if host == "" {
+		// The empty host is the wildcard, not loopback: net.Listen on ":9066"
+		// binds every interface. Reading it as local-only would be the one
+		// mistake this file must not make.
+		return false
+	}
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// loopbackFor picks the loopback address in the same family as the host we
+// failed to bind, so an IPv6-only configuration does not land on an IPv4 socket
+// its clients cannot reach.
+func loopbackFor(host string) string {
+	if ip := net.ParseIP(host); ip != nil && ip.To4() == nil {
+		return "::1"
+	}
+	return "127.0.0.1"
 }
 
 // Serve runs until the listener is closed.
@@ -461,11 +628,12 @@ func (s *Server) Serve(ln net.Listener) error {
 
 // ListenAndServe binds and serves until the listener is closed.
 func (s *Server) ListenAndServe() error {
-	ln, err := s.Listen()
+	b, err := s.Listen()
 	if err != nil {
 		return err
 	}
-	return s.Serve(ln)
+	s.SetBind(b)
+	return s.Serve(b.Listener)
 }
 
 // LANIP is a best-effort local address for the "open this on your phone" hint.

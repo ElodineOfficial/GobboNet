@@ -3,6 +3,7 @@ package catalog
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -137,5 +138,53 @@ func TestRealCatalogueParses(t *testing.T) {
 	}
 	if _, ok := c.Find(c.CPUOnly); !ok {
 		t.Errorf("cpu_only points at %d, which is not in the catalogue", c.CPUOnly)
+	}
+}
+
+// TestIniCarriesASHA256Pin covers the local pinning path. models.ini is the
+// catalogue an operator controls -- bundled by the installer, or hand-edited
+// for a private or air-gapped set of models -- so a hash written there is a
+// genuinely independent pin rather than a number fetched from the same host
+// that serves the weights.
+func TestIniCarriesASHA256Pin(t *testing.T) {
+	good := strings.Repeat("ab", 32)
+	path := filepath.Join(t.TempDir(), "models.ini")
+	body := "[catalog]\ncount=3\n\n" +
+		"[1]\ndisplay=Pinned\nrepo=o/r\nfile=a.gguf\nsha256=" + strings.ToUpper(good) + "\n\n" +
+		"[2]\ndisplay=Unpinned\nrepo=o/r\nfile=b.gguf\n\n" +
+		"[3]\ndisplay=Malformed\nrepo=o/r\nfile=c.gguf\nsha256=nothex\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	c, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	pinned, ok := c.Find(1)
+	if !ok {
+		t.Fatal("entry 1 missing")
+	}
+	// Normalised to lower case, so a pasted uppercase digest is not later read
+	// as a mismatch against a lower-case hash.
+	if pinned.SHA256 != good {
+		t.Errorf("entry 1 SHA256 = %q, want normalised %q", pinned.SHA256, good)
+	}
+
+	unpinned, _ := c.Find(2)
+	if unpinned.SHA256 != "" {
+		t.Errorf("entry 2 invented a hash: %q", unpinned.SHA256)
+	}
+
+	// A malformed pin is dropped rather than carried, so it cannot surface
+	// later as a checksum mismatch against a download that was fine. The entry
+	// itself survives: a bad hash is a bad hash, not a bad model.
+	bad, ok := c.Find(3)
+	if !ok {
+		t.Fatal("a malformed sha256 removed the whole entry")
+	}
+	if bad.SHA256 != "" {
+		t.Errorf("entry 3 kept a malformed hash: %q", bad.SHA256)
 	}
 }

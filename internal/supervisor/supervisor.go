@@ -326,6 +326,18 @@ func (s *Supervisor) start(file string) error {
 
 	exited := make(chan struct{})
 
+	// Tie the child's tree to this process's lifetime, so a kill that runs no
+	// Go code here does not leave llama-server holding VRAM and the port. A
+	// no-op on Unix; see killjob_unix.go for why.
+	//
+	// Failure is logged rather than fatal: this is a backstop for abnormal
+	// exits, and losing it does not stop a model from running. Every explicit
+	// cleanup path is unaffected.
+	if err := superviseTree(cmd); err != nil {
+		log.Printf("[swap] could not tie llama-server to this process's lifetime: %v", err)
+		log.Printf("[swap] it will still be stopped normally; a forced kill of gobbonet may leave it running")
+	}
+
 	s.mu.Lock()
 	s.cmd = cmd
 	s.pgid = processGroupID(cmd)

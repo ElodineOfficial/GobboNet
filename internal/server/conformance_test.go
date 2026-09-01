@@ -25,6 +25,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/jmccardle/gobbonet/internal/auth"
 	"github.com/jmccardle/gobbonet/internal/config"
@@ -962,9 +963,15 @@ func TestJobLifecycleAgainstDeadUpstream(t *testing.T) {
 		t.Errorf(`create status: got %v, want "running"`, created["status"])
 	}
 
-	// Poll until terminal. The upstream is unreachable, so this resolves fast.
+	// Poll until terminal. The upstream refuses the connection, so this
+	// resolves in milliseconds — but the job runs in a goroutine, and the dial
+	// still has to fail before it can record that. This loop used to run 200
+	// iterations back to back with no delay, which completes in microseconds:
+	// it was measuring how fast this process can poll, not whether the job ever
+	// finishes, and reported a job that was working correctly as a hang.
 	var final map[string]any
-	for i := 0; i < 200; i++ {
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
 		rec = do(t, srv, http.MethodGet, "/llm/jobs/"+id+"?from=0", nil)
 		if rec.Code != http.StatusOK {
 			t.Fatalf("poll: got %d, want 200", rec.Code)
@@ -973,6 +980,7 @@ func TestJobLifecycleAgainstDeadUpstream(t *testing.T) {
 		if final["status"] != "running" {
 			break
 		}
+		time.Sleep(5 * time.Millisecond)
 	}
 	if final["status"] != "error" {
 		t.Fatalf("job against a dead upstream: got status %v, want error", final["status"])

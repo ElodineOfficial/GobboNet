@@ -378,7 +378,7 @@ func (s *server) handleDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	dl := modelfetch.New(entry, dir)
+	dl := modelfetch.New(entry, dir, modelfetch.RequireChecksum(s.cfg.RequireChecksum))
 	s.mu.Lock()
 	s.dl = dl
 	s.mu.Unlock()

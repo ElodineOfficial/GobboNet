@@ -77,6 +77,21 @@ embed_url = "http://127.0.0.1:11436"
 model_catalog_remote = true
 model_catalog_url = "https://goblincorps.com/gobbonet_model_list.json"
 
+# Refuse to download a model that carries no published checksum.
+#
+# A download is verified against the catalogue's sha256 where there is
+# one, and against the hash HuggingFace records for the file otherwise.
+# The first is the stronger check: it does not come from the host serving
+# the weights, so the two would have to agree in order to lie. When both
+# exist and disagree, the download is refused outright.
+#
+# Left false because the models.ini that ships here carries no hashes and
+# the published catalogue does not yet either, so turning it on refuses
+# every stock download. Turn it on when you run a catalogue of your own
+# with a sha256 on every entry -- then a missing hash means the catalogue
+# is wrong, and you want to hear about it rather than download anyway.
+require_checksum = false
+
 # API key sent to the upstream llama.cpp server (never exposed to the
 # browser). Set this if your upstream requires authentication.
 # Alternatives, either of which wins over the value below:

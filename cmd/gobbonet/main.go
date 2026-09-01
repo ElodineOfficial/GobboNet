@@ -353,10 +353,11 @@ func cmdServe(argv []string) error {
 	// Bind before the banner. A port that is already taken is the single most
 	// common startup failure and it used to print underneath "[OK] serving on
 	// ...", which reads as a server that started and then broke.
-	listener, err := srv.Listen()
+	bind, err := srv.Listen()
 	if err != nil {
-		return portInUseError(cfg, err)
+		return bindError(cfg, err)
 	}
+	srv.SetBind(bind)
 
 	// Record the port we actually bound, beside this binary, where
 	// setup-lan.bat and launch.bat already look for it (%~dp0.gobbonet-port).
@@ -376,23 +377,49 @@ func cmdServe(argv []string) error {
 		fmt.Println("      Harmless unless you use setup-lan.bat, which reads it.")
 	}
 
-	address := cfg.ListenHost
-	if address == "0.0.0.0" || address == "::" {
-		address = server.LANIP()
-	}
+	// Report the address actually bound, never the configured one. After a
+	// fallback those differ, and printing the configured host would advertise
+	// phone access the socket cannot provide.
 	fmt.Println()
-	fmt.Printf(" [OK] serving on http://%s:%d/\n", address, cfg.ListenPort)
-	if cfg.ListenHost == "0.0.0.0" || cfg.ListenHost == "::" {
-		fmt.Printf("      this machine:  http://127.0.0.1:%d/\n", cfg.ListenPort)
-		fmt.Printf("      phone / LAN:   http://%s:%d/\n", address, cfg.ListenPort)
+	if bind.FellBack {
+		fmt.Println(" [!]  LAN access is OFF -- this machine could not bind a network address.")
+		fmt.Printf("      %v\n", bind.WideErr)
+		fmt.Println()
+		fmt.Printf(" [OK] serving on http://%s:%d/  (this machine only)\n", bind.Host, bind.Port)
+		fmt.Println()
+		for _, line := range lanBindHelp(cfg) {
+			if line == "" {
+				fmt.Println()
+				continue
+			}
+			fmt.Println("      " + line)
+		}
+	} else if bind.LANReachable() {
+		address := bind.Host
+		if address == "0.0.0.0" || address == "::" || address == "" {
+			address = server.LANIP()
+		}
+		fmt.Printf(" [OK] serving on http://%s:%d/\n", address, bind.Port)
+		fmt.Printf("      this machine:  http://127.0.0.1:%d/\n", bind.Port)
+		fmt.Printf("      phone / LAN:   http://%s:%d/\n", address, bind.Port)
+	} else {
+		// Loopback because the config asked for it. Not a warning.
+		fmt.Printf(" [OK] serving on http://%s:%d/  (this machine only)\n", bind.Host, bind.Port)
 	}
 	fmt.Printf(" [OK] data dir: %s\n", cfg.DataDir)
 	fmt.Println()
 	fmt.Println(" Press Ctrl+C to stop.")
 	fmt.Println()
 
+	// Stop the managed llama-server however this function ends, not only on
+	// Ctrl+C. Serve returns on a listener error too, and that path used to
+	// leave the child running: gobbonet exits, llama-server keeps the GPU and
+	// the port, and the next launch cannot bind.
+	defer srv.Shutdown()
+
 	// Stop the managed llama-server on Ctrl+C. Without this the child keeps the
-	// GPU allocated after we exit.
+	// GPU allocated after we exit. os.Exit skips the defer above, so the
+	// handler does its own shutdown rather than relying on it.
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 	go func() {
@@ -402,7 +429,31 @@ func cmdServe(argv []string) error {
 		os.Exit(0)
 	}()
 
-	return srv.Serve(listener)
+	return srv.Serve(bind.Listener)
+}
+
+// lanBindHelp is what to do about a denied LAN bind, in the order a user should
+// try it. Shared by the banner and the fatal path so the advice cannot drift.
+//
+// Windows is listed first because it is where this happens: Hyper-V, WSL and
+// Docker Desktop RESERVE port ranges, and a bind inside one fails with
+// "forbidden by its access permissions" while netstat shows nothing listening —
+// because nothing is. The range is reserved, not occupied. That distinction is
+// the whole reason the failure is hard to diagnose, so the check that reveals
+// it goes in the output rather than in a wiki page nobody reaches.
+func lanBindHelp(cfg config.Config) []string {
+	return []string{
+		"To reach this from your phone, try, in order:",
+		"",
+		"  1. Windows: check whether the port sits in a reserved range --",
+		"       netsh interface ipv4 show excludedportrange protocol=tcp",
+		"     If it does, pick a port outside every listed range:",
+		fmt.Sprintf("       gobbonet config set listen_port 9067   (writes %s)", cfg.Path),
+		"",
+		"  2. Windows: run setup-lan.bat as Administrator to open the firewall.",
+		"",
+		"  3. Linux/macOS: ports below 1024 need root. Use a higher one.",
+	}
 }
 
 // portInUseError explains a bind failure in the terms the two support reports
@@ -418,11 +469,10 @@ func cmdServe(argv []string) error {
 // Anything that is not an in-use error is returned unchanged: inventing an
 // explanation for a permission or bad-address failure would send the reader
 // after the wrong thing.
-func portInUseError(cfg config.Config, err error) error {
-	if !isAddrInUse(err) {
-		return err
-	}
-	return fmt.Errorf(`port %d is already in use, so nothing was started.
+func bindError(cfg config.Config, err error) error {
+	switch {
+	case isAddrInUse(err):
+		return fmt.Errorf(`port %d is already in use, so nothing was started.
 
   If you were already running GobboNet, that copy still holds the port --
   closing its window does not always stop it. End it (or reboot) and try
@@ -433,23 +483,61 @@ func portInUseError(cfg config.Config, err error) error {
       GOBBONET_LISTEN_PORT=9067 gobbonet serve  (just this run)
 
   Original error: %w`, cfg.ListenPort, cfg.Path, err)
+
+	case isPermissionDenied(err):
+		// Reaching here means loopback was refused too — Listen falls back on
+		// its own and only surfaces an error when both addresses failed. A
+		// refusal that follows the port across every address is the signature
+		// of a reserved range, so that check leads.
+		return fmt.Errorf(`port %d was refused on every address, so nothing was started.
+
+  This is a permission failure, not a busy port -- netstat will show nothing
+  listening, because nothing is. On Windows the usual cause is a RESERVED
+  port range claimed by Hyper-V, WSL or Docker Desktop. Check with:
+
+      netsh interface ipv4 show excludedportrange protocol=tcp
+
+  Then pick a port outside every listed range:
+      gobbonet config set listen_port 9067      (writes %s)
+      GOBBONET_LISTEN_PORT=9067 gobbonet serve  (just this run)
+
+  On Linux and macOS, ports below 1024 need root; use a higher one.
+
+  Original error: %w`, cfg.ListenPort, cfg.Path, err)
+	}
+	return err
 }
 
 // isAddrInUse reports whether err is "that port is taken".
 //
 // syscall.EADDRINUSE alone is not enough: on Windows the failure arrives as
-// WSAEADDRINUSE (10048), a different Errno that does not compare equal to it,
-// and WSAEACCES (10013) is what an exclusive-use binding produces.
+// WSAEADDRINUSE (10048), a different Errno that does not compare equal to it.
+//
+// WSAEACCES (10013) used to be treated as in-use here, on the grounds that an
+// exclusive-use binding produces it. It does — but so does a reserved port
+// range, and so does firewall policy, and those are the common cases. Reporting
+// them as "already in use" sent the reader looking for a process to kill that
+// does not exist, past the one command that would have shown the real cause.
+// It is classified as a permission failure below instead.
 func isAddrInUse(err error) bool {
 	if errors.Is(err, syscall.EADDRINUSE) {
 		return true
 	}
 	var errno syscall.Errno
 	if errors.As(err, &errno) {
-		switch uintptr(errno) {
-		case 10048, 10013:
-			return true
-		}
+		return uintptr(errno) == 10048 // WSAEADDRINUSE
+	}
+	return false
+}
+
+// isPermissionDenied reports whether err is "you may not have that port".
+func isPermissionDenied(err error) bool {
+	if errors.Is(err, syscall.EACCES) || errors.Is(err, syscall.EPERM) {
+		return true
+	}
+	var errno syscall.Errno
+	if errors.As(err, &errno) {
+		return uintptr(errno) == 10013 // WSAEACCES
 	}
 	return false
 }

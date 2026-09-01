@@ -198,6 +198,23 @@ def main():
         out.append("min_vram=%d" % min_vram[idx])
         out.append("ctx=%s" % fields.get("CTX_SIZE", "16384"))
         out.append("kv=%s" % fields.get("KV_CACHE_TYPE", "q8_0"))
+        # Optional SHA-256 pin, carried through from launch.bat when a
+        # DL_SHA256 is set beside the repo and file.
+        #
+        # This is the hash that does NOT come from HuggingFace, which is the
+        # whole of its value: the weights and their LFS pointer both come from
+        # there, so checking one against the other proves the transfer was not
+        # corrupted but says nothing about authenticity. A hash recorded here
+        # means two parties would have to agree in order to lie.
+        #
+        # Absent is normal. The downloader falls back to the LFS pointer, which
+        # is what shipped before the field existed.
+        sha = (fields.get("DL_SHA256") or "").strip().lower()
+        if sha:
+            if len(sha) != 64 or any(c not in "0123456789abcdef" for c in sha):
+                die("choice %d has a DL_SHA256 that is not 64 hex characters: %r"
+                    % (idx, sha))
+            out.append("sha256=%s" % sha)
         out.append("")
 
     with open(dst, "w", encoding="utf-8", newline="\r\n") as handle:
