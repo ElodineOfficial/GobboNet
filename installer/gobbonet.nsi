@@ -646,9 +646,9 @@ $\r$\n$\r$\nFree some space, or choose a smaller model."
   ${AndIf} $HwVram < $1
     MessageBox MB_ICONEXCLAMATION|MB_YESNO \
       "$PickDisplay wants about $1 GB of GPU memory, but only $HwVram GB was \
-detected.$\r$\n$\r$\nIt can still run by spilling into system RAM, but expect it \
-to be noticeably slower than a model that fits your GPU.$\r$\n$\r$\nDownload it \
-anyway?" IDYES +2
+detected.$\r$\n$\r$\nIt may run far more slowly than a model that fits, and on a \
+large enough shortfall llama-server will fail to start at all rather than fall \
+back to system RAM.$\r$\n$\r$\nDownload it anyway?" IDYES +2
     Abort
   ${EndIf}
 FunctionEnd

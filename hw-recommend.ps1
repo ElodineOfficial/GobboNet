@@ -30,16 +30,27 @@ $ErrorActionPreference = 'SilentlyContinue'
 # MUST match the PICK_MIN list in launch.bat. They are separate because one
 # is consumed by batch and one by PowerShell; if they drift, the menu warns
 # about a different threshold than the one that actually gates the download.
+# gen-catalog.py refuses to build a catalogue when they disagree.
+#
+# Each figure is the model's download size plus 2 GB, because weights are not
+# the only thing that has to fit: the KV cache, llama.cpp's compute buffers
+# and the display itself all come out of the same card. These used to be set
+# to the download size alone, which made the pre-download warning unreachable
+# for exactly the cards that needed it -- a 12 GB card asked for a 12 GB model
+# and 12 >= 12 waved it through (issue #23).
+#
+# Raised, never lowered. Slot 10 already demanded more than size+2 and that
+# judgement is left as it was.
 $min = @{
-    1 = 6      # Gemma 4 E4B IT            ~5.4 GB
-    2 = 4      # Llama 3.2 3B Instruct     ~3.4 GB
-    3 = 8      # Mistral 7B v0.3           ~7.5 GB
-    4 = 8      # Qwen3.5 9B                ~6.2 GB
-    5 = 16     # Gemma 4 26B-A4B MoE       ~16 GB
+    1 = 8      # Gemma 4 E4B IT            ~5.4 GB
+    2 = 6      # Llama 3.2 3B Instruct     ~3.4 GB
+    3 = 10     # Mistral 7B v0.3           ~7.5 GB
+    4 = 9      # Qwen3.5 9B                ~6.2 GB
+    5 = 18     # Gemma 4 26B-A4B MoE       ~16 GB
     6 = 24     # Qwen3.6 35B-A3B MoE       ~22 GB  (largest in the catalogue)
-    7 = 10     # DeepSeek-R1 8B            ~8.5 GB
-    8 = 12     # gpt-oss 20B               ~12 GB
-    9 = 8      # Command R 7B              ~6.6 GB
+    7 = 11     # DeepSeek-R1 8B            ~8.5 GB
+    8 = 14     # gpt-oss 20B               ~12 GB
+    9 = 9      # Command R 7B              ~6.6 GB
     10 = 24    # Command R 35B             ~19 GB
 }
 
@@ -75,12 +86,29 @@ $disk = [int]$h.disk.free_gb
 # Deliberately stops at slot 5 rather than recommending slot 6 to a 24 GB
 # card -- 22 GB of weights leaves under 2 GB for the KV cache, and a
 # recommendation that fails to load is worse than a conservative one.
+#
+# That same reasoning had not been applied to the rungs below it. Each
+# threshold was the model's download size, so three of the four rungs offered
+# a model that filled the card exactly:
+#
+#     16 GB -> Gemma 4 26B (16 GB file)   0.0 GB spare
+#     12 GB -> gpt-oss 20B (12 GB file)   0.0 GB spare
+#      6 GB -> Gemma 4 E4B (5.4 GB file)  0.6 GB spare
+#
+# Only the middle one was reported (#23), on an RTX 4070 where llama.cpp
+# found 11,030 MiB free against an 11.28 GiB model -- the weights alone did
+# not fit, before any cache. The other two are the same bug on other cards.
+#
+# Every rung now leaves at least 2 GB, the headroom_gb the catalogue schema
+# already defines. Slot 5 keeps the biggest cards; gpt-oss moves up to the
+# 16 GB rung where it has room; 12 GB gets Qwen3.5 9B, which is what #39
+# proposed and what the issue thread expects.
 $rec = 0
 if     ($t -eq 'cpu_only') { $rec = 2 }
-elseif ($v -ge 16)         { $rec = 5 }
-elseif ($v -ge 12)         { $rec = 8 }
-elseif ($v -ge 8)          { $rec = 4 }
-elseif ($v -ge 6)          { $rec = 1 }
+elseif ($v -ge 20)         { $rec = 5 }
+elseif ($v -ge 16)         { $rec = 8 }
+elseif ($v -ge 12)         { $rec = 4 }
+elseif ($v -ge 8)          { $rec = 1 }
 else                       { $rec = 2 }
 
 'HW_OK=1'

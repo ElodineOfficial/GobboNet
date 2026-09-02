@@ -1151,25 +1151,26 @@ if not defined MODEL_CHOICE if not "!REC!"=="0" set "MODEL_CHOICE=!REC!"
 :: download 16 GB of model that will crawl. Skipped when VRAM is unknown
 :: (HW_VRAM=0) so we never block on a failed probe.
 set "PICK_MIN=0"
-if "!MODEL_CHOICE!"=="1" set "PICK_MIN=6"
-if "!MODEL_CHOICE!"=="2" set "PICK_MIN=4"
-if "!MODEL_CHOICE!"=="3" set "PICK_MIN=8"
-if "!MODEL_CHOICE!"=="4" set "PICK_MIN=8"
-if "!MODEL_CHOICE!"=="5" set "PICK_MIN=16"
+if "!MODEL_CHOICE!"=="1" set "PICK_MIN=8"
+if "!MODEL_CHOICE!"=="2" set "PICK_MIN=6"
+if "!MODEL_CHOICE!"=="3" set "PICK_MIN=10"
+if "!MODEL_CHOICE!"=="4" set "PICK_MIN=9"
+if "!MODEL_CHOICE!"=="5" set "PICK_MIN=18"
 if "!MODEL_CHOICE!"=="6" set "PICK_MIN=24"
-if "!MODEL_CHOICE!"=="7" set "PICK_MIN=10"
-if "!MODEL_CHOICE!"=="8" set "PICK_MIN=12"
+if "!MODEL_CHOICE!"=="7" set "PICK_MIN=11"
+if "!MODEL_CHOICE!"=="8" set "PICK_MIN=14"
 :: 9 and 10 had no gate at all, so the VRAM warning never fired for them --
 :: including for slot 10, which is the second-largest model in the list.
-if "!MODEL_CHOICE!"=="9" set "PICK_MIN=8"
+if "!MODEL_CHOICE!"=="9" set "PICK_MIN=9"
 if "!MODEL_CHOICE!"=="10" set "PICK_MIN=24"
 if not defined HW_VRAM set "HW_VRAM=0"
 if !HW_VRAM! gtr 0 if !PICK_MIN! gtr 0 if !HW_VRAM! lss !PICK_MIN! (
     echo.
     echo  [*] Heads up: this model wants about !PICK_MIN! GB of GPU
-    echo       memory, but only !HW_VRAM! GB was detected. It can still
-    echo       run by spilling into system RAM, but expect it to be
-    echo       noticeably slower than a model that fits your GPU.
+    echo       memory, but only !HW_VRAM! GB was detected. It may run
+    echo       far more slowly than a model that fits, and on a large
+    echo       enough shortfall llama-server will fail to start at all
+    echo       rather than fall back to system RAM.
     echo.
     call :prompt_yn "  Download it anyway?" GO_BIG
     if /i "!GO_BIG!"=="N" goto :show_catalog
