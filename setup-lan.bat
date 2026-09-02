@@ -5,6 +5,44 @@
 :: rules would be written for a port called "!WEB_PORT!" -- which fails
 :: quietly and looks exactly like a firewall that did not work.
 setlocal EnableDelayedExpansion
+
+:: ---------------------------------------------------------------
+:: TOOL PATH ANCHOR -- silences "The system cannot find the drive
+:: specified." (issues #36, #17, #37)
+::
+:: Every external tool this script uses -- powershell, curl, tar,
+:: certutil, reg, findstr, netsh, tasklist, taskkill, timeout, ping,
+:: where -- ships in System32. Naming one bare, the way batch files
+:: normally do, makes Windows walk %PATH% folder by folder until it
+:: finds a match. A dead entry anywhere ahead of System32 in that
+:: list -- an unmapped network drive, a USB stick that is gone, a
+:: leftover from an uninstalled program -- makes the walk print
+::
+::     The system cannot find the drive specified.
+::
+:: once per lookup, then carry on and find the tool anyway. Nothing
+:: is broken. But it is the first thing on screen and it reads like
+:: a failure, which is why it keeps getting reported.
+::
+:: Putting System32 at the FRONT of the search order means every one
+:: of those lookups hits on the first folder tried, so a dead entry
+:: further down is never probed and never gets to complain. It also
+:: means nothing earlier in %PATH% can shadow curl or certutil --
+:: worth having, since those two download and checksum the models.
+::
+:: This is NOT the working-directory bug it is usually mistaken for.
+:: The installer's shortcuts already start in the install folder
+:: (SetOutPath "$INSTDIR" runs before CreateShortcut), and every path
+:: below is built from %~dp0 rather than from the current directory.
+:: Adding `cd /d "%~dp0"` therefore changes nothing -- see #37, where
+:: it was tried and the message stayed.
+::
+:: We only touch %PATH% once we have confirmed a real System32, so a
+:: machine with an odd %SystemRoot% is left exactly as it was.
+:: ---------------------------------------------------------------
+set "SYS32=%SystemRoot%\System32"
+if not exist "%SYS32%\cmd.exe" set "SYS32=%windir%\System32"
+if exist "%SYS32%\cmd.exe" set "PATH=%SYS32%;%SYS32%\WindowsPowerShell\v1.0;%PATH%"
 title Gemma 4 -- LAN Access Setup (one-time)
 color 0A
 
@@ -52,10 +90,10 @@ echo.
 set "WEB_PORT="
 set "WEB_PORT_SRC="
 if exist "%~dp0.gobbonet-port" (
-    :: Digits only, matching launch.bat. If these two ever disagree about the
-    :: port, the firewall rule and the URL reservation land on a port nothing
-    :: listens on -- which looks like a broken firewall and is nothing of the
-    :: kind. Same parse, same result, whatever wrote the file.
+    rem Digits only, matching launch.bat. If these two ever disagree about the
+    rem port, the firewall rule and the URL reservation land on a port nothing
+    rem listens on -- which looks like a broken firewall and is nothing of the
+    rem kind. Same parse, same result, whatever wrote the file.
     for /f "usebackq delims=" %%P in ("%~dp0.gobbonet-port") do if not defined WEB_PORT_SRC set "WEB_PORT_SRC=%%P"
     set "GN_RAWPORT=!WEB_PORT_SRC!"
     for /f "usebackq delims=" %%D in (`powershell -NoProfile -Command "($env:GN_RAWPORT -replace '[^0-9]','')"`) do set "WEB_PORT=%%D"
@@ -149,9 +187,9 @@ echo  [..] Enabling mDNS (.local hostname) on Private + Public profiles...
 
 netsh advfirewall firewall set rule name="mDNS (UDP-In)" new enable=yes profile=private,public >nul 2>&1
 if errorlevel 1 (
-    :: Older builds may not have the canonical rule name. Add a fresh
-    :: one as a fallback so the .local hostname still works -- scoped
-    :: to private + local subnet to match the service rules.
+    rem Older builds may not have the canonical rule name. Add a fresh
+    rem one as a fallback so the .local hostname still works -- scoped
+    rem to private + local subnet to match the service rules.
     netsh advfirewall firewall show rule name="Gemma4-mDNS" >nul 2>&1
     if errorlevel 1 (
         netsh advfirewall firewall add rule name="Gemma4-mDNS" dir=in action=allow protocol=UDP localport=5353 profile=private,public remoteip=LocalSubnet >nul

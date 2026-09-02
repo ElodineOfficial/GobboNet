@@ -4,6 +4,44 @@
 :: to it with !WEB_PORT!. With plain setlocal those expand to literal text
 :: and the deletes silently target a port called "!WEB_PORT!".
 setlocal EnableDelayedExpansion
+
+:: ---------------------------------------------------------------
+:: TOOL PATH ANCHOR -- silences "The system cannot find the drive
+:: specified." (issues #36, #17, #37)
+::
+:: Every external tool this script uses -- powershell, curl, tar,
+:: certutil, reg, findstr, netsh, tasklist, taskkill, timeout, ping,
+:: where -- ships in System32. Naming one bare, the way batch files
+:: normally do, makes Windows walk %PATH% folder by folder until it
+:: finds a match. A dead entry anywhere ahead of System32 in that
+:: list -- an unmapped network drive, a USB stick that is gone, a
+:: leftover from an uninstalled program -- makes the walk print
+::
+::     The system cannot find the drive specified.
+::
+:: once per lookup, then carry on and find the tool anyway. Nothing
+:: is broken. But it is the first thing on screen and it reads like
+:: a failure, which is why it keeps getting reported.
+::
+:: Putting System32 at the FRONT of the search order means every one
+:: of those lookups hits on the first folder tried, so a dead entry
+:: further down is never probed and never gets to complain. It also
+:: means nothing earlier in %PATH% can shadow curl or certutil --
+:: worth having, since those two download and checksum the models.
+::
+:: This is NOT the working-directory bug it is usually mistaken for.
+:: The installer's shortcuts already start in the install folder
+:: (SetOutPath "$INSTDIR" runs before CreateShortcut), and every path
+:: below is built from %~dp0 rather than from the current directory.
+:: Adding `cd /d "%~dp0"` therefore changes nothing -- see #37, where
+:: it was tried and the message stayed.
+::
+:: We only touch %PATH% once we have confirmed a real System32, so a
+:: machine with an odd %SystemRoot% is left exactly as it was.
+:: ---------------------------------------------------------------
+set "SYS32=%SystemRoot%\System32"
+if not exist "%SYS32%\cmd.exe" set "SYS32=%windir%\System32"
+if exist "%SYS32%\cmd.exe" set "PATH=%SYS32%;%SYS32%\WindowsPowerShell\v1.0;%PATH%"
 title GobboNet -- Remove LAN Access
 color 0A
 

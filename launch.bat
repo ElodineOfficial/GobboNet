@@ -1,5 +1,55 @@
 @echo off
 :: ---------------------------------------------------------------
+:: TOOL PATH ANCHOR -- silences "The system cannot find the drive
+:: specified." (issues #36, #17, #37)
+::
+:: Every external tool this script uses -- powershell, curl, tar,
+:: certutil, reg, findstr, netsh, tasklist, taskkill, timeout, ping,
+:: where -- ships in System32. Naming one bare, the way batch files
+:: normally do, makes Windows walk %PATH% folder by folder until it
+:: finds a match. A dead entry anywhere ahead of System32 in that
+:: list -- an unmapped network drive, a USB stick that is gone, a
+:: leftover from an uninstalled program -- makes the walk print
+::
+::     The system cannot find the drive specified.
+::
+:: once per lookup, then carry on and find the tool anyway. Nothing
+:: is broken. But it is the first thing on screen and it reads like
+:: a failure, which is why it keeps getting reported.
+::
+:: Putting System32 at the FRONT of the search order means every one
+:: of those lookups hits on the first folder tried, so a dead entry
+:: further down is never probed and never gets to complain.
+::
+:: Kept as hardening rather than as a proven cure. One machine that
+:: still showed the message turned out to have no dead %PATH% entry at
+:: all, and its bare lookups were silent when run by hand -- so this
+:: does not explain every report, and may explain none of them. It
+:: costs one line, cannot regress a healthy box, and stops anything
+:: earlier in %PATH% shadowing curl or certutil, which is worth having
+:: on its own since those two download and checksum the models.
+::
+:: This is NOT the working-directory bug it is usually mistaken for.
+:: The installer's shortcuts already start in the install folder
+:: (SetOutPath "$INSTDIR" runs before CreateShortcut), and every path
+:: below is built from %~dp0 rather than from the current directory.
+:: Adding `cd /d "%~dp0"` therefore changes nothing -- see #37, where
+:: it was tried and the message stayed.
+::
+:: We only touch %PATH% once we have confirmed a real System32, so a
+:: machine with an odd %SystemRoot% is left exactly as it was.
+::
+:: This sits ABOVE the keep-open guard on purpose: the guard's own
+:: `cmd /k` is a bare-name lookup too, so anchoring after it would
+:: leave one stray line still printing before anything else runs.
+:: The relaunched copy inherits the anchored %PATH% and re-runs these
+:: three lines harmlessly; a duplicate System32 entry costs nothing.
+:: ---------------------------------------------------------------
+set "SYS32=%SystemRoot%\System32"
+if not exist "%SYS32%\cmd.exe" set "SYS32=%windir%\System32"
+if exist "%SYS32%\cmd.exe" set "PATH=%SYS32%;%SYS32%\WindowsPowerShell\v1.0;%PATH%"
+
+:: ---------------------------------------------------------------
 :: KEEP-OPEN GUARD -- this window can NEVER silently vanish.
 :: If anything fails (a crash, a blocked tool, a bad path, even a
 :: stray syntax error), the message stays on screen instead of the
@@ -34,7 +84,26 @@ set "HAVE_PS="
 set "HAVE_CERTUTIL="
 set "HAVE_TAR="
 
-curl.exe --version >nul 2>&1
+:: Each probe below runs the tool from its absolute System32 path, and
+:: only falls back to a bare name if the tool genuinely is not there
+:: (a pre-1803 Windows, or a custom build). The absolute path is belt
+:: and braces on top of the PATH anchor above: it means these five --
+:: the ones that run before anything is printed, and so the ones users
+:: actually see complain -- never touch %PATH% at all, not even on a
+:: machine where the tool is missing and the search would otherwise
+:: walk every folder in the list looking for it.
+set "T_CURL=%SYS32%\curl.exe"
+if not exist "!T_CURL!" set "T_CURL=curl.exe"
+set "T_PS=%SYS32%\WindowsPowerShell\v1.0\powershell.exe"
+if not exist "!T_PS!" set "T_PS=powershell"
+set "T_CERTUTIL=%SYS32%\certutil.exe"
+if not exist "!T_CERTUTIL!" set "T_CERTUTIL=certutil"
+set "T_TAR=%SYS32%\tar.exe"
+if not exist "!T_TAR!" set "T_TAR=tar"
+set "T_REG=%SYS32%\reg.exe"
+if not exist "!T_REG!" set "T_REG=reg"
+
+"!T_CURL!" --version >nul 2>&1
 if not errorlevel 1 set "HAVE_CURL=1"
 
 :: An exit-code check is NOT enough here. Wine ships a powershell.exe
@@ -44,14 +113,24 @@ if not errorlevel 1 set "HAVE_CURL=1"
 :: PowerShell to echo a marker back AND to resolve the .NET type the
 :: file server is actually built on. Either failure means there is no
 :: usable PowerShell on this machine.
+::
+:: The path here is deliberately NOT quoted, and that is load-bearing.
+:: `for /f` hands its command to a second cmd, which strips one quote
+:: off the front and one off the end before running it. A command that
+:: BEGINS with a quote therefore arrives mangled, the probe captures
+:: nothing, and the script wrongly concludes PowerShell is broken --
+:: measured on Windows 10.0.26200: quoted returns empty, unquoted and
+:: bare both return the marker. %SystemRoot% cannot contain a space, so
+:: leaving the quotes off is safe; the bare-name fallback above needs
+:: none either.
 set "PS_PROBE="
-for /f "usebackq delims=" %%P in (`powershell -NoProfile -Command "$null=[System.Net.HttpListener]; Write-Output 'GOBBONET_PS_OK'" 2^>nul`) do set "PS_PROBE=%%P"
+for /f "usebackq delims=" %%P in (`!T_PS! -NoProfile -Command "$null=[System.Net.HttpListener]; Write-Output 'GOBBONET_PS_OK'" 2^>nul`) do set "PS_PROBE=%%P"
 if /i "!PS_PROBE!"=="GOBBONET_PS_OK" set "HAVE_PS=1"
 
-certutil -? >nul 2>&1
+"!T_CERTUTIL!" -? >nul 2>&1
 if not errorlevel 1 set "HAVE_CERTUTIL=1"
 
-tar --version >nul 2>&1
+"!T_TAR!" --version >nul 2>&1
 if not errorlevel 1 set "HAVE_TAR=1"
 
 :: Are we on Wine? A registry probe answers this without needing
@@ -59,7 +138,7 @@ if not errorlevel 1 set "HAVE_TAR=1"
 :: hardware-probe.ps1 would be useless on exactly the systems that
 :: need to see it.
 set "ON_WINE="
-reg query "HKCU\Software\Wine" >nul 2>&1
+"!T_REG!" query "HKCU\Software\Wine" >nul 2>&1
 if not errorlevel 1 set "ON_WINE=1"
 
 if defined ON_WINE (
@@ -155,16 +234,16 @@ if defined GEMMA_LLM_PORT (
 set "WEB_PORT="
 set "WEB_PORT_SRC="
 if exist "%~dp0.gobbonet-port" (
-    :: Digits only, deliberately.
-    ::
-    :: A plain `for /f` read of this file is fragile in ways that all look
-    :: identical from the outside: a UTF-8 BOM, a UTF-16 file (which some
-    :: installer toolchains produce), a trailing CR, or a stray space each
-    :: yield a value that fails the numeric test below. The old code then
-    :: fell back to 9066 SILENTLY -- so a user who picked 8420 during setup
-    :: got 9066 with no explanation, which reads exactly like "custom ports
-    :: do not work". Strip everything that is not a digit and the file
-    :: parses the same whatever wrote it.
+    rem Digits only, deliberately.
+    rem
+    rem A plain `for /f` read of this file is fragile in ways that all look
+    rem identical from the outside: a UTF-8 BOM, a UTF-16 file [which some
+    rem installer toolchains produce], a trailing CR, or a stray space each
+    rem yield a value that fails the numeric test below. The old code then
+    rem fell back to 9066 SILENTLY -- so a user who picked 8420 during setup
+    rem got 9066 with no explanation, which reads exactly like 'custom ports
+    rem do not work'. Strip everything that is not a digit and the file
+    rem parses the same whatever wrote it.
     for /f "usebackq delims=" %%P in ("%~dp0.gobbonet-port") do if not defined WEB_PORT_SRC set "WEB_PORT_SRC=%%P"
     if defined HAVE_PS (
         set "GN_RAWPORT=!WEB_PORT_SRC!"
@@ -1140,9 +1219,9 @@ if "!MODEL_CHOICE!"=="4" (
     set "MODEL_DISPLAY=Qwen3.5 9B"
     set "MODEL_FAMILY=qwen"
     set "MODEL_MAX_CTX=131072"
-    :: Qwen3.5 emits reasoning between <think> tags like the rest of the
-    :: Qwen3 line. identify-model.ps1 re-detects this from the GGUF after
-    :: download, so this value only has to be right enough to start with.
+    rem Qwen3.5 emits reasoning between [think] tags like the rest of the
+    rem Qwen3 line. identify-model.ps1 re-detects this from the GGUF after
+    rem download, so this value only has to be right enough to start with.
     set "MODEL_THINK_FMT=deepseek"
     set "CTX_SIZE=32768"
     set "KV_CACHE_TYPE=q8_0"
@@ -1168,19 +1247,19 @@ if "!MODEL_CHOICE!"=="6" (
     set "MODEL_FAMILY=qwen"
     set "MODEL_MAX_CTX=131072"
     set "MODEL_THINK_FMT=deepseek"
-    :: 8192, not the 16384 its predecessor used. The weights are 22.29 GB
-    :: and the gate below asks for 24 GB, so on a card that only just
-    :: qualifies there is under 2 GB left for the KV cache. A context that
-    :: does not fit fails at load with an out-of-memory error rather than
-    :: degrading, so the default errs small; the config panel raises it for
-    :: anyone with headroom.
+    rem 8192, not the 16384 its predecessor used. The weights are 22.29 GB
+    rem and the gate below asks for 24 GB, so on a card that only just
+    rem qualifies there is under 2 GB left for the KV cache. A context that
+    rem does not fit fails at load with an out-of-memory error rather than
+    rem degrading, so the default errs small; the config panel raises it for
+    rem anyone with headroom.
     set "CTX_SIZE=8192"
     set "KV_CACHE_TYPE=q8_0"
     goto :download_model
 )
 if "!MODEL_CHOICE!"=="7" (
-    :: The repo and the filename both carry a deepseek-ai_ prefix. Without
-    :: it the URL 404s, which is what made this slot uninstallable.
+    rem The repo and the filename both carry a deepseek-ai_ prefix. Without
+    rem it the URL 404s, which is what made this slot uninstallable.
     set "DL_REPO=bartowski/deepseek-ai_DeepSeek-R1-0528-Qwen3-8B-GGUF"
     set "DL_FILE=deepseek-ai_DeepSeek-R1-0528-Qwen3-8B-Q8_0.gguf"
     set "MODEL_ID=deepseek-r1-8b"
@@ -1194,8 +1273,8 @@ if "!MODEL_CHOICE!"=="7" (
 )
 if "!MODEL_CHOICE!"=="8" (
     set "DL_REPO=ggml-org/gpt-oss-20b-GGUF"
-    :: MXFP4 uppercase. Hugging Face paths are case-sensitive, so the
-    :: lowercase spelling 404s.
+    rem MXFP4 uppercase. Hugging Face paths are case-sensitive, so the
+    rem lowercase spelling 404s.
     set "DL_FILE=gpt-oss-20b-MXFP4.gguf"
     set "MODEL_ID=gpt-oss-20b"
     set "MODEL_DISPLAY=gpt-oss 20B"
@@ -1275,11 +1354,11 @@ if not "!HTTP_OK!"=="1" (
     echo.
     echo  [ERROR] Download failed.
     echo.
-    :: The partial file is kept on a TRANSPORT failure, deliberately, so
-    :: re-running resumes instead of starting a multi-gigabyte transfer
-    :: over. It is still deleted further down when VERIFICATION fails --
-    :: a file that arrived intact but hashes wrong is not something to
-    :: resume, it is something to discard.
+    rem The partial file is kept on a TRANSPORT failure, deliberately, so
+    rem re-running resumes instead of starting a multi-gigabyte transfer
+    rem over. It is still deleted further down when VERIFICATION fails --
+    rem a file that arrived intact but hashes wrong is not something to
+    rem resume, it is something to discard.
     if exist "!GGUF_PART!" (
         for %%A in ("!GGUF_PART!") do set "PART_MB=%%~zA"
         echo         The partial download has been kept. Run launch.bat
@@ -2034,11 +2113,11 @@ if !FRETRIES! gtr 8 (
     echo.
     echo  [*] File server did not come up on :!WEB_PORT!.
     echo.
-    :: fileserver.ps1 has always printed the specific reason -- into a
-    :: window started with -WindowStyle Hidden, so nobody ever read it.
-    :: It now mirrors startup output to fileserver.log. Print that rather
-    :: than guessing; the old guess named one of four possible causes and
-    :: was usually the wrong one.
+    rem fileserver.ps1 has always printed the specific reason -- into a
+    rem window started with -WindowStyle Hidden, so nobody ever read it.
+    rem It now mirrors startup output to fileserver.log. Print that rather
+    rem than guessing; the old guess named one of four possible causes and
+    rem was usually the wrong one.
     if exist "%~dp0fileserver.log" (
         echo      --- fileserver.log -------------------------------------
         type "%~dp0fileserver.log"
@@ -2049,11 +2128,11 @@ if !FRETRIES! gtr 8 (
         echo      script policy, or antivirus quarantine of fileserver.ps1.
     )
     echo.
-    :: The old text said "Desktop chat still works normally." It does not:
-    :: chat.html is SERVED by this file server and all model traffic is
-    :: proxied same-origin through /llm, so when this is down there is no
-    :: chat at all. A leftover from the pre-proxy design, and reporters
-    :: were right to call it out.
+    rem The old text said 'Desktop chat still works normally.' It does not:
+    rem chat.html is SERVED by this file server and all model traffic is
+    rem proxied same-origin through /llm, so when this is down there is no
+    rem chat at all. A leftover from the pre-proxy design, and reporters
+    rem were right to call it out.
     echo      Desktop chat is ALSO down -- chat.html is served by this
     echo      server, so there is nothing for the browser to reach.
     echo.
@@ -2396,15 +2475,15 @@ if defined HAVE_CURL (
         curl.exe -s -L --fail --retry 3 -o "!_O!" "!_U!"
         if not errorlevel 1 set "_OK=1"
     ) else if /i "!_Q!"=="resume" (
-        :: -C - continues a partial file instead of starting over. Worth
-        :: having for a 22 GB model on a domestic connection, where losing
-        :: 90%% of a download to a dropped Wi-Fi link is a real event.
+        rem -C - continues a partial file instead of starting over. Worth
+        rem having for a 22 GB model on a domestic connection, where losing
+        rem 90%% of a download to a dropped Wi-Fi link is a real event.
         curl.exe -L --fail --retry 3 -C - --progress-bar -o "!_O!" "!_U!"
         if not errorlevel 1 set "_OK=1"
-        :: A server that does not honour range requests fails the resume
-        :: rather than ignoring it, and so does a .part left over from an
-        :: interrupted transfer of a DIFFERENT build of the same filename.
-        :: Both are fixed by starting clean, so try exactly once more.
+        rem A server that does not honour range requests fails the resume
+        rem rather than ignoring it, and so does a .part left over from an
+        rem interrupted transfer of a DIFFERENT build of the same filename.
+        rem Both are fixed by starting clean, so try exactly once more.
         if not "!_OK!"=="1" (
             echo       [..] resume refused -- restarting this download from the beginning...
             del /f /q "!_O!" >nul 2>&1
@@ -2494,24 +2573,36 @@ goto :eof
 :: ours and rejects a stranger's. Matching on "status" rather than "ok"
 :: matters: "ok" appears inside "cookie", "broken" and "look", which show up
 :: in ordinary HTML error pages.
+::
+:: WHY THIS IS PIPED rather than staged through a scratch file in %TEMP%,
+:: which is what it used to do (issue #36 follow-up). The file version
+:: printed "The system cannot find the drive specified." once per call on
+:: some machines. :http_health below has always had this piped shape and
+:: has never printed it -- including one session where it polled five
+:: times in a row silently while all three :http_alive calls complained.
+:: Running the old body statement by statement outside the launcher
+:: reproduced nothing at all, so rather than keep hunting for which line
+:: was talking, this drops the scratch file, the delete and %TEMP%
+:: entirely. The two probes are now the same routine bar the -f flag and
+:: the token they match, which puts this one on the shape already known
+:: to be quiet.
+::
+:: With -f, a non-2xx reply reaches findstr as nothing at all and the
+:: match fails, so the pipe carries the same meaning the two-step version
+:: did: RC=0 only on a 2xx body that actually contains "status".
 :http_alive
 setlocal EnableDelayedExpansion
 set "_RC=1"
-set "_BODY=%TEMP%\gn_probe_%RANDOM%.txt"
 if defined HAVE_CURL (
-    :: -f makes curl fail on any status >= 400 instead of quietly saving the
-    :: error page and exiting 0.
-    curl.exe -s -f -o "!_BODY!" "%~1" >nul 2>&1
-    if not errorlevel 1 (
-        findstr /i "status" "!_BODY!" >nul 2>&1
-        if not errorlevel 1 set "_RC=0"
-    )
+    rem -f makes curl fail on any status of 400 or above instead of emitting
+    rem the error page and exiting 0.
+    curl.exe -s -f "%~1" 2>nul | findstr /i "status" >nul 2>&1
+    if not errorlevel 1 set "_RC=0"
 ) else (
     set "GN_URL=%~1"
     powershell -NoProfile -ExecutionPolicy Bypass -Command "try { $r=[Net.WebRequest]::Create($env:GN_URL); $r.Timeout=3000; $resp=$r.GetResponse(); if ([int]$resp.StatusCode -ne 200) { $resp.Close(); exit 1 }; $sr=New-Object IO.StreamReader($resp.GetResponseStream()); $b=$sr.ReadToEnd(); $sr.Close(); $resp.Close(); if ($b -match 'status') { exit 0 } else { exit 1 } } catch { exit 1 }" >nul 2>&1
     if not errorlevel 1 set "_RC=0"
 )
-del /f /q "!_BODY!" >nul 2>&1
 endlocal & exit /b %_RC%
 
 :: :http_health <url>  -> errorlevel 0 if the body contains "ok"
