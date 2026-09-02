@@ -304,6 +304,14 @@ let state = {
 let isGenerating = false;
 let abortController = null;
 let serverConnected = false;
+// Why llama-server is down, straight from the supervisor via /swap-status.
+// Empty when it is up, or when nothing could tell us. serverOfflinePhase
+// separates "failed" from "still loading" -- both leave serverConnected false,
+// but only one of them is a problem the user should act on. See issue #43:
+// the landing page used to answer this question with a guess, and the guess
+// named a Windows batch file.
+let serverOfflineReason = '';
+let serverOfflinePhase = '';
 // Smart auto-scroll: tracks whether the user is currently pinned at the
 // bottom of the messages container. Streaming-tick scroll calls check
 // this before auto-scrolling — if the user scrolled up to read history,

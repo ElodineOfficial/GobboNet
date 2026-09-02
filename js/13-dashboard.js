@@ -8,6 +8,36 @@
    Shown when no thread is active. Displays scheduled tasks,
    active character cards, and placeholder default characters.
 ================================================================ */
+/* Offline pill text.
+
+   This used to read "OFFLINE - run launch.bat" no matter what. There is no
+   launch.bat on Linux, so issue #43's reporter went hunting the disk for a
+   file that could not exist; and on Windows 1.7 launch.bat only adds models,
+   the launcher being gobbonet.exe. Wrong on every platform.
+
+   So: say what actually happened. serverOfflineReason carries llama-server's
+   own words when the supervisor caught them -- "out of device memory" and
+   friends -- which is the difference between a user fixing their GPU layers
+   and a user filing an issue. The full text also goes in the tooltip, since
+   llama.cpp can be wordy and the pill is one line.
+
+   escapeHtml is doing real work here: this string comes from a subprocess's
+   stderr and lands in both text and attribute context. */
+function offlineStatusHtml() {
+  const MAX = 200;
+  if (serverOfflinePhase === 'starting') {
+    const detail = serverOfflineReason ? ' — ' + escapeHtml(serverOfflineReason.slice(0, MAX)) : '…';
+    return `<span class="landing-status-ok">&#9679; LOADING MODEL${detail}</span>`;
+  }
+  if (serverOfflineReason) {
+    const full = escapeHtml(serverOfflineReason);
+    const shown = escapeHtml(serverOfflineReason.slice(0, MAX)) +
+                  (serverOfflineReason.length > MAX ? '…' : '');
+    return `<span class="landing-status-err" title="${full}">&#9679; OFFLINE — ${shown}</span>`;
+  }
+  return `<span class="landing-status-err">&#9679; OFFLINE — llama-server is not responding</span>`;
+}
+
 function renderLandingPage() {
   const now = new Date();
   const currentTime = now.getHours().toString().padStart(2, '0') + ':' + now.getMinutes().toString().padStart(2, '0');
@@ -15,7 +45,7 @@ function renderLandingPage() {
   // Connection status pill
   const connHtml = serverConnected
     ? `<span class="landing-status-ok">&#9679; LLAMA-SERVER ONLINE</span>`
-    : `<span class="landing-status-err">&#9679; OFFLINE — run launch.bat</span>`;
+    : offlineStatusHtml();
 
   // ── Scheduled tasks ────────────────────────────────────────────
   let schedHtml = '';

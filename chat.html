@@ -168,7 +168,7 @@
         <span id="search-test-status" style="font-size:12px;color:var(--cyan-dim);"></span>
       </div>
       <pre id="search-test-output" style="display:none; margin-top:8px; max-height:200px; overflow:auto; font-size:11px; padding:8px; background:var(--black); border:1px solid var(--border); border-radius:var(--radius); color:var(--cyan-mid);"></pre>
-      <div class="form-hint">Free key from ollama.com/settings/keys. Search proxy on :11435 is started by launch.bat. Note: the search proxy is the ONLY network traffic — llama.cpp itself is fully offline.</div>
+      <div class="form-hint">Free key from ollama.com/settings/keys. The search proxy on :11435 is started for you alongside the chat server. Note: the search proxy is the ONLY network traffic — llama.cpp itself is fully offline.</div>
     </div>
 
     <div class="form-group" style="margin-top:12px; padding:12px; border:1px solid rgba(255,149,0,0.22); border-radius:var(--radius); background:rgba(255,149,0,0.03);">
@@ -996,7 +996,7 @@ gobbo.every(5, async () =&gt; {
             <div><span style="color:var(--green-neon);">Model</span> &mdash; <span id="about-model-line">Local GGUF (detecting...)</span></div>
             <div><span style="color:var(--green-neon);">Runtime</span> &mdash; llama.cpp &mdash; runs any GGUF; CUDA/Vulkan/CPU</div>
             <div><span style="color:var(--green-neon);">Frontend</span> &mdash; Vanilla HTML/CSS/JS &mdash; no build step, no frameworks</div>
-            <div><span style="color:var(--green-neon);">Server</span> &mdash; PowerShell HTTP listener + launch.bat</div>
+            <div><span style="color:var(--green-neon);">Server</span> &mdash; gobbonet &mdash; a single Go binary that serves this page and supervises llama.cpp</div>
             <div><span style="color:var(--green-neon);">Storage</span> &mdash; your browser, mirrored to a state file in the install folder so a reload never loses a thread</div>
             <div><span style="color:var(--green-neon);">Licence</span> &mdash; AGPLv3 &mdash; every file in the install folder is readable and yours to change, and anyone you serve it to gets that same right</div>
           </div>

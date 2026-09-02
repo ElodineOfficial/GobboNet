@@ -330,7 +330,7 @@ async function checkServerStateOnBoot() {
 async function restoreFromServer(opts) {
   opts = opts || {};
   if (!STATE_SYNC_AVAILABLE) {
-    if (!opts.silent) alert('Server backup is only available when launched via launch.bat.');
+    if (!opts.silent) alert('Server backup needs the GobboNet server. Open the chat at the address GobboNet prints when it starts.');
     return false;
   }
   try {

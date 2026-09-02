@@ -291,7 +291,7 @@ async function onHeaderModelChange(sel) {
 
   // file:// has no fileserver. Tell the user and revert.
   if (!IS_SERVED) {
-    showModelSwitchToast('Hot-swap needs the file server. Open the chat from launch.bat, not by double-clicking chat.html.', 'warn');
+    showModelSwitchToast('Hot-swap needs the GobboNet server. Open the chat at the address GobboNet prints when it starts, not by double-clicking chat.html.', 'warn');
     if (_currentModelFile) sel.value = _currentModelFile;
     return;
   }
@@ -543,7 +543,7 @@ async function loadPerfSettings() {
 
   if (!IS_SERVED) {
     ctx.disabled = gpu.disabled = kv.disabled = true;
-    _perfStatus('Opened without the file server, so these cannot be read or changed. Start from launch.bat.', 'error');
+    _perfStatus('Opened without the GobboNet server, so these cannot be read or changed. Open the chat at the address GobboNet prints when it starts.', 'error');
     return;
   }
 
@@ -622,7 +622,7 @@ async function resetPerfSettings() {
 /** Reload the current model through the normal swap pipeline. */
 async function _restartModelForPerf() {
   if (!_currentModelFile) {
-    _perfStatus('Saved, but the current model is unknown -- restart launch.bat to apply.', 'error');
+    _perfStatus('Saved, but the current model is unknown -- restart GobboNet to apply.', 'error');
     return;
   }
   if (_swapInFlight) { _perfStatus('A model swap is already running.', 'error'); return; }

@@ -381,6 +381,13 @@ func (s *Supervisor) start(file string) error {
 // Backoff is exponential because the common cause of a crash-on-start is a
 // configuration problem that will not fix itself, and hammering the GPU with
 // restart attempts makes the logs unreadable without making anything better.
+//
+// Every failed attempt publishes its reason through setStatus, not just the log.
+// This loop used to log and move on, which left /swap-status reporting the
+// "ready" it was set to before the crash — so the one endpoint a client can ask
+// "is the model up, and if not why" answered with a stale yes while nothing was
+// listening. The landing page now shows this text verbatim (issue #43), so a
+// wrong answer here is a wrong answer on screen.
 func (s *Supervisor) restartAfterCrash(file string) {
 	backoff := time.Second
 	const maxBackoff = 2 * time.Minute
@@ -400,8 +407,10 @@ func (s *Supervisor) restartAfterCrash(file string) {
 		log.Printf("[swap] restart attempt %d for %s", attempt, file)
 		if err := s.start(file); err != nil {
 			log.Printf("[swap] restart failed: %v", err)
+			s.setStatus(PhaseError, file, file, err.Error(), time.Now().Unix())
 		} else if err := s.waitHealthy(time.Now().Add(swapTimeout)); err != nil {
 			log.Printf("[swap] restarted process did not become healthy: %v", err)
+			s.setStatus(PhaseError, file, file, err.Error(), time.Now().Unix())
 		} else {
 			log.Printf("[swap] llama-server recovered")
 			s.setStatus(PhaseReady, file, file, "Ready", time.Now().Unix())

@@ -35,7 +35,7 @@ async function webSearch(query) {
     console.log('[search] Proxy is healthy');
   } catch (e) {
     console.error('[search] Proxy unreachable at ' + SEARCH_PROXY_URL + ' — ' + e.message);
-    console.error('[search] Make sure launch.bat is running (it starts the proxy)');
+    console.error('[search] Make sure GobboNet is running (it starts the proxy)');
     return null;
   }
 
@@ -115,7 +115,7 @@ async function testSearchConnection() {
   } catch (e) {
     addLog(`    FAILED: ${e.message}`);
     addLog('    The search proxy is not running.');
-    addLog('    Make sure you launched via launch.bat.');
+    addLog('    Make sure GobboNet itself is running.');
     statusEl.textContent = 'Proxy not reachable';
     statusEl.style.color = 'var(--red-neon)';
     return;
@@ -200,6 +200,8 @@ async function checkConnection() {
     if (resp.ok) {
       const data = await resp.json();
       serverConnected = true;
+      serverOfflineReason = '';
+      serverOfflinePhase = '';
       dot.classList.add('connected');
       // llama.cpp /health returns {"status":"ok"} when model is loaded
       const ready = data.status === 'ok';
@@ -218,5 +220,45 @@ async function checkConnection() {
       ? 'No connection' : `Error: ${e.message.slice(0, 30)}`;
     label.style.color = 'var(--red-neon)';
   }
+  await refreshOfflineReason();
+}
+
+/* ================================================================
+   WHY IS IT DOWN?
+
+   "HTTP 502" is true and useless: it says llama-server did not answer,
+   not what stopped it. The supervisor already knows -- it captures
+   llama-server's stderr and pulls the actionable line out of it, VRAM
+   exhaustion included -- and publishes it at /swap-status. Nothing ever
+   asked, so the landing page filled the gap with a hardcoded guess that
+   told Linux users to run a Windows batch file (issue #43).
+
+   Only runs when we are actually served over HTTP. Opened as a file://
+   page there is no server to ask, and the fetch would just throw.
+
+   Failure here is deliberately silent. This is decoration on top of a
+   status we already have; if the endpoint is unreachable the caller
+   still knows the connection is down and says so in plainer words.
+================================================================ */
+async function refreshOfflineReason() {
+  serverOfflineReason = '';
+  serverOfflinePhase = '';
+  if (!IS_SERVED) return;
+  try {
+    const r = await fetch('/swap-status', { cache: 'no-store' });
+    if (!r.ok) return;
+    const s = await r.json();
+    serverOfflinePhase = String(s.phase || '');
+    // "ready" while we cannot reach it means the supervisor's view is stale,
+    // so there is no reason worth quoting -- fall through to the generic line
+    // rather than print a contradiction.
+    if (s.phase === 'error') {
+      serverOfflineReason = String(s.message || '');
+    } else if (s.phase === 'starting') {
+      // Mid-load the message is just "Loading model", which the pill already
+      // says. The filename is the part the user does not know.
+      serverOfflineReason = String(s.name || s.file || '');
+    }
+  } catch (_) { /* leave it to the generic message */ }
 }
 

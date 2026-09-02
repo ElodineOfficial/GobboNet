@@ -573,8 +573,9 @@ function applyGenerationOutcome(assistantMsg, outcome, style) {
     let diag = `**Connection Error**\n\n`;
     diag += `**Error type:** ${err.name}\n**Message:** ${err.message}\n\n`;
     if (err.message === 'Failed to fetch' || err.name === 'TypeError') {
-      diag += `**Likely cause:** CORS block or llama-server not running.\n`;
-      diag += `Launch chat via **launch.bat**, not by opening chat.html directly.\n`;
+      diag += `**Likely cause:** llama-server is not running, or the page was opened directly.\n`;
+      diag += `Open the chat at the address GobboNet prints when it starts, rather than opening chat.html itself. `;
+      diag += `If you are already there, llama-server did not come up -- the landing page shows why.\n`;
     } else if ((err.message || '').includes('404')) {
       diag += `**Cause:** Endpoint not found. Make sure llama-server is running with --api-key disabled.\n`;
     }
