@@ -32,6 +32,34 @@ function ConvertTo-BatchSafe([string]$s) {
     return $t.Trim()
 }
 
+# Same job, for a FILESYSTEM PATH, and deliberately gentler. Mirrors the
+# ConvertTo-CmdArgSafe / ConvertTo-CmdPathSafe split already made in
+# fileserver.ps1, for the same reason: % ^ & are all LEGAL in Windows paths,
+# and scrubbing them out of a sidecar filename that exists on disk is a bug,
+# not hardening. launch.bat then prints "Chat-template file not found" naming
+# a path that differs from the real one, and falls back to the embedded
+# template -- so a valid template the user deliberately supplied is ignored,
+# and the message sends them looking for a download problem that isn't there.
+#
+# The consumer differs from fileserver.ps1's .cmd in one way that matters:
+# launch.bat runs under `setlocal EnableDelayedExpansion` (its line 16) and
+# CALLs this generated .cmd inside that scope. Verified against cmd's parser:
+#   & ^ < > |  already inert inside the double quotes of `set "VAR=..."`
+#   %          survives if doubled -- `set "X=a%%b"` yields a%b
+#   " CR LF    ILLEGAL in Windows filenames, so dropping them costs nothing
+#
+# '!' is the exception and is NOT handled here: delayed expansion consumes it
+# before the value is ever assigned. A '!' in a sidecar filename still mangles
+# the path, exactly as it does today. Fixing that needs an escape verified on a
+# real cmd.exe, which is a separate change.
+function ConvertTo-CmdPathSafe([string]$s) {
+    if (-not $s) { return '' }
+    $t = $s -replace '[\r\n]', ' '
+    $t = $t -replace '["<>|]', ''
+    $t = $t.Trim()
+    return $t -replace '%', '%%'
+}
+
 $GGUF_TYPE_STRING = 8
 $GGUF_TYPE_ARRAY  = 9
 $GGUF_FIXED = @{ 0 = 1; 1 = 1; 2 = 2; 3 = 2; 4 = 4; 5 = 4; 6 = 4; 7 = 1; 10 = 8; 11 = 8; 12 = 8 }
@@ -550,7 +578,7 @@ if ($Emit -eq 'batch') {
         ('set "MODEL_THINK_FMT=' + (ConvertTo-BatchSafe $info.thinkingFormat) + '"'),
         ('set "MODEL_USE_JINJA=' + ([int]$info.useJinja) + '"'),
         ('set "MODEL_CHAT_TEMPLATE=' + (ConvertTo-BatchSafe $info.chatTemplate) + '"'),
-        ('set "MODEL_CHAT_TEMPLATE_FILE=' + (ConvertTo-BatchSafe $info.chatTemplateFile) + '"'),
+        ('set "MODEL_CHAT_TEMPLATE_FILE=' + (ConvertTo-CmdPathSafe $info.chatTemplateFile) + '"'),
         ('set "MODEL_TEMPLATE_HASH=' + (ConvertTo-BatchSafe $info.templateHash) + '"')
     )
     if ($OutFile) {
