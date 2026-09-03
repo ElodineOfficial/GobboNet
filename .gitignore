@@ -4,7 +4,9 @@
 *.key
 
 # Models and engine (way over GitHub's 100MB limit)
-models/
+# Leading slash matters: an unanchored `models/` matches a directory of that
+# name at ANY depth, which silently swallowed the internal/models Go package.
+/models/
 llama.cpp/
 llama/
 *.gguf
@@ -12,6 +14,12 @@ llama/
 *.dll
 *.zip
 *.7z
+
+# ...except the NSIS plugins, which ship in-tree on purpose so that building
+# the installer does not depend on what happens to be installed on the build
+# machine. gobbonet.nsi calls inetc::get to download models; without this
+# exception the plugin is dropped and makensis fails.
+!/installer/plugins/**/*.dll
 
 # Runtime junk
 logs/
@@ -63,7 +71,6 @@ hardware.ini
 
 # Runtime state written next to the config on a portable install
 /config.toml
-/models/
 /llama-server.log
 /state.json
 /.gobbonet-secret
