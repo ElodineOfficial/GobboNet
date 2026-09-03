@@ -12,6 +12,7 @@ function render() {
   updateSidebarVisibility();
   updateInputState();
   updateContextInfo();
+  updateCastMismatch();
   updatePrivacyBadge();
   updateLoreChip();
 }

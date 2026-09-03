@@ -166,6 +166,38 @@ function Test-IsUsableTemplate {
     return $true
 }
 
+# Is a GGUF's embedded tokenizer.chat_template a real Jinja chat template, or
+# something we should ignore in favour of a built-in?
+#
+# The distinction matters for Mistral Small descendants (issue #20). Fine-tunes
+# inherit one parent's tokenizer_config and carry a correct template; mergekit
+# children copy it from whichever parent mergekit picked and can end up with a
+# truncated or non-Jinja value. Trusting the first and not the second is what
+# lets the classifier prefer the model's own framing without gambling on merges.
+#
+# Three cheap checks, chosen to be hard to pass by accident:
+#   * Jinja control flow -- a template that renders a conversation loops over
+#     messages, so it contains {% %} or {{ }}. This also rules out a bare
+#     template NAME reaching llama.cpp, where the content-detector would render
+#     the literal string for every request.
+#   * A Mistral instruct delimiter -- [INST] appears in every Mistral chat
+#     template from v1 through v7.
+#   * Length -- real templates run to hundreds of characters.
+#
+# Deliberately not a Jinja parse: llama.cpp compiles the template itself and
+# refuses to start on one it cannot, so a stricter check here would only
+# duplicate the engine's opinion and add a second place to be wrong.
+#
+# Mirrors usableEmbeddedTemplate() in internal/models/classify.go. The two must
+# agree, or the launcher and the Go server will disagree about the same file.
+function Test-UsableEmbeddedTemplate {
+    param([string]$Template)
+    if ([string]::IsNullOrEmpty($Template)) { return $false }
+    if ($Template.Length -lt 80) { return $false }
+    if (-not ($Template.Contains('{%') -or $Template.Contains('{{'))) { return $false }
+    return $Template.Contains('[INST]')
+}
+
 # Match a .jinja sidecar to a GGUF stem. The label may be joined to the stem by
 # '.', '_' or '-' (e.g. "<stem>.granite.jinja", "<stem>_mistral-v7-tekken.jinja"),
 # or be a bare "<stem>.jinja". An earlier version accepted ONLY a literal '.',
@@ -250,23 +282,43 @@ function Get-ModelInfo {
         # Mistral v7 template -- same pattern Nemo uses with mistral-v3-tekken
         # below.
         #
-        # IMPORTANT: we use the name "mistral-v7" here, NOT "mistral-v7-tekken".
-        # The "-tekken" v7 variant was added to llama.cpp's built-in name table
-        # much later than the v3 variants (which landed in PR #10572). On builds
-        # that predate it (e.g. b8941, the one this project ships), llama-server
-        # does NOT recognise "mistral-v7-tekken" as a built-in name. Because the
-        # string still begins with "mistral", llama-server's content-detector
-        # treats the literal text "mistral-v7-tekken" as the template body, which
-        # renders to that constant ~8-token string for EVERY request -- the model
-        # then never sees the conversation and just talks about "tekken". Using
-        # "mistral-v7" resolves to the real C++ template and renders correctly.
-        # The only difference from true tekken is a trailing space after [INST] /
-        # [SYSTEM_PROMPT]; harmless for inference. If you upgrade to a llama.cpp
-        # build whose built-in table includes "mistral-v7-tekken", you can switch
-        # this back for byte-exact tekken spacing.
+        # Mistral Small 24B and its descendants use the Tekken tokenizer, whose
+        # framing is byte-exact. In llama.cpp's built-in table the ONLY
+        # difference between "mistral-v7" and "mistral-v7-tekken" is one
+        # character:
+        #
+        #     const char * trailing_space =
+        #         tmpl == LLM_CHAT_TEMPLATE_MISTRAL_V7 ? " " : "";
+        #     ss << "[INST]" << trailing_space << content << "[/INST]";
+        #
+        # so v7 emits "[INST] Hello" and tekken emits "[INST]Hello". On a Tekken
+        # tokenizer that space merges into the next token and shifts every
+        # boundary after it, so the delimiters the fine-tune was trained on never
+        # quite appear. The model concludes it is not in an instruct conversation
+        # and reverts to base behaviour -- for Mistral, French and academic prose.
+        # That is issue #20.
+        #
+        # This used to force "mistral-v7" because "mistral-v7-tekken" was said to
+        # be missing from llama.cpp's built-in name table on shipped builds. That
+        # was true once and is not now: the name landed between b5300 and b5600,
+        # and it is present in b8941 (the build the old note named), b9294
+        # (Windows) and b10456 (Linux). The same note called the trailing space
+        # "harmless for inference"; it is the bug.
+        #
+        # Prefer the model's own template, which is right by construction for a
+        # fine-tune. Cydonia v4.3 descends from a single parent
+        # (Mistral-Small-3.2-24B-Instruct-2506), so its tokenizer_config is that
+        # parent's. Mergekit children are the reason for the fallback: they copy
+        # tokenizer_config from a random parent and can carry a malformed
+        # template, so anything that does not look like real Jinja gets the
+        # built-in -- now the correctly spaced variant.
         if ($name -match 'cydonia|asmodeus|mistral[-_.]?small') {
             $rec.family = 'mistral'; $rec.id = 'mistral-small'
-            $rec.useJinja = 0; $rec.chatTemplate = 'mistral-v7'
+            if (Test-UsableEmbeddedTemplate ([string]$meta.chat_template)) {
+                $rec.useJinja = 1; $rec.chatTemplate = ''
+            } else {
+                $rec.useJinja = 0; $rec.chatTemplate = 'mistral-v7-tekken'
+            }
             return $rec
         }
         if ($name -match 'nemo|violet[-_]?lotus|rocinante|magnum') {

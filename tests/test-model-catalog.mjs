@@ -17,7 +17,9 @@ import fs from 'fs';
 import vm from 'vm';
 
 import { fileURLToPath } from 'node:url';
-const ROOT = fileURLToPath(new URL('.', import.meta.url)).replace(/\/$/, '');
+// '..' not '.': these live in tests/ and read the frontend from the repo
+// root, so the base has to climb out of this directory.
+const ROOT = fileURLToPath(new URL('..', import.meta.url)).replace(/\/$/, '');
 const MODEL_JS = fs.readFileSync(ROOT + '/js/02-model.js', 'utf8');
 
 // Just the catalogue section — the rest of the file reaches for globals that

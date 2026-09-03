@@ -85,7 +85,7 @@ for target in linux/amd64 linux/arm64 windows/amd64 darwin/arm64 darwin/amd64; d
     stage="$DIST/gobbonet-$VERSION-$GOOS-$GOARCH"
     mkdir -p "$stage"
     cp -r web "$stage/web"
-    cp GO_SERVER.md "$stage/README.md"
+    cp docs/GO_SERVER.md "$stage/README.md"
 
     # The fallback model catalogue. catalog.Discover() looks beside the binary,
     # which is exactly where a portable unzip puts it. Without this the Add a

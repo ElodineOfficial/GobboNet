@@ -191,6 +191,8 @@
   .search-toggle { padding: 8px 10px; min-height: 44px; font-size: 14px; }
 
   .context-info { padding: 4px 12px; font-size: 10px; }
+  .cast-mismatch { padding: 5px 12px; font-size: 10px; gap: 7px; }
+  .cast-mismatch-btn { padding: 3px 9px; font-size: 9px; }
 
   /* ── Auto-continue bar: text wraps, layout stays single-row ──────
      Desktop ellipsizes the text on overflow, which would clip "next

@@ -13,7 +13,7 @@ This guide assumes you've never set up anything like this before. Take it one st
 - **DeepSeek** — working
 - **Qwen** — working [Qwen3 30B-A3B, QwQ 32B]
 - **gpt-oss** — working [20B and 120B, Harmony format]
-- **Mistral** — hit and miss [cydonia works, midnight violet works]
+- **Mistral** — working [Mistral Small 24B and its finetunes, including Cydonia and Magidonia]
 - **Granite** — working
 - **Command R** — working
 - **GLM** — working
@@ -65,21 +65,28 @@ You should end up with this:
 
 ```
 Gobbonet\
-├── launch.bat
-├── setup-lan.bat
+├── launch.bat            <- start here
+├── setup-lan.bat         <- phone access, run as Administrator once
+├── stop-gobbonet.bat
+├── teardown-lan.bat
 ├── fileserver.ps1
 ├── hardware-probe.ps1
+├── hw-recommend.ps1
 ├── identify-model.ps1
 ├── chat.html
 ├── default-characters.json
 ├── gobbonet.ico
-├── css\    (15 files)
-└── js\     (24 files)
+├── css\     (17 files)
+├── js\      (24 files)
+├── docs\    reference notes and the per-change changelog
+└── tests\   developer tests; not needed to run anything
 ```
 
 A `models` folder and a few small bookkeeping files (`models-list.json`, `active-model.json`) get created for you on the first run — that's normal, you don't need to make them yourself.
 
 Going this route, run `launch.bat` and `setup-lan.bat` wherever the rest of this guide says `launch.exe` and **LAN Setup**. Everything else works the same.
+
+One cosmetic difference: the installer bundles a font that the source ZIP does not, so a browser console opened on a source install will show a 404 for `fonts/atkinson-hyperlegible.woff2`. Nothing is broken — the interface falls back to a monospace font your system already has. The font is left out on purpose rather than committed, so that GobboNet never fetches one from a font CDN at runtime.
 
 ---
 
@@ -95,7 +102,9 @@ The very first time, it asks you to **choose a password**. Type one (at least 6 
 
 This password protects your chat. Anyone else on your home Wi-Fi could otherwise open it, so the password keeps it private. You'll only type it again when you connect from your phone.
 
-> Your password is stored in a scrambled form that can't be reversed, and it never leaves your computer. If you forget it, you can set a new one (see Troubleshooting).
+> Your password is stored in a scrambled form that can't be reversed, and it is never written down anywhere in readable form. If you forget it, you can set a new one (see Troubleshooting).
+>
+> When you sign in **from your phone**, the password itself travels across your home network unencrypted, the same as everything else here. The sign-in page says so too. That is fine on a network you trust — but it is why you should not reuse a password that matters elsewhere, and why you should not run this on shared or public Wi-Fi.
 
 ### It will offer to download the AI engine
 
@@ -108,29 +117,32 @@ If you don't have a model yet, it checks your computer's hardware and shows a me
 ```
 Detected: 16 GB VRAM, 32 GB RAM, 423 GB free disk
 
--- SMALL (fits ~8 GB VRAM) ----------------------
+  -- SMALL (fits ~6 GB VRAM) ----------------------
 
-  [1] Gemma 3 4B IT           Q8_0    ~4.7 GB
-  [2] Llama 3.2 3B Instruct   Q8_0    ~3.3 GB
+    [2] Llama 3.2 3B Instruct  Q8_0    ~3.4 GB
+    [1] Gemma 4 E4B IT         Q4_K_M  ~5.4 GB
 
--- MEDIUM (fits ~10-12 GB VRAM) -----------------
+  -- MEDIUM (fits ~8-12 GB VRAM) ------------------
 
-  [3] Mistral 7B v0.3         Q6_K    ~5.8 GB
-  ...
+    [4] Qwen3.5 9B             Q4_K_M  ~6.2 GB
+    ...
+    [8] gpt-oss 20B            MXFP4   ~12 GB   [ RECOMMENDED FOR YOUR PC ]
 
--- LARGE (fits ~16 GB VRAM) ---------------------
+  -- LARGE (16 GB VRAM and up) --------------------
 
-  [5] Gemma 4 26B-A4B MoE     Q4_K_S  ~16 GB   [ RECOMMENDED FOR YOUR PC ]
-  ...
+    [5] Gemma 4 26B-A4B MoE    Q4_K_S  ~16 GB   [ needs ~18 GB VRAM - will be slow ]
+    ...
 
--- MANUAL ---------------------------------------
+  -- MANUAL ---------------------------------------
 
- [11] Skip - I'll add my own .gguf
+   [11] Skip - I'll add my own .gguf
 ```
 
 One option is marked **`[ RECOMMENDED FOR YOUR PC ]`** — that's the best fit for your hardware. Just press **Enter** to accept it, or type a number to pick a different one. Then wait while it downloads (a big model can take 10–30 minutes — this is the longest part, and it only happens once).
 
-If a model needs more graphics memory than you have, it warns you and asks if you want it anyway. When in doubt, pick the recommended one.
+Notice that the 16 GB card above is *not* offered the 16 GB model. A model needs room beyond its own size — for the conversation it is holding in memory, for the engine's working space, and for whatever your monitor is already using. Every recommendation leaves at least 2 GB spare, which is why the biggest thing that fits is rarely the right pick.
+
+Models that want more than you have are labelled with what they actually need, and picking one anyway will ask you to confirm first. When in doubt, take the recommended one.
 
 ### It will grab one more small download
 
@@ -142,7 +154,9 @@ It runs on your processor rather than your graphics card, so it won't take memor
 
 Once the model loads, your **web browser opens automatically** to the chat screen. You can start typing.
 
-Every time you want to use it in the future, you just open GobboNet again. After the first setup, it starts in well under a minute and **never needs the internet**.
+Every time you want to use it in the future, you just open GobboNet again. After the first setup, it starts in well under a minute and **the AI itself never needs the internet**.
+
+Two things reach out, and both are yours to turn on: web search, if you set up a key for it, and any extension you load from a web address rather than pasting in directly. Neither is on unless you switch it on.
 
 ---
 
@@ -243,7 +257,9 @@ Sometimes an error code shows up. Here's what the common ones mean and the quick
 Your model is too big for your graphics card's memory. The "context limit" (how much the AI can read at once) plus the model size is asking for more memory than you have. Use a smaller model, or have someone lower `CTX_SIZE` at the top of `launch.bat`.
 
 **The model won't load, or you see a `502` error.**
-The most likely cause: another AI program called **Ollama** started up on its own and grabbed the port GobboNet needs. Close Ollama (check your system tray near the clock, right-click its icon, and quit it), then run the launcher again.
+A `502` means GobboNet is running but the AI engine behind it is not answering. **Check the front page of the chat first** — where it normally says the model is online, it will now say what actually went wrong, in the engine's own words. That is usually the whole answer.
+
+If it says something about memory, the model is too large for your graphics card; pick a smaller one. If there is no explanation to be had, the most common cause is another AI program called **Ollama** starting up on its own and taking the port GobboNet needs. Close Ollama (check your system tray near the clock, right-click its icon, and quit it), then run the launcher again.
 
 **The web address won't load on my phone.**
 The phone address can change when the PC or its network restarts. First, double-check you're typing the **exact** address the launcher window currently shows — it may have changed since last time. Bookmarking the `.local` address (instead of the number address) avoids this.
@@ -260,13 +276,14 @@ The LAN access for mobile access has changed on the variable address. There is a
 ---
 
 ## Known bugs
-We like to be upfront about what's broken. These two are confirmed, and we're working to fix them ASAP. We'll update this section as we squash them.
+We like to be upfront about what's broken. We'll update this section as we squash them.
 
 **Logit bias is broken**: (this is what powers "banned words"). 
 The banned-words feature — the one that's supposed to discourage specific words from showing up — relies on logit bias under the hood, and logit bias isn't working right now. Banning a word won't reliably keep it out of replies. For the moment, treat the feature as non-functional rather than just hit-or-miss. (You'll see this flagged in the feature list too.)
 
-**Some models using the "Tekken" tokenizer misbehave.** 
-A handful of models are built on the Tekken tokenizer, and those don't run correctly yet — you may see scrambled or garbled output, odd spacing, or wrong special tokens/formatting. If a model is acting strange in a way that looks like jumbled text, this is the likely cause. Switch to a different model in the meantime until we ship a fix. We have identified the problem and applied a patch, but it may not be thorough enough to squash the problem. More testing is required at this time. 
+### Recently fixed
+
+**Mistral Small models talking nonsense** — *fixed in 1.7.2.* Cydonia, Magidonia and other Mistral Small 24B descendants would ignore their character entirely and answer in French, or start writing academic papers. The cause was one character: GobboNet was framing the conversation with a space where those models expect none, which was enough to stop them recognising that a conversation was happening at all. They now use their own built-in formatting. This was previously listed here as "Tekken tokenizer models misbehave".
 
 ---
 
@@ -364,7 +381,7 @@ Everything GobboNet can do, grouped so it's easy to scan.
 
 **Web search (optional)**
 - Search the web — let the AI look things up online (needs a free Ollama key).
-- Privacy protection — identifying metadata and telemetry are stripped from your searches.
+- Privacy protection — your GobboNet session cookie and login token are dropped before a search leaves your machine, so the search provider never sees them. What does go is the search text as you typed it, along with your Ollama key, because that is what a search is. Chat messages are never included.
 
 **Saving & getting things out**
 - Save AI output as a `.txt` or `.json` file. (Other file types are intentionally left out for now to keep things simple and safe.)
@@ -379,6 +396,28 @@ Everything GobboNet can do, grouped so it's easy to scan.
 
 **Devices**
 - PC-to-phone connection — use the same chat from your phone or tablet over your home Wi-Fi.
+
+---
+
+## Where everything lives
+
+The folder used to open on 57 files with the launcher buried among twenty
+changelogs. Docs and developer tooling now sit in their own folders. Nothing was
+deleted, and nothing you run has moved.
+
+| | |
+|---|---|
+| `launch.bat` | The launcher. Still the first thing you run. |
+| `setup-lan.bat`, `stop-gobbonet.bat`, `teardown-lan.bat` | Phone access on/off, and shutdown. |
+| `chat.html`, `js/`, `css/` | The chat interface itself. |
+| [`docs/`](docs/) | Reference material, plus [`docs/changelog/`](docs/changelog/) — one write-up per fix. |
+| [`tests/`](tests/) | Developer tests and browser preview pages. Not needed to run anything. |
+| `internal/`, `cmd/` | The Go server's source. |
+| `installer/`, `installer-linux/` | How the Windows `.exe` and the Linux `.deb` are built. |
+
+`README.md`, `TROUBLESHOOTING.md` and `SECURITY.md` stay at the root, because
+that is where you would look for them and because the launcher points at the
+last two by name.
 
 ---
 

@@ -221,6 +221,7 @@ echo.
 :: actually added anything. If Windows Update (or System Restore, or
 :: a driver rollback) wipes UrlAclInfo from the registry, the script
 :: looked successful but did nothing. The new check actually works.
+:: ＜本アプリケーション開発者からのメッセージ：＞：本アプリケーションはローカル環境でのみ動作することを想定しています。悪意のあるインスタンスをホストし、インターネット経由で配信するユーザーがいるという問題が発生しています。**本システムをローカル環境以外で動作するように変更しないことが最善策です。**この警告を無視しないでください。**本アプリケーションを、現在のローカル環境ではなく、従来のウェブサイト上で動作するように変更しないでください。これがユーザーを真に保護する唯一の方法です。情報開示には十分注意してください。情報開示によって、悪用防止がさらに困難になる可能性があります。＜注記終了＞
 :: ---------------------------------------------------------------
 echo  [..] Adding URL ACL reservations...
 

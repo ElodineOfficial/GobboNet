@@ -489,6 +489,56 @@
   border-top: 1px solid var(--border);
 }
 
+/* ── Cast mismatch strip ───────────────────────────────────────
+   Sits above the composer when the character about to reply is
+   not the one that replied last (issue #19). Cyan rather than the
+   auto-continue bar's magenta: that bar means "something is
+   happening on its own", this one means "read this before you
+   press send". Only rendered when there is a real mismatch, so it
+   is absent in the common case rather than being another
+   permanent strip competing for the eye. */
+.cast-mismatch {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 16px;
+  font-size: 11px;
+  font-family: var(--font);
+  letter-spacing: 0.5px;
+  color: var(--cyan-bright);
+  background: linear-gradient(90deg, rgba(0,243,255,0.10), rgba(0,243,255,0.03));
+  border-top: 1px solid var(--cyan-dim, rgba(0,243,255,0.4));
+  border-bottom: 1px solid rgba(0,243,255,0.15);
+}
+.cast-mismatch-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--cyan-bright);
+  box-shadow: 0 0 8px rgba(0,243,255,0.9);
+  flex-shrink: 0;
+}
+.cast-mismatch-text { flex: 1; min-width: 0; }
+.cast-mismatch-text strong { color: var(--white); font-weight: 700; }
+.cast-mismatch-btn {
+  flex-shrink: 0;
+  padding: 3px 12px;
+  font-family: var(--font);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  color: var(--cyan-bright);
+  background: transparent;
+  border: 1px solid var(--cyan-dim, rgba(0,243,255,0.4));
+  border-radius: 3px;
+  cursor: pointer;
+}
+.cast-mismatch-btn:hover {
+  background: var(--cyan-bright);
+  color: var(--black);
+  box-shadow: 0 0 10px rgba(0,243,255,0.5);
+}
+
 /* ── Auto-continue chain indicator ─────────────────────────────
    Shown above the input area while {{auto_continue_N}} chain is
    active. Magenta accent (same family as branch nav) so it reads

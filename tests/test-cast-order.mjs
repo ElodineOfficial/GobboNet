@@ -13,7 +13,9 @@ import fs from 'fs';
 import vm from 'vm';
 
 import { fileURLToPath } from 'node:url';
-const ROOT = fileURLToPath(new URL('.', import.meta.url)).replace(/\/$/, '');
+// '..' not '.': these live in tests/ and read the frontend from the repo
+// root, so the base has to climb out of this directory.
+const ROOT = fileURLToPath(new URL('..', import.meta.url)).replace(/\/$/, '');
 const CARDS = fs.readFileSync(ROOT + '/js/15-cards.js', 'utf8');
 const PERSONAS = fs.readFileSync(ROOT + '/js/17-personas.js', 'utf8');
 

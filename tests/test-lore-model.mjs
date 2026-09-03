@@ -7,7 +7,9 @@ import { fileURLToPath } from 'node:url';
 import fs from 'fs';
 import vm from 'vm';
 
-const ROOT = fileURLToPath(new URL('.', import.meta.url)).replace(/\/$/, '');
+// '..' not '.': these live in tests/ and read the frontend from the repo
+// root, so the base has to climb out of this directory.
+const ROOT = fileURLToPath(new URL('..', import.meta.url)).replace(/\/$/, '');
 const SRC = fs.readFileSync(ROOT + '/js/07-prompt.js', 'utf8');
 
 let swaps = [];          // every model file we asked the server to load

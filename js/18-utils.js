@@ -984,7 +984,7 @@ function toggleMathSource(btn) {
         from a table; it is never interpolated into a tag or an attribute.
 
    An UNKNOWN language is returned as plain escaped text, untouched. That is
-   not just caution about mangling: test L in test-math-render.mjs asserts
+   not just caution about mangling: test L in tests/test-math-render.mjs asserts
    that a declined ```latex block is byte-identical to an untagged fence, and
    that only holds if neither of them is highlighted.
 

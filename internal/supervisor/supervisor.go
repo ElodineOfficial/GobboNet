@@ -245,18 +245,19 @@ func (s *Supervisor) BuildArgs(rec models.Record, modelPath string) []string {
 		useJinja = false
 	}
 
-	// The pinned llama.cpp build does NOT register "mistral-v7-tekken" as a
-	// built-in name. Passed bare to --chat-template it is treated as a literal
-	// template *body* and renders to a constant ~8-token string for every
-	// request — the model never sees the conversation and just talks about
-	// "tekken". "mistral-v7" resolves to the real C++ template; the only delta
-	// is a trailing space after [INST], harmless for inference.
+	// "mistral-v7-tekken" used to be rewritten to "mistral-v7" here, on the
+	// grounds that shipped llama.cpp builds did not register the tekken name
+	// and would treat it as a literal template body. That is no longer true —
+	// the name landed between b5300 and b5600 and is present in every engine
+	// this project has pinned (b8941, b9294, b10456) — and the rewrite was
+	// actively harmful: the two templates differ by a space after [INST], which
+	// on a Tekken tokenizer shifts token boundaries enough to drop the model
+	// out of instruct mode (issue #20).
 	//
-	// Normalised unconditionally so no stale record can leak it through.
-	if chatTemplate == "mistral-v7-tekken" {
-		chatTemplate = "mistral-v7"
-		useJinja = false
-	}
+	// Nothing replaces it. The classifier now decides between the model's own
+	// embedded template and the correctly spaced built-in, and this is the
+	// layer that carries that decision to llama-server rather than second-
+	// guessing it.
 
 	// Read the tuning once, so a /perf write landing mid-assembly cannot put
 	// one model's context size next to another's KV cache type.

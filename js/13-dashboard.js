@@ -787,8 +787,12 @@ function updateInputState() {
   const hasThread = !!getActiveThread();
   const inputArea = document.querySelector('.input-area');
   const contextInfo = document.getElementById('context-info');
+  const castStrip = document.getElementById('cast-mismatch');
   if (inputArea)   inputArea.style.display   = hasThread ? '' : 'none';
   if (contextInfo) contextInfo.style.display = hasThread ? '' : 'none';
+  // Only ever hide from here. updateCastMismatch() owns showing it, and it has
+  // conditions of its own that this function knows nothing about.
+  if (castStrip && !hasThread) castStrip.style.display = 'none';
   document.getElementById('send-btn').style.display = isGenerating ? 'none' : '';
   document.getElementById('stop-btn').style.display = isGenerating ? '' : 'none';
   // Keep the textarea editable while the model is thinking/generating so the
@@ -802,6 +806,75 @@ function updateInputState() {
   // thread-change guard inside updateFollowButton handles the post-render
   // scrollTop=0 transient so it never flashes on a switch.
   updateFollowButton();
+}
+
+/* Who is about to answer, when that is not who last answered.
+
+   Issue #19 was that old replies wore whoever was selected now. That is fixed
+   — makeCastResolver() gives every message back the character that wrote it.
+   This is the other half of the same confusion: switchThread() deliberately
+   does not touch activeCardId, so you can open a thread full of CodeGoblin,
+   type, and have Assistant answer. The history was honest and the next message
+   was a surprise.
+
+   Compared against the LAST assistant turn, not thread.cardId. A thread that
+   genuinely changed hands ten messages ago has been Assistant's for ten
+   messages; measuring against the thread's original owner would nag about a
+   switch the user made on purpose and has clearly finished making. What is
+   worth interrupting for is the reply that is about to differ from the one
+   before it.
+
+   Deliberately silent when:
+     - there is no thread, or no assistant turn yet to differ from
+     - the last speaker resolves to the active card (the normal case)
+     - the last speaker cannot be identified at all (legacy threads carry no
+       stamp; guessing would put a banner on every old conversation)
+
+   Reports only. Mixed-character threads stay supported, which is why the
+   button offers the switch rather than performing it. */
+function updateCastMismatch() {
+  const el = document.getElementById('cast-mismatch');
+  if (!el) return;
+
+  const hide = () => { el.style.display = 'none'; el.innerHTML = ''; };
+
+  const thread = getActiveThread();
+  if (!thread || !thread.messages || thread.messages.length === 0) return hide();
+
+  let lastAssistant = null;
+  for (let i = thread.messages.length - 1; i >= 0; i--) {
+    if (thread.messages[i].role === 'assistant') { lastAssistant = thread.messages[i]; break; }
+  }
+  if (!lastAssistant) return hide();
+
+  // A message with no stamp on a thread with no stamp is a legacy conversation
+  // whose author we genuinely do not know. Say nothing rather than guess.
+  const stamped = lastAssistant.cardId || thread.cardId;
+  if (!stamped) return hide();
+
+  const active = getActiveCard();
+  if (!active || active.id === stamped) return hide();
+
+  // Resolve through the same table renderMessages uses, so the name here and
+  // the name on the last bubble cannot disagree.
+  const cast = makeCastResolver(thread);
+  const previous = cast.cardFor(lastAssistant);
+  if (!previous || previous.name === active.name) return hide();
+
+  // A deleted card resolves to a tombstone with id null. Naming it is still
+  // useful; offering to switch to it is not.
+  const canSwitch = !!(previous.id) && (state.characterCards || []).some(c => c.id === previous.id);
+  const button = canSwitch
+    ? `<button class="cast-mismatch-btn" onclick="activateCard('${escapeJsAttr(previous.id)}')"
+         title="Switch back to ${escapeHtml(previous.name)}">Switch</button>`
+    : '';
+
+  el.innerHTML =
+    `<span class="cast-mismatch-dot"></span>` +
+    `<span class="cast-mismatch-text">Replying as <strong>${escapeHtml(active.name)}</strong>` +
+    ` &mdash; this thread was last answered by <strong>${escapeHtml(previous.name)}</strong>.</span>` +
+    button;
+  el.style.display = 'flex';
 }
 
 function updateContextInfo() {

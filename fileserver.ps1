@@ -1285,23 +1285,29 @@ function Build-LaunchScript {
                 if (-not $chatTemplate) { $chatTemplate = 'mistral-v3-tekken' }
             }
         }
+        # See identify-model.ps1 for the full reasoning. Short version: these are
+        # Tekken-tokenizer models, "mistral-v7" differs from "mistral-v7-tekken"
+        # by a space after [INST], and on Tekken that space shifts token
+        # boundaries enough to drop the model out of instruct mode (issue #20).
+        # This net only fires when the record carries no template of its own, so
+        # it must not undo a deliberate jinja=1 decision from the classifier.
         if (($nameForMatch -match 'cydonia|asmodeus|mistral[-_.]?small') -or
             ($fileForMatch -match 'cydonia|asmodeus|mistral[-_.]?small')) {
-            if ($useJinja -or -not $chatTemplate) {
-                $useJinja = $false
-                if (-not $chatTemplate) { $chatTemplate = 'mistral-v7' }
+            if (-not $chatTemplate -and -not $useJinja) {
+                $chatTemplate = 'mistral-v7-tekken'
             }
         }
     }
 
-    # The pinned llama.cpp build does NOT register "mistral-v7-tekken" as a
-    # built-in template name. Passed bare to --chat-template it is treated as a
-    # literal template *body* and renders to that constant ~8-token string for
-    # every request -- the model never sees the conversation and just talks
-    # about "tekken". "mistral-v7" resolves to the real C++ template (only delta
-    # is a trailing space after [INST]/[SYSTEM_PROMPT], harmless for inference).
-    # Normalize unconditionally so no stale models-list.json record can leak it.
-    if ($chatTemplate -eq 'mistral-v7-tekken') { $chatTemplate = 'mistral-v7'; $useJinja = $false }
+    # "mistral-v7-tekken" used to be rewritten to "mistral-v7" here, on the
+    # grounds that shipped llama.cpp builds did not register the tekken name.
+    # That is no longer true -- it landed between b5300 and b5600 and is in every
+    # engine this project has pinned -- and the rewrite was the bug in issue #20:
+    # the two differ by a space after [INST], which on a Tekken tokenizer shifts
+    # token boundaries enough to drop the model out of instruct mode.
+    #
+    # Nothing replaces it. The classifier decides; this layer carries that
+    # decision to llama-server rather than second-guessing it.
 
     $argList = @(
         ('"{0}"' -f $ServerExe),

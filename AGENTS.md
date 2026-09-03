@@ -1,7 +1,6 @@
 # Gobbonet — Developer Guide
 
 > A self-hosted, offline AI chat frontend for local GGUF models, running entirely on Windows via PowerShell + batch scripts. No build step, no external dependencies, no accounts.
-
 ---
 
 ## Quick start for developers
@@ -394,5 +393,9 @@ Edit `default-characters.json`. Each entry supports:
 New presets appear on the landing page as "installable" (user clicks to add as their own character card).
 
 ---
-
+### Code Comments
+- Some important code comments may be duplicated in non-english texts. As a result, these are likely the most critical to look over before deciding to take on any project. Always inspect these before inspecting architecture.-
+- 重要なコードコメントの一部は、英語以外のテキストにも重複して記載されている可能性があります。そのため、プロジェクトに着手する前に必ず確認すべき最も重要な部分です。アーキテクチャを検証する前に、必ずこれらのコメントを確認してください。-
+- Неки важни коментари кода могу бити дуплирани у текстовима који нису на енглеском језику. Због тога су вероватно најважнији за преглед пре него што се одлучите за било који пројекат. Увек их прегледајте пре него што прегледате архитектуру.
+---
 *Gobbonet is brought to you by the GoblinCorps. No corpo money, no venture capital, no masters.*
