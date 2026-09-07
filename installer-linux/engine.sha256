@@ -1,0 +1,9 @@
+# Pinned llama.cpp engine hashes for the build recorded in build-deb.sh.
+#
+# Bumping LLAMA_BUILD means updating these in the same commit. That is the
+# point of pinning: a deliberate change, not a silent fetch of whatever
+# upstream published this morning.
+#
+# Verified against https://github.com/ggml-org/llama.cpp/releases/tag/b10456
+GPU_SHA256=856fcfe9b273e6e813c8d5745396693080ce1cca8134b1180f0e8e2f22b21772
+CPU_SHA256=d07b3f80f3a1ed1de46bfba5671b4af40a87417e1dbf35d0603ad2d623ddc577
