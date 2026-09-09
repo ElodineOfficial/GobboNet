@@ -1,25 +1,25 @@
 # Contributors
 
 GobboNet is built with help from people who filed reports, dug into problems,
-tested fixes, and wrote code. Most contributions arrived as pull requests that
+tested fixes, and wrote code. Many contributions arrived as pull requests that
 were reimplemented rather than merged directly, because the codebase moved
 underneath them. That does not make the work any less theirs.
 
-This file is the fuller record. GitHub's contributor sidebar only counts people
-whose email appears on a commit, so anyone who found a bug without submitting
-code will never show up there no matter how much they helped. They are listed
-here instead.
+This file is the fuller record. GitHub's contributor sidebar is built from
+commit data, so anyone who found a bug without submitting code will never
+appear there no matter how much they helped. They are listed here instead.
 
 ## Code contributions
 
 People who opened pull requests.
 
-- John McCardle - Linux compatibility groundwork, including the Wine detection
-  path, and early Linux roadmap work. PRs #2 and #30.
-- neoliminal - Security review and hardening: GGUF metadata sanitization before
-  it reaches generated command files, pinned SHA-256 checksums for the engine
-  and embedding model, run-flag stripping on transferred state, and a sturdier
-  escapeHtml fallback. PRs #3, #4, #5, #6, #7, and #8.
+- John McCardle - The Linux and Go side of this project. Linux compatibility
+  groundwork, the Wine detection path, and the roadmap that got GobboNet off
+  Windows-only. PRs #2 and #30. GobboNet would not run on Linux without him.
+- neoliminal - Security review and hardening: rate limiting, GGUF metadata sanitization
+  before it reaches generated command files, pinned SHA-256 checksums for the
+  engine and embedding model, run-flag stripping on transferred state, and a
+  sturdier escapeHtml fallback. PRs #3, #4, #5, #6, #7, and #8.
 - Dawid Korach - Windows port handling, service-health checks, and the
   investigation and fixes for orphaned processes. Issue #14 and PR #15.
 - James Sesler (@TheAmericanMaker) - Excluded generation spools from version
@@ -29,6 +29,15 @@ People who opened pull requests.
   Mistral Small models. PRs #28, #32, #34, and #40.
 - ken00H - Safer model recommendations and GPU memory headroom, particularly
   for gpt-oss on 12 GB cards. PR #39.
+- wizzense - LAN bind fallback, so local chat stays available when a
+  network-facing bind is denied. PR #10.
+
+## Security
+
+- Solveig - Elodine's primary security consultant for close to five years.
+  Not a GitHub user, and so absent from every automated credit list this
+  project generates, which is exactly why the name belongs here. The security
+  posture of this project owes a great deal to that ongoing counsel.
 
 ## Reports, findings, and testing
 
@@ -61,7 +70,7 @@ shaped fixes across the 1.5 and 1.6 releases.
 
 Pull requests are frequently reimplemented rather than merged. When that
 happens the original author is recorded with a Co-authored-by trailer on the
-commit that lands the work, so the contribution is attached to them in the
+commit that lands the work, so the contribution stays attached to them in the
 repository history.
 
 If you contributed and are not listed, or are listed in a way you would like
