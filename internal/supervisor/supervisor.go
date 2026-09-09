@@ -202,10 +202,23 @@ func (s *Supervisor) setStatus(phase, file, name, message string, startedAt int6
 
 // BuildArgs assembles the llama-server command line for a model record.
 //
-// Mirrors the argument set launch.bat constructs in its :start_server block, and
-// the one Build-LaunchScript rebuilt for a swap. Both used to exist separately
-// and could disagree; here the record comes from the same classifier in both
-// cases, so they cannot.
+// This is the ONLY builder on the Go path, so the .deb and the Windows
+// installer start llama-server identically. launch.bat's :start_server block
+// and Build-LaunchScript are the legacy batch/PowerShell equivalents; those two
+// used to exist separately and could disagree, whereas here the record comes
+// from the same classifier in both cases.
+//
+// It matches launch.bat flag for flag with ONE deliberate exception: -lv.
+// launch.bat raises llama.cpp's log verbosity because its STEP 3b greps the log
+// for "offloaded"/"Vulkan0"/"CUDA0" to confirm GPU acceleration, and llama.cpp
+// files those lines above the default threshold. The Go path does no such
+// confirmation, so raising verbosity would only cost ring-buffer room -- the
+// stderr ring is a fixed 64 KB, and a noisier startup banner would evict the
+// error text it exists to preserve.
+//
+// If offload confirmation is ever added here, -lv has to be added with it or
+// the check will silently never match. tests/test-engine-args.py holds that
+// pairing and fails if one arrives without the other.
 func (s *Supervisor) BuildArgs(rec models.Record, modelPath string) []string {
 	useJinja := rec.UseJinja != 0
 	chatTemplate := rec.ChatTemplate

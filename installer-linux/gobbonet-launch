@@ -23,8 +23,23 @@ for arg in "$@"; do
     esac
 done
 
-PREFIX="/usr/lib/gobbonet"
+PREFIX="$(dirname "$(readlink -f "$0")")"
 BIN="$PREFIX/gobbonet"
+# Upstream shared libraries also depend on sibling libraries.
+export LD_LIBRARY_PATH="$PREFIX/llama-cpp:$PREFIX/llama-cpp-cpu${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+# Explicit server/administration commands keep their normal CLI behavior.
+case "${1:-}" in
+    ""|--no-browser) ;;
+    setup)
+        case "${2:-}" in
+            --status|--help|-h) exec "$BIN" "$@" ;;
+        esac
+        shift; exec "$PREFIX/gobbonet-launch" --setup "$@" ;;
+    --setup) ;;
+    *) exec "$BIN" "$@" ;;
+esac
+FORCE_SETUP=0
+[ "${1:-}" = "--setup" ] && FORCE_SETUP=1
 CATALOG="$PREFIX/models.ini"
 WEBROOT="$PREFIX/web"
 
@@ -38,7 +53,11 @@ chmod 700 "$DATA_DIR" 2>/dev/null || true
 # simply lost. When someone reports "I clicked it and nothing happened", this
 # file is the only thing that can say why — so it is opened before anything
 # else can fail.
-exec >>"$LOG" 2>&1
+if [ -t 1 ]; then
+    exec > >(tee -a "$LOG") 2>&1
+else
+    exec >>"$LOG" 2>&1
+fi
 echo "=== $(date -Is) launching GobboNet ==="
 
 # ---------------------------------------------------------------------------
@@ -113,11 +132,12 @@ have_gui() { [ -n "${DISPLAY:-}" ] || [ -n "${WAYLAND_DISPLAY:-}" ]; }
 # open_url is best-effort by nature; tell_url is what makes a failure visible.
 open_url() {
     have_gui || return 1
-    if   command -v xdg-open >/dev/null 2>&1; then xdg-open "$1" >/dev/null 2>&1 &
-    elif command -v gio      >/dev/null 2>&1; then gio open "$1" >/dev/null 2>&1 &
+    if   command -v xdg-open >/dev/null 2>&1; then timeout 15 xdg-open "$1" >/dev/null 2>&1 && return 0
+    fi
+    if command -v gio >/dev/null 2>&1; then timeout 15 gio open "$1" >/dev/null 2>&1 && return 0
     else return 1
     fi
-    return 0
+    return 1
 }
 
 # A first run that cannot open a browser is the worst silent failure this
@@ -148,16 +168,17 @@ $1"
 # browser step to be able to notice it failed. On every later start this is a
 # single cheap exit-code check.
 # ---------------------------------------------------------------------------
-if "$BIN" setup --status >/dev/null 2>&1; then
+if [ "$FORCE_SETUP" = "0" ] && "$BIN" setup --status >/dev/null 2>&1; then
     echo "setup: already complete"
 else
     echo "setup: first run"
-    "$BIN" "${SETUP_ARGS[@]}" --no-browser &
+    SETUP_LOG="$(mktemp "$DATA_DIR/setup.XXXXXX")" || die "Cannot create setup log."
+    python3 "$PREFIX/gobbonet-setup.py" "$ENGINE" >"$SETUP_LOG" 2>&1 &
     SETUP_PID=$!
 
     WIZARD=""
     for _ in $(seq 1 60); do
-        WIZARD="$(grep -oE 'http://127\.0\.0\.1:[0-9]+/' "$LOG" 2>/dev/null | tail -1)"
+        WIZARD="$(grep -oE 'http://127\.0\.0\.1:[0-9]+/' "$SETUP_LOG" 2>/dev/null | tail -1)"
         [ -n "$WIZARD" ] && break
         kill -0 "$SETUP_PID" 2>/dev/null || break
         sleep 0.25
@@ -173,9 +194,14 @@ else
         echo "setup wizard at $WIZARD (browser suppressed by --no-browser)"
     fi
 
+    trap 'kill "$SETUP_PID" 2>/dev/null; exit 130' INT TERM
     if ! wait "$SETUP_PID"; then
+        cat "$SETUP_LOG"
         die "GobboNet's first-run setup did not finish."
     fi
+    cat "$SETUP_LOG"
+    rm -f "$SETUP_LOG"
+    trap - INT TERM
 fi
 
 # Point the server at the packaged web assets if nothing has yet.
@@ -328,7 +354,9 @@ fi
 # the GPU. The trap covers a normal exit as well as a session logout.
 # ---------------------------------------------------------------------------
 SERVER_PID=""
+EMBED_PID=""
 cleanup() {
+    [ -z "$EMBED_PID" ] || kill "$EMBED_PID" 2>/dev/null || true
     if [ -n "$SERVER_PID" ] && kill -0 "$SERVER_PID" 2>/dev/null; then
         echo "stopping server $SERVER_PID"
         kill "$SERVER_PID" 2>/dev/null
@@ -339,9 +367,18 @@ cleanup() {
         kill -9 "$SERVER_PID" 2>/dev/null
     fi
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 cd "$PREFIX" || die "Could not enter $PREFIX."
+# Optional embedding model lives separately so it cannot become the chat model.
+RUNTIME_DATA="$("$BIN" config get data_dir)"
+EMBED_MODEL="$RUNTIME_DATA/embeddings/nomic-embed-text-v1.5.Q8_0.gguf"
+if [ -f "$EMBED_MODEL" ] && [ -n "$ENGINE" ] && [ -n "$("$BIN" config get server_exe)" ]; then
+    "$ENGINE" --model "$EMBED_MODEL" --host 127.0.0.1 --port 11436 --embeddings --pooling mean --ctx-size 2048 --gpu-layers 0 >"$RUNTIME_DATA/embed-server.log" 2>&1 &
+    EMBED_PID=$!
+fi
 "$BIN" serve &
 SERVER_PID=$!
 echo "server pid: $SERVER_PID"
@@ -352,7 +389,7 @@ echo "server pid: $SERVER_PID"
 # rather than a server that was still starting.
 # ---------------------------------------------------------------------------
 served=0
-for _ in $(seq 1 60); do
+for _ in $(seq 1 1200); do
     if gobbonet_is_serving; then
         echo "server answering on $PORT; opening browser"
         served=1
@@ -371,7 +408,7 @@ The reason it gave is in the log, just above this line."
 done
 
 if [ "$served" -ne 1 ]; then
-    die "GobboNet's server did not answer on port $PORT within 30 seconds.
+    die "GobboNet's server did not answer on port $PORT within 10 minutes.
 
 It is still running (pid $SERVER_PID) but not serving the chat.
 The log above has whatever it managed to report."

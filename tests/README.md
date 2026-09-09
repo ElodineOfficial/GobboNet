@@ -13,6 +13,19 @@ node tests/test-markdown-render.mjs     # one suite
 for f in tests/*.mjs; do node "$f" || echo "FAILED: $f"; done   # all of them
 ```
 
+`test-engine-args.py` pins the llama-server command line across the two launch
+paths — `launch.bat`'s `:start_server` block and `Supervisor.BuildArgs`, the
+latter being what the `.deb` and the Windows installer both use. Every flag
+present on one side and not the other has to be listed as a known, reasoned
+difference or the test fails. It also holds the `-lv` / offload-detection
+pairing from #33: if GPU-offload confirmation is ever added to the Go path,
+`-lv` must arrive with it, because llama.cpp files those log lines above the
+default verbosity threshold.
+
+```sh
+python3 tests/test-engine-args.py
+```
+
 `test-prompt-safety.py` and `test-image-url-gate.mjs` cover the three fixes from
 PR #30 (John McCardle). The first pins the confirmation-prompt hygiene in
 `launch.bat` and the sanitizer routing in `identify-model.ps1` — neither can run

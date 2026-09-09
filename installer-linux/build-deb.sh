@@ -96,13 +96,13 @@ else
     SHA="nogit.$(date -u -d "@${SOURCE_DATE_EPOCH:-$(date +%s)}" +%Y%m%d 2>/dev/null || date -u +%Y%m%d)"
     echo "WARNING: no git metadata in $ROOT; stamping $SHA" >&2
 fi
-DEB_VERSION="${RELEASE}+go.${SHA}-1"
+DEB_VERSION="${RELEASE}+go.${SHA}-3"
 
 # ---------------------------------------------------------------------------
 # The Go binary. Built by ../build-release.sh, which refuses a dirty tree and
 # stamps the version with the commit sha.
 # ---------------------------------------------------------------------------
-GOBBONET_BIN="${GOBBONET_BIN:-}"
+GOBBONET_BIN="${GOBBONET_BIN:-${GOBBONET_RUNTIME_DIR:+$GOBBONET_RUNTIME_DIR/gobbonet}}"
 if [ -z "$GOBBONET_BIN" ]; then
     GOBBONET_BIN="$(find "$ROOT/dist" -type f -name gobbonet -path '*linux-amd64*' -print 2>/dev/null | head -1 || true)"
 fi
@@ -159,7 +159,14 @@ fetch_engine() {
 }
 
 say "engine build: $LLAMA_BUILD"
-fetch_engine "$GPU_ASSET" "$GPU_SHA256" "$VENDOR/llama-cpp"
+if [ -n "${GOBBONET_RUNTIME_DIR:-}" ]; then
+    say "Reusing the explicitly supplied runtime: $GOBBONET_RUNTIME_DIR"
+    mkdir -p "$VENDOR"
+    rm -rf "$VENDOR/llama-cpp"
+    cp -a "$GOBBONET_RUNTIME_DIR/llama-cpp" "$VENDOR/llama-cpp"
+else
+    fetch_engine "$GPU_ASSET" "$GPU_SHA256" "$VENDOR/llama-cpp"
+fi
 if [ "$BUNDLE_CPU" = "1" ]; then
     say "BUNDLE_CPU_ENGINE=1 — also bundling the CPU-only archive"
     fetch_engine "$CPU_ASSET" "$CPU_SHA256" "$VENDOR/llama-cpp-cpu"
@@ -277,6 +284,7 @@ install -d -m 0755 "$STAGE/usr/share/icons/hicolor/256x256/apps"
 install -d -m 0755 "$STAGE/usr/share/doc/gobbonet"
 
 install -m 0755 "$GOBBONET_BIN"        "$STAGE/usr/lib/gobbonet/gobbonet"
+install -m 0644 gobbonet-setup.py wizard.html "$STAGE/usr/lib/gobbonet/"
 install -m 0755 gobbonet-launch        "$STAGE/usr/lib/gobbonet/gobbonet-launch"
 install -m 0644 "$ROOT/installer/models.ini" "$STAGE/usr/lib/gobbonet/models.ini"
 cp -r "$ROOT/web"                      "$STAGE/usr/lib/gobbonet/web"
@@ -290,7 +298,7 @@ if [ "$BUNDLE_CPU" = "1" ]; then
 fi
 
 # So the command works from a terminal too.
-ln -sf /usr/lib/gobbonet/gobbonet "$STAGE/usr/bin/gobbonet"
+ln -sf /usr/lib/gobbonet/gobbonet-launch "$STAGE/usr/bin/gobbonet"
 
 install -m 0644 gobbonet.desktop "$STAGE/usr/share/applications/gobbonet.desktop"
 if [ -f icon/gobbonet-256.png ]; then
@@ -327,7 +335,7 @@ Priority: optional
 Architecture: amd64
 Maintainer: Elodine <https://github.com/ElodineOfficial>
 Installed-Size: $INSTALLED_KB
-Depends: libc6 (>= $LIBC_MIN), xdg-utils
+Depends: python3 (>= 3.8), bash, coreutils, libc6 (>= $LIBC_MIN), libstdc++6 (>= 12), libgcc-s1, libgomp1, libssl3t64 | libssl3 (>= 3.0.0), xdg-utils
 Recommends: libvulkan1, mesa-vulkan-drivers | vulkan-driver, curl, zenity
 Homepage: https://github.com/ElodineOfficial/GobboNet
 Description: Local AI chat for local models
@@ -348,6 +356,10 @@ EOF
 mkdir -p "$OUT"
 DEB="$OUT/gobbonet_${DEB_VERSION}_amd64.deb"
 rm -f "$DEB"
+
+# A staging directory can inherit 0700 from mktemp or a restrictive umask.
+# Enforce and check the public payload modes immediately before archiving.
+"$ROOT/installer-linux/package-permissions.sh" "$STAGE"
 
 # Root-owned program files without needing to be root to build.
 if command -v fakeroot >/dev/null 2>&1; then

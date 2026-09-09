@@ -79,6 +79,13 @@ if [ -d fonts ]; then
     fonts=" + $(find fonts -maxdepth 1 -type f | wc -l) font(s)"
 fi
 
+# mktemp creates its directory as 0700 even with umask 0022. Once it becomes
+# the public web root, every user must be able to traverse it and read assets.
+# Normalize copied assets too: source permissions and umask are not a release
+# contract. Only this generated public tree is changed, never user data.
+find "$TMP" -type d -exec chmod 0755 {} +
+find "$TMP" -type f -exec chmod 0644 {} +
+
 rm -rf "$OUT"
 mv "$TMP" "$OUT"
 trap - EXIT

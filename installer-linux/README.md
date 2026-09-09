@@ -1,3 +1,5 @@
+> Revision 3: see ../LINUX-START-HERE.md for the current guided launch flow, portable ZIP, validation and rebuild instructions. The historical notes below describe earlier revisions.
+
 # installer-linux
 
 Builds `gobbonet.deb` for Ubuntu, Mint, Pop!_OS and Debian. Sibling of
@@ -162,3 +164,38 @@ the Windows wizard already does when its probe fails.
 arm64 Linux engine. That is no longer true — `llama-<build>-bin-ubuntu-arm64.tar.gz`
 and `…-ubuntu-vulkan-arm64.tar.gz` both exist. The remaining reason to hold it
 is testing, not availability.
+
+## 1.7.3 packaging revision 2
+
+The corrected package is `gobbonet_1.7.3+go.nogit.20260908-2_amd64.deb`.
+Install it over revision 1; no purge is needed:
+
+```sh
+sudo apt install ./gobbonet_1.7.3+go.nogit.20260908-2_amd64.deb
+```
+
+Launch GobboNet from the applications menu as your regular user to run the
+browser setup wizard. For terminal-driven setup, run `gobbonet setup`.
+
+`stage-web.sh` now makes its generated directories 0755 and assets 0644 before
+publishing the web root. `mktemp -d` creates 0700 directories regardless of the
+normal umask; moving that directory without normalizing it caused the reported
+failure. `package-permissions.sh` also normalizes and checks the public package
+staging tree immediately before `dpkg-deb` runs. These scripts never change
+permissions on user models, conversations, passwords or configuration.
+
+The package declares the C++, GCC, OpenMP and OpenSSL runtime libraries needed
+by its bundled engine. Vulkan remains recommended so CPU-only use is supported.
+The application remains version 1.7.3; only the Debian revision advances to 2.
+
+Run the packaging regression tests from the project root:
+
+```sh
+python3 tests/test-package-permissions.py
+```
+
+Release verification must include a fresh install and an upgrade, launched as
+a non-root user. Confirm the setup wizard, model loading, chat, desktop entry,
+and that existing user data survives the upgrade. Do not use a production home
+or purge a working installation just to perform a release test; use a disposable
+VM or test installation.

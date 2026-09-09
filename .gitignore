@@ -73,3 +73,7 @@ hardware.ini
 installer-linux/vendor/
 installer-linux/stage/
 installer-linux/dist/
+
+# Staged Linux build output (binary + llama.cpp .so files).
+# Ships as a release asset, not in the tree.
+/linux-amd64/
