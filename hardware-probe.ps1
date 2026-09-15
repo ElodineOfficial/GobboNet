@@ -790,7 +790,32 @@ function Get-GpuFromLlama {
     }
 
     Write-Status 'Asking llama.cpp which devices it can see...'
+    $env:DISABLE_LAYER_AMD_SWITCHABLE_GRAPHICS_1 = "1"
+    $env:VK_LOADER_LAYERS_DISABLE = "*"
     $r = Invoke-ToolCapture -FilePath $exe -Arguments @('--list-devices') -TimeoutSec $TimeoutSec
+    if ($r.TimedOut) {
+        $nvIcd = $null
+        if ($env:SystemRoot) {
+            $cand = Join-Path $env:SystemRoot 'System32\nv-vk64.json'
+            if (Test-Path -LiteralPath $cand) { $nvIcd = $cand }
+            else {
+                $cand = Join-Path $env:SystemRoot 'Sysnative\nv-vk64.json'
+                if (Test-Path -LiteralPath $cand) { $nvIcd = $cand }
+            }
+        }
+        if ($nvIcd) {
+            Add-Log 'llama.cpp: TIMED OUT with default Vulkan enumeration; retrying with NVIDIA ICD isolated...'
+            $oldIcd = $env:VK_ICD_FILENAMES
+            $oldDrv = $env:VK_DRIVER_FILES
+            $env:VK_ICD_FILENAMES = $nvIcd
+            $env:VK_DRIVER_FILES = $nvIcd
+            $r = Invoke-ToolCapture -FilePath $exe -Arguments @('--list-devices') -TimeoutSec $TimeoutSec
+            if ($r.TimedOut) {
+                $env:VK_ICD_FILENAMES = $oldIcd
+                $env:VK_DRIVER_FILES = $oldDrv
+            }
+        }
+    }
     if ($r.TimedOut) {
         Add-Log 'llama.cpp: TIMED OUT (killed) -- possible bad/hanging GPU driver'
         Add-ProbeWarning 'Querying the GPU through llama.cpp timed out. Your graphics driver may need updating; detection fell back to Windows.'

@@ -470,6 +470,14 @@
       </div>
 
       <div class="form-group">
+        <label for="card-model">Linked Model <span style="opacity:0.5;font-weight:400;font-size:11px;">&mdash; auto-swaps when activating this character</span></label>
+        <select id="card-model">
+          <option value="">Current loaded model (default)</option>
+        </select>
+        <div class="form-hint">Link a specific model to this character. When this character is activated or selected in chat, GobboNet will automatically load this model.</div>
+      </div>
+
+      <div class="form-group">
         <label for="card-lore-toggle">Lore System</label>
         <select id="card-lore-toggle">
           <option value="on">Enabled — auto-summarize old messages</option>

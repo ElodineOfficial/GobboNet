@@ -68,6 +68,15 @@ title Gobbonet - Local AI Chat [llama.cpp]
 color 0A
 
 :: ---------------------------------------------------------------
+:: VULKAN HYBRID GRAPHICS HARDENING (fixes issue #37)
+:: Disable conflicting implicit layers (AMD switchable graphics,
+:: OEM/game overlays) that cause vkEnumeratePhysicalDevices to deadlock on
+:: hybrid GPU laptops (e.g. AMD Ryzen APU + NVIDIA dGPU).
+:: ---------------------------------------------------------------
+set "DISABLE_LAYER_AMD_SWITCHABLE_GRAPHICS_1=1"
+set "VK_LOADER_LAYERS_DISABLE=*"
+
+:: ---------------------------------------------------------------
 :: PREFLIGHT -- confirm the external tools this script leans on.
 ::
 :: All four ship in System32 on Windows 10 1803+, so on a healthy box
@@ -1246,8 +1255,8 @@ if "!MODEL_CHOICE!"=="1" (
     set "MODEL_FAMILY=gemma"
     set "MODEL_MAX_CTX=131072"
     set "MODEL_THINK_FMT=none"
-    set "CTX_SIZE=32768"
-    set "KV_CACHE_TYPE=f16"
+    set "CTX_SIZE=16384"
+    set "KV_CACHE_TYPE=q8_0"
     goto :download_model
 )
 if "!MODEL_CHOICE!"=="2" (
@@ -1258,8 +1267,8 @@ if "!MODEL_CHOICE!"=="2" (
     set "MODEL_FAMILY=llama"
     set "MODEL_MAX_CTX=131072"
     set "MODEL_THINK_FMT=none"
-    set "CTX_SIZE=32768"
-    set "KV_CACHE_TYPE=f16"
+    set "CTX_SIZE=16384"
+    set "KV_CACHE_TYPE=q8_0"
     goto :download_model
 )
 if "!MODEL_CHOICE!"=="3" (
@@ -1740,6 +1749,47 @@ if not "!MODEL_CHAT_TEMPLATE_FILE!"=="" (
     )
 )
 
+:: Preflight test: ensure llama-server.exe can start and load dependencies
+:: without crashing before we try loading a full multi-gigabyte model.
+echo  [..] Preflight testing llama-server binary...
+if not defined HW_GPU_VENDOR if exist "%~dp0hardware.json" (
+    for /f "usebackq delims=" %%V in (`powershell -NoProfile -Command "try { (Get-Content -Raw '%~dp0hardware.json' | ConvertFrom-Json).gpu.vendor } catch {}" 2^>nul`) do set "HW_GPU_VENDOR=%%V"
+)
+if not defined HW_GPU_VENDOR (
+    where nvidia-smi >nul 2>&1
+    if not errorlevel 1 set "HW_GPU_VENDOR=nvidia"
+)
+if "!HW_GPU_VENDOR!"=="nvidia" if exist "%SYS32%\nv-vk64.json" (
+    set "VK_ICD_FILENAMES=%SYS32%\nv-vk64.json"
+    set "VK_DRIVER_FILES=%SYS32%\nv-vk64.json"
+)
+powershell -NoProfile -Command "$p = Start-Process -FilePath '!SERVER_EXE!' -ArgumentList '--version' -NoNewWindow -PassThru; $p.WaitForExit(5000); if (-not $p.HasExited) { $p.Kill(); exit 124 } exit $p.ExitCode" >nul 2>&1
+if errorlevel 1 (
+    if not defined VK_ICD_FILENAMES if exist "%SYS32%\nv-vk64.json" (
+        set "VK_ICD_FILENAMES=%SYS32%\nv-vk64.json"
+        set "VK_DRIVER_FILES=%SYS32%\nv-vk64.json"
+        set "HW_GPU_VENDOR=nvidia"
+        powershell -NoProfile -Command "$p = Start-Process -FilePath '!SERVER_EXE!' -ArgumentList '--version' -NoNewWindow -PassThru; $p.WaitForExit(5000); if (-not $p.HasExited) { $p.Kill(); exit 124 } exit $p.ExitCode" >nul 2>&1
+    )
+)
+if errorlevel 1 goto :preflight_failed
+goto :preflight_ok
+
+:preflight_failed
+set "_PRE_ERR=!ERRORLEVEL!"
+echo.
+echo  [ERROR] llama-server.exe failed preflight test ^(exit code !_PRE_ERR!^).
+echo         If exit code is 124, Vulkan device enumeration hung ^(dual GPU / driver issue^).
+echo         If exit code is -1073741515 / 0xC0000135, Visual C++ Redistributable is missing.
+echo.
+echo  Fix options:
+echo    1. Install Microsoft Visual C++ 2015-2022 Redistributable ^(x64^)
+echo    2. Set Windows Settings -^> Graphics -^> llama-server.exe -^> High Performance
+echo    3. Dual-GPU systems: set DISABLE_LAYER_AMD_SWITCHABLE_GRAPHICS_1=1
+goto :fatal
+
+:preflight_ok
+
 :: Write a small launcher script so we can reliably redirect output
 :: to a log file. (start + cmd /c + multi-line caret = quoting hell.)
 :: LAUNCH_SCRIPT lives in the project root (see CONFIG at the top of
@@ -1748,12 +1798,17 @@ if not "!MODEL_CHAT_TEMPLATE_FILE!"=="" (
 :: new model.
 > "!LAUNCH_SCRIPT!" (
     echo @echo off
+    echo set "DISABLE_LAYER_AMD_SWITCHABLE_GRAPHICS_1=1"
+    echo set "VK_LOADER_LAYERS_DISABLE=*"
+    if "!HW_GPU_VENDOR!"=="nvidia" if exist "%SYS32%\nv-vk64.json" echo set "VK_ICD_FILENAMES=%SYS32%\nv-vk64.json"
+    if "!HW_GPU_VENDOR!"=="nvidia" if exist "%SYS32%\nv-vk64.json" echo set "VK_DRIVER_FILES=%SYS32%\nv-vk64.json"
     echo "!SERVER_EXE!" --model "!GGUF_PATH!" --port !SERVER_PORT! --host 127.0.0.1 --ctx-size !CTX_SIZE! --n-gpu-layers !GPU_LAYERS! --cache-type-k !KV_CACHE_TYPE! --cache-type-v !KV_CACHE_TYPE! --parallel 1 -lv !LOG_VERBOSITY! !JINJA_FLAG! !CHAT_TEMPLATE_FLAG! --reasoning-format auto ^> "!LOG_FILE!" 2^>^&1
+    echo echo [llama-server exited with code %%ERRORLEVEL%%] ^>^> "!LOG_FILE!"
 )
 
 start /min "llama-server" "!LAUNCH_SCRIPT!"
 
-echo  [..] Waiting for server to load model...
+echo  [..] Waiting for server to load model on port !SERVER_PORT!...
 echo       The first launch on a NEW PC can take several minutes while
 echo       your GPU compiles its shaders. Later starts are much faster.
 echo       (If the server process stops, we halt and show the log.)

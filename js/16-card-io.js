@@ -387,6 +387,9 @@ function _cardDataToInternal(data, spec, imageDataUrl) {
   try {
     const ext = (data.extensions && data.extensions.gobbonet) || {};
     applyImportedCardCode(card, typeof ext.customCode === 'string' ? ext.customCode : '');
+    if (ext.modelFile && typeof ext.modelFile === 'string') {
+      card.modelFile = ext.modelFile.trim();
+    }
   } catch (e) {
     card.customCode = '';
     card.customCodeEnabled = false;
@@ -655,6 +658,7 @@ function _cardToV3(card) {
       const g = {};
       if (card.ragStorybook && card.ragStorybook.trim()) g.ragStorybook = card.ragStorybook;
       if (card.customCode && card.customCode.trim()) g.customCode = card.customCode;
+      if (card.modelFile && card.modelFile.trim()) g.modelFile = card.modelFile.trim();
       return Object.keys(g).length ? { gobbonet: g } : {};
     })(),
     group_only_greetings: [],
@@ -720,7 +724,8 @@ async function exportCardAsV3() {
     altGreetingsEnabled: chk('card-alt-greetings-enabled') ?? card.altGreetingsEnabled,
     altGreetings: val('card-alt-greetings') ?? card.altGreetings,
     startingLore: val('card-starting-lore') ?? card.startingLore,
-    ragStorybook: val('card-rag-storybook') ?? card.ragStorybook
+    ragStorybook: val('card-rag-storybook') ?? card.ragStorybook,
+    modelFile: val('card-model') ?? card.modelFile
   };
 
   try {

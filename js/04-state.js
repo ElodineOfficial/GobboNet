@@ -50,6 +50,9 @@ const DEFAULT_CARD = {
   // models-list.json — the same list the header dropdown uses. Anything the
   // user has dropped into that folder is a valid choice; nothing else is.
   loreModelFile: '',
+  // Which GGUF is linked to this character (#52). Empty means "use current loaded
+  // model". When set, activating this character auto-swaps to this model.
+  modelFile: '',
   startingLore: '',
   // RAG Storybook — the big, hand-authored character/world bible. Accepts
   // structured weighted-tag lines (Retriever B) AND/OR plain prose chunks

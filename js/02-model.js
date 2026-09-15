@@ -398,6 +398,16 @@ async function onHeaderModelChange(sel) {
     // Refresh the active-model metadata so the rest of the UI updates.
     await loadActiveModel();
     _currentModelFile = newFile;
+
+    // If a thread is active, link this model to the thread (#52)
+    if (typeof state !== 'undefined' && state && state.activeThreadId && Array.isArray(state.threads)) {
+      const curThread = state.threads.find(t => t.id === state.activeThreadId);
+      if (curThread) {
+        curThread.modelFile = newFile;
+        if (typeof saveState === 'function') saveState();
+      }
+    }
+
     showModelSwitchToast('Active: ' + newName, 'ok');
     console.log('[swap] active model is now', newFile);
   } catch (e) {
@@ -408,6 +418,45 @@ async function onHeaderModelChange(sel) {
     _swapInFlight = false;
     sel.disabled = false;
     if (wrap) wrap.classList.remove('swapping');
+  }
+}
+
+/**
+ * Programmatically switch to a model file (e.g. when activating a character
+ * or opening a linked chat thread). If target model matches _currentModelFile
+ * or is empty, returns immediately. If available in the dropdown, triggers
+ * the standard onHeaderModelChange flow. If missing, invokes onMissing callback.
+ */
+async function switchModelToFile(file, sourceReason, onMissing) {
+  if (!file || typeof file !== 'string' || !file.trim()) return;
+  const target = file.trim();
+  if (target === _currentModelFile) return;
+
+  const sel = document.getElementById('header-model-select');
+  if (sel && sel.options && sel.options.length > 0) {
+    const opt = [...sel.options].find(o => o.value === target);
+    if (!opt) {
+      console.warn(`[model-link] Model "${target}" not found in available models.`);
+      showModelSwitchToast(`Linked model "${target}" not found in models folder; keeping current model.`, 'warn');
+      if (typeof onMissing === 'function') onMissing();
+      return;
+    }
+    sel.value = target;
+    await onHeaderModelChange(sel);
+    return;
+  }
+
+  if (!IS_SERVED) return;
+  try {
+    showModelSwitchToast(`Swapping model for ${sourceReason || 'thread'}...`, 'info', 0);
+    await swapToModelFile(target);
+    await loadActiveModel();
+    _currentModelFile = target;
+    showModelSwitchToast(`Active: ${activeModel.name || target}`, 'ok');
+  } catch (e) {
+    console.warn('[model-link] switch failed:', e);
+    showModelSwitchToast(`Model switch failed: ${e.message}`, 'err');
+    if (typeof onMissing === 'function') onMissing();
   }
 }
 
