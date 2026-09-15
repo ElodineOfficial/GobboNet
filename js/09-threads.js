@@ -88,6 +88,7 @@ function forkAt(messageIndex) {
     cardName: thread.cardName,
     personaId: thread.personaId,
     personaName: thread.personaName,
+    modelFile: thread.modelFile || '',
     createdAt: Date.now(),
     pinned: false,
     folderId: thread.folderId,
@@ -106,6 +107,7 @@ function forkAt(messageIndex) {
   saveState();
   render();
   applyActiveCardBackground();
+  if (typeof checkAndSwapThreadModel === 'function') checkAndSwapThreadModel(newThread.id);
 
   // Pre-fill the textarea with the message content that was at forkPoint
   if (defaultInput !== undefined && defaultInput !== null) {
@@ -162,6 +164,7 @@ function switchToBranch(threadId) {
   applyActiveCardBackground();
   document.getElementById('msg-input')?.focus();
   scrollToBottom();
+  if (typeof checkAndSwapThreadModel === 'function') checkAndSwapThreadModel(threadId);
 }
 
 /* ================================================================
@@ -244,6 +247,7 @@ function createThread() {
     cardName: card.name,
     personaId: persona.id,
     personaName: persona.name,
+    modelFile: card.modelFile || '',
     // thread.lore now holds ONLY the running conversation summary (built up
     // by compression). Authored world/setting lore lives on the card
     // (card.startingLore) and is injected fresh each build, so we no longer
@@ -270,6 +274,7 @@ function createThread() {
   saveState();
   render();
   document.getElementById('msg-input').focus();
+  if (typeof checkAndSwapThreadModel === 'function') checkAndSwapThreadModel(thread.id);
 }
 
 /**
@@ -342,6 +347,32 @@ function switchThread(id) {
   // scrollTop=0 and the user has to scroll down manually. (switchToBranch
   // does this already; switchThread was missing the call.)
   scrollToBottom();
+  if (typeof checkAndSwapThreadModel === 'function') checkAndSwapThreadModel(id);
+}
+
+/**
+ * If the thread (or its linked character card) specifies a model file,
+ * automatically switch to that model (#52). If the model was deleted or
+ * unavailable, clear the link gracefully.
+ */
+function checkAndSwapThreadModel(threadId) {
+  if (!state || !Array.isArray(state.threads)) return;
+  const thread = state.threads.find(t => t.id === threadId);
+  if (!thread) return;
+
+  let target = (thread.modelFile || '').trim();
+  if (!target && thread.cardId && Array.isArray(state.characterCards)) {
+    const card = state.characterCards.find(c => c.id === thread.cardId);
+    if (card && card.modelFile) target = card.modelFile.trim();
+  }
+  if (!target) return;
+
+  if (typeof switchModelToFile === 'function') {
+    switchModelToFile(target, thread.name || 'thread', () => {
+      thread.modelFile = '';
+      saveState();
+    });
+  }
 }
 
 function getActiveThread() {

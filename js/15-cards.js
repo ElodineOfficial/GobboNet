@@ -224,6 +224,17 @@ function activateCard(id) {
   renderCardGrid();
   renderMessages();
   applyActiveCardBackground();
+
+  // Auto-swap model if character has a linked model (#52)
+  const card = state.characterCards.find(c => c.id === id);
+  if (card && card.modelFile) {
+    if (typeof switchModelToFile === 'function') {
+      switchModelToFile(card.modelFile, card.name, () => {
+        card.modelFile = '';
+        saveState();
+      });
+    }
+  }
 }
 
 function createCard() {
@@ -234,6 +245,8 @@ function createCard() {
     writingStyle: '',
     personality: '',
     loreEnabled: true,
+    loreModelFile: '',
+    modelFile: '',
     startingLore: '',
     ragStorybook: '',
     greeting: '',
@@ -276,6 +289,7 @@ function editCard(id) {
   document.getElementById('card-avatar').value = card.avatar || '';
   document.getElementById('card-style').value = card.writingStyle;
   document.getElementById('card-personality').value = card.personality;
+  populateCardModelSelect(card.modelFile || '');
   document.getElementById('card-lore-toggle').value = card.loreEnabled !== false ? 'on' : 'off';
   populateLoreModelSelect(card.loreModelFile || '');
   document.getElementById('card-starting-lore').value = card.startingLore || '';
@@ -373,6 +387,8 @@ function saveCard() {
   card.avatar = document.getElementById('card-avatar').value.trim();
   card.writingStyle = document.getElementById('card-style').value;
   card.personality = document.getElementById('card-personality').value;
+  const cardModelEl = document.getElementById('card-model');
+  card.modelFile = cardModelEl ? cardModelEl.value : (card.modelFile || '');
   card.loreEnabled = document.getElementById('card-lore-toggle').value === 'on';
   card.loreModelFile = document.getElementById('card-lore-model').value || '';
   card.startingLore = document.getElementById('card-starting-lore').value;
@@ -447,6 +463,40 @@ async function populateLoreModelSelect(selected) {
   } catch (e) {
     // file:// mode, or no file server. The default option still works, and
     // compression falls back to the chat model at run time anyway.
+  }
+
+  for (const m of models) {
+    const o = document.createElement('option');
+    o.value = m.file;
+    o.textContent = m.name + (m.active ? '  (currently loaded)' : '');
+    sel.appendChild(o);
+  }
+
+  if (want && !models.some(m => m.file === want)) {
+    const o = document.createElement('option');
+    o.value = want;
+    o.textContent = want + '  (not in the models folder)';
+    sel.appendChild(o);
+  }
+  sel.value = want;
+}
+
+/**
+ * Fill the card editor's linked-model dropdown from models-list.json (#52).
+ * Mirrors populateLoreModelSelect.
+ */
+async function populateCardModelSelect(selected) {
+  const sel = document.getElementById('card-model');
+  if (!sel) return;
+  const want = (selected || '').trim();
+  sel.innerHTML = '<option value="">Current loaded model (default)</option>';
+
+  let models = [];
+  try {
+    const r = await fetch('/models-list.json', { cache: 'no-store' });
+    if (r.ok) models = (await r.json()).models || [];
+  } catch (e) {
+    // file:// mode, or no file server.
   }
 
   for (const m of models) {
