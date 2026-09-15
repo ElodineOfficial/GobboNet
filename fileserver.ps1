@@ -37,6 +37,10 @@
 
 $ErrorActionPreference = 'Continue'
 
+# Vulkan hybrid graphics hardening (fixes issue #37)
+$env:DISABLE_LAYER_AMD_SWITCHABLE_GRAPHICS_1 = '1'
+$env:VK_LOADER_LAYERS_DISABLE = '*'
+
 # --- Config ------------------------------------------------------------------
 
 function Get-EnvOrDefault {
@@ -1351,7 +1355,28 @@ function Build-LaunchScript {
     $auditPrelude = 'echo [' + $stamp + '] hot-swap launch >> "' + $auditLog + '"' + "`r`n" +
                      'echo [args] ' + $line + ' >> "' + $auditLog + '"'
 
-    return "@echo off`r`n" + $auditPrelude + "`r`n" + $line + "`r`n"
+    $envPrelude = 'set "DISABLE_LAYER_AMD_SWITCHABLE_GRAPHICS_1=1"' + "`r`n" +
+                  'set "VK_LOADER_LAYERS_DISABLE=*"' + "`r`n"
+    $isNvidia = $false
+    try {
+        $hwJsonPath = Join-Path $Root 'hardware.json'
+        if (Test-Path -LiteralPath $hwJsonPath) {
+            $hw = ConvertFrom-Json (Get-Content -Raw -LiteralPath $hwJsonPath)
+            if ($hw.gpu.vendor -eq 'nvidia') { $isNvidia = $true }
+        }
+    } catch { }
+    if (-not $isNvidia -and (Get-Command 'nvidia-smi.exe' -ErrorAction SilentlyContinue)) {
+        $isNvidia = $true
+    }
+    if ($isNvidia -and $env:SystemRoot) {
+        $nvIcd = Join-Path $env:SystemRoot 'System32\nv-vk64.json'
+        if (Test-Path -LiteralPath $nvIcd) {
+            $envPrelude += ('set "VK_ICD_FILENAMES={0}"' -f $nvIcd) + "`r`n" +
+                           ('set "VK_DRIVER_FILES={0}"' -f $nvIcd) + "`r`n"
+        }
+    }
+
+    return "@echo off`r`n" + $envPrelude + $auditPrelude + "`r`n" + $line + "`r`n"
 }
 
 # Stop the currently-running llama-server process(es). We match by image

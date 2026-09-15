@@ -73,6 +73,7 @@ if (-not $h) {
     'HW_VRAM=0'
     'HW_RAM=0'
     'HW_DISK=0'
+    'HW_GPU_VENDOR='
     foreach ($i in 1..10) { 'MK_' + $i + '=' }
     exit 0
 }
@@ -116,6 +117,7 @@ else                       { $rec = 2 }
 'HW_VRAM=' + $v
 'HW_RAM=' + $ram
 'HW_DISK=' + $disk
+'HW_GPU_VENDOR=' + [string]$h.gpu.vendor
 'REC=' + $rec
 
 foreach ($i in 1..10) {
