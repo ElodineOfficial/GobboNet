@@ -601,3 +601,98 @@ func TestConfigSetHandlesCatalogKeys(t *testing.T) {
 		t.Errorf("url = %q", cfg.ModelCatalogURL)
 	}
 }
+
+// A config written by a NEWER GobboNet must not stop an older binary starting.
+//
+// This was a real trap, not a hypothetical. Every key 1.7.4 added --
+// idle_standdown_minutes and the [ui] table -- is unknown to 1.7.3, so a config
+// this build wrote made the previous binary refuse to boot:
+//
+//	[ERROR] gobbonet.toml: unknown setting(s): idle_standdown_minutes, ui
+//
+// which reads as "your config is broken" when the truth is "your binary is
+// old". Updating the web files and the binary in either order, or rolling back
+// to check whether something was a regression, met a server that would not
+// start. A config file must not be a one-way door.
+func TestLoadToleratesKeysFromANewerVersion(t *testing.T) {
+	path := writeConfig(t, "llm_url = \"http://x:1\"\nsome_setting_from_a_later_release = 42\n")
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("a key from a newer version stopped the load: %v", err)
+	}
+	if cfg.LLMURL != "http://x:1" {
+		t.Errorf("the rest of the config was not applied: llm_url = %q", cfg.LLMURL)
+	}
+}
+
+// A whole table from a newer version is the [ui] case specifically, and it
+// arrives as two undecoded keys: "ui" and "ui.<child>".
+func TestLoadToleratesTablesFromANewerVersion(t *testing.T) {
+	path := writeConfig(t, "llm_url = \"http://x:1\"\n\n[something_new]\nchild = \"value\"\nother = 3\n")
+	if _, err := Load(path); err != nil {
+		t.Fatalf("a table from a newer version stopped the load: %v", err)
+	}
+}
+
+// The reason the rule is a classifier and not "ignore everything": a typo
+// silently doing nothing is its own bad afternoon.
+func TestLoadStillRefusesTypos(t *testing.T) {
+	for _, typo := range []string{"listen_prot", "lisen_port", "listen_port_", "llm_ur"} {
+		path := writeConfig(t, "llm_url = \"http://x:1\"\n"+typo+" = 1\n")
+		_, err := Load(path)
+		if err == nil {
+			t.Errorf("%q was accepted; a near-miss of a real key must be refused", typo)
+			continue
+		}
+		if !strings.Contains(err.Error(), typo) {
+			t.Errorf("%q: the error should name the key, got: %v", typo, err)
+		}
+		// Naming the key it was probably meant to be is the difference between
+		// a rejection and a useful rejection.
+		if !strings.Contains(err.Error(), "did you mean") {
+			t.Errorf("%q: the error should suggest the intended key, got: %v", typo, err)
+		}
+	}
+}
+
+// A typo alongside a future key must still be fatal. Letting the typo through
+// because something else in the file was forward-looking would be the worst of
+// both rules.
+func TestLoadRefusesATypoEvenBesideAFutureKey(t *testing.T) {
+	path := writeConfig(t, "llm_url = \"http://x:1\"\nlisten_prot = 1\nsetting_from_the_future = 2\n")
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("a typo was accepted because a future key was present")
+	}
+	if !strings.Contains(err.Error(), "listen_prot") {
+		t.Errorf("the error should name the typo, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "setting_from_the_future") {
+		t.Errorf("the future key should be warned about, not made fatal: %v", err)
+	}
+}
+
+func TestNearestKeyClassification(t *testing.T) {
+	// Typos: close enough that a suggestion is worth making.
+	for _, in := range []string{"listen_prot", "lisen_port", "model_di", "data_dirr"} {
+		if got := nearestKey(in); got == "" {
+			t.Errorf("nearestKey(%q) = \"\", want a suggestion", in)
+		}
+	}
+	// Not typos: nothing in this version resembles them, so they are almost
+	// certainly from a later one.
+	//
+	// idle_standdown_minutes is deliberately NOT in this list: it is the key
+	// that caused the trap, but from 1.7.4's own point of view it is a known
+	// key and never reaches this function. The shape to test is a key this
+	// version does not have, which is what it looked like to 1.7.3.
+	for _, in := range []string{
+		"ui", "ui.auto_scroll",
+		"something_completely_different", "a",
+		"idle_wakeup_seconds", "vram_reserve_gb",
+	} {
+		if got := nearestKey(in); got != "" {
+			t.Errorf("nearestKey(%q) = %q, want no suggestion", in, got)
+		}
+	}
+}

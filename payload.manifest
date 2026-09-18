@@ -1,0 +1,59 @@
+# What every Linux package must install into its own lib directory.
+#
+# WHY THIS EXISTS
+#
+# build-deb.sh and build-rpm.sh stage their payloads independently. In 1.7.4
+# the rpm turned out to be missing gobbonet-setup.py and wizard.html — the
+# first-run setup wizard and its page. The deb staged both; the rpm never had
+# them. Nothing noticed, because the spec's %files section globs
+# %{_libdir}/gobbonet/* and a glob is happy with whatever it finds.
+#
+# The user-visible result was a package that installed cleanly and then did
+# nothing at all: clicking the icon ran the launcher, the launcher ran
+# `python3 $PREFIX/gobbonet-setup.py`, and the file was not there. With the
+# desktop entry at Terminal=false and the error dialogs all weak dependencies,
+# there was no window, no browser and no message — only a line in
+# ~/.local/share/gobbonet/launch.log.
+#
+# The missing files were the symptom. THE DEFECT WAS TWO LISTS THAT COULD
+# DISAGREE, so this is the list, and both builders check themselves against it.
+#
+# HOW TO CHANGE IT
+#
+# Adding a file to the payload means adding it here as well. That is the point:
+# once it is here, BOTH builds fail until both stage it, so a file can no
+# longer arrive on one platform and be forgotten on the other. Removing one is
+# the same in reverse.
+#
+# FORMAT
+#
+#   name       required; must be present
+#   name/      required directory
+#   ?name      optional; allowed to be present or absent, never "extra"
+#
+# Anything staged that is not listed here is an error too. An unexpected file
+# is as much a sign of drift as a missing one, and it is usually a leftover
+# from an abandoned build.
+#
+# web/ WAS on this list and was removed in 1.7.5. The chat page is now compiled
+# into the gobbonet binary (internal/webui), so a copy on disk is no longer part
+# of the payload -- and shipping one would be worse than pointless: the server
+# reports an unused web/ beside it at startup so a leftover from an older
+# install cannot silently shadow the built-in page, and a packaged copy would
+# set that warning off on every launch of a perfectly good install.
+#
+# It stays off this list rather than becoming optional, because "the package may
+# or may not contain a frontend" is exactly the ambiguity this file exists to
+# remove.
+
+gobbonet
+gobbonet-launch
+gobbonet-setup.py
+wizard.html
+models.ini
+llama-cpp/
+
+# Only built when BUNDLE_CPU_ENGINE=1, and only by the deb today. Optional
+# rather than required so a normal build is not failed for its absence, and
+# not "unlisted" so a CPU build is not failed for its presence.
+?llama-cpp-cpu/

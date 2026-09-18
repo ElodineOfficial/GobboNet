@@ -64,7 +64,7 @@ are targeting.
 ## Engine
 
 Same pinned build as the deb — `b10456`, verified against
-`installer-linux/engine.sha256`, which stays the single source for that hash.
+`engine.sha256`, which stays the single source for that hash.
 Three ways to supply it:
 
 ```sh

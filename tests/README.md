@@ -42,6 +42,91 @@ behind #47, #48 and #27. It drives the real `loadModelsList` /
 path has drifted back to a hardcoded model name. Background is in
 [`docs/changelog/CHANGELOG-1.7.3-remote-model-list.md`](../docs/changelog/CHANGELOG-1.7.3-remote-model-list.md).
 
+`test-code-copy.mjs` covers the Copy button on a code block, driving the real
+`parseMarkdown` and `copyCodeBlock` over a node tree built from the rendered
+HTML. The DOM is a shim at the top of the file rather than a dependency, since
+nothing in `tests/` has an install step. It pairs with section B3 of
+`test-markdown-render.mjs`: that one covers what renders, this one covers what
+reaches the clipboard. Background is in
+[`docs/changelog/CHANGELOG-1.7.4-code-copy-linebreaks.md`](../docs/changelog/CHANGELOG-1.7.4-code-copy-linebreaks.md).
+
+`test-standdown-panel.mjs` covers the CONFIG control for idle stand-down. The
+mechanism itself is server-side and tested in Go
+(`internal/supervisor/standdown_test.go` for the decision rule,
+`internal/server/standdown_endpoint_test.go` for the endpoint); this covers the
+one thing only the browser can get wrong, which is showing a switch that cannot
+work. Background is in
+[`docs/changelog/CHANGELOG-1.7.4-idle-standdown.md`](../docs/changelog/CHANGELOG-1.7.4-idle-standdown.md).
+
+`test-lore-editing.mjs` covers hand-editing the lore summary. Section A is the
+one that matters: a compression pass `await`s a model for seconds and then
+writes the summary back, so an edit made during that window would be silently
+replaced by something derived from the version it replaced. It pins that the
+edit survives *and* the pass's beat is kept where the two can be separated.
+Background is in
+[`docs/changelog/CHANGELOG-1.7.4-lore-editing.md`](../docs/changelog/CHANGELOG-1.7.4-lore-editing.md).
+
+`test-version-stamp.mjs` covers the build identity in the ABOUT panel. Section
+A is the load-bearing one: it asserts the frontend's `GOBBONET_UI_VERSION`
+equals the `VERSION` file, so bumping one without the other fails the suite.
+That guard exists because the string it replaced read
+`1.6.0-no-encoded-payload` for the whole of 1.7.x — the one thing in the app
+claiming to identify the build was wrong by two minor releases and nothing
+noticed. The rest covers the server-vs-page mismatch warning, which is how a
+cached frontend gets told apart from a real regression. Background is in
+[`docs/changelog/CHANGELOG-1.7.4-about-version.md`](../docs/changelog/CHANGELOG-1.7.4-about-version.md).
+
+`test-server-presets.mjs` covers the `[ui]` table in `gobbonet.toml`, which
+seeds browser settings from the config file. The rule it exists to protect is
+seed-not-lock: a device that has its own settings keeps them and is only
+offered the presets. Section D asserts the key list is generated from
+`DEFAULT_SETTINGS` by adding a setting at runtime and checking it is
+immediately presettable — the property that keeps Go and the browser from
+needing two lists. The Go halves are `internal/server/ui_defaults_test.go` and
+`internal/config/ui_table_test.go`. Background is in
+[`docs/changelog/CHANGELOG-1.7.4-ui-presets.md`](../docs/changelog/CHANGELOG-1.7.4-ui-presets.md).
+
+`test-single-export.mjs` covers exporting one thread or one character, driving
+the real export and import with the download captured. The fixture is built so
+the easy implementation fails: the thread's cast is not the whole roster, and
+one character appears only on a message rather than on the thread, so an export
+that read `thread.cardId` alone would miss it. Section C is the full round trip
+through the real `importData`. Background is in
+[`docs/changelog/CHANGELOG-1.7.4-single-export.md`](../docs/changelog/CHANGELOG-1.7.4-single-export.md).
+
+`test-scroll-modes.mjs` covers how the viewport behaves while a reply streams
+— follow-but-let-go, always follow, or never — driving the real functions
+against a fake scroll container that clamps `scrollTop` the way a real one
+does. Section D is the one that earns its keep: it pins that the end-of-stream
+rebuild puts the reading position back instead of leaving the user at the top
+of the thread. Background is in
+[`docs/changelog/CHANGELOG-1.7.4-scroll-modes.md`](../docs/changelog/CHANGELOG-1.7.4-scroll-modes.md).
+
+`test-sync-targets.mjs` covers which server-side backup a device syncs with —
+the shared one, a profile of its own, or none — driving the real target logic
+against a fake localStorage and a fake fetch, so the URLs asserted on are the
+ones a browser would request. Section A exists for one reason: an install with
+no target stored must resolve to *shared*, or every existing user boots into an
+empty chat with their history still on the server. The Go half is
+`internal/server/state_profiles_test.go`. Background is in
+[`docs/changelog/CHANGELOG-1.7.4-device-sync.md`](../docs/changelog/CHANGELOG-1.7.4-device-sync.md).
+
+`test-card-share-export.mjs` covers the FOR SHARING character-card export — a
+JPG with a ZIP archive appended — driving the real ZIP writer and reader over a
+small JPEG embedded in the test file. The assertion that earns its keep is that
+a *naively* concatenated archive fails to read: the offsets have to be written
+biased by the length of the image in front of them, or GobboNet cannot open its
+own export. Background is in
+[`docs/changelog/CHANGELOG-1.7.4-share-export.md`](../docs/changelog/CHANGELOG-1.7.4-share-export.md).
+
+`test-char-modal.mjs` covers dismissal of the CAST modal — the sticky setting,
+the unsaved-changes guard, and the notice shown when a dismissal is refused —
+by running the real handlers from `js/22-scheduler.js` in a fake DOM. Section A
+is the original v1.7 device/pointer/target matrix and is deliberately frozen:
+with the editor clean and sticky on, every answer must still be what it was.
+Background is in
+[`docs/changelog/CHANGELOG-1.7.4-sticky-cards.md`](../docs/changelog/CHANGELOG-1.7.4-sticky-cards.md).
+
 Two of them cover the same area from opposite ends: `test-cast-identity.mjs`
 checks that a past message keeps the character that wrote it, and
 `test-cast-mismatch.mjs` checks the notice shown when the *next* reply would

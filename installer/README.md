@@ -88,10 +88,10 @@ sudo apt-get install nsis          # 3.09 preferred; see below
 ../build-release.sh                # produces dist/<version>/…windows-amd64.zip
 unzip -d /tmp/gn dist/*/gobbonet-*-windows-amd64.zip
 
-# llama.cpp is bundled, so it has to be on disk first
-mkdir -p vendor/llama-cpp
-#   https://github.com/ggml-org/llama.cpp/releases  →  -bin-win-vulkan-x64.zip
-#   extract it into installer/vendor/llama-cpp/
+# llama.cpp is fetched and hash-checked automatically against the pin in
+# /engine.sha256 -- nothing to place by hand. To reuse one you already have:
+#   SKIP_ENGINE_FETCH=1 ./build-installer.sh   (vendor/ must hold the archive)
+#   LLAMA_CPP=/path/to/llama-cpp ./build-installer.sh   (skips the pin; says so)
 #
 # It must be the VULKAN asset. The CPU-only zip has the same filenames minus
 # ggml-vulkan.dll, and an installer built from it runs everything on the
@@ -117,7 +117,8 @@ art/                 modern-header.bmp, modern-wizard.bmp, gobbonet.ico
                      (extracted from GobboNetSetup-1.3.exe — Elodine's work)
 plugins/x86-unicode/ INetC.dll, for the GGUF download progress dialog
 payload/             GENERATED staging folder. Not committed.
-vendor/llama-cpp/    the bundled engine. Not committed (fetched by hand).
+vendor/              the bundled engine and its archive. Not committed;
+                     fetched and verified against /engine.sha256.
 ```
 
 `vendor/` lives here rather than at the repo root on purpose: a directory

@@ -29,6 +29,10 @@ const DefaultTOML = `# =========================================================
 # parser, which is how the launcher scripts use it:
 #   gobbonet config get llm_url
 #   gobbonet config set llm_url http://192.168.1.100:8080
+#
+# Everything above the [ui] section at the bottom is for the
+# SERVER. The [ui] section presets things in the chat page
+# instead -- see the note down there.
 # ================================================================
 
 # --- Upstream llama.cpp server ------------------------------------------
@@ -191,6 +195,58 @@ job_max_concurrent = 1
 
 # How long a finished generation stays available for a client to collect.
 job_max_age_hours = 48
+
+# idle_standdown_minutes
+#   Unload the model after this many minutes with no messages,
+#   freeing its VRAM, and reload it on the next one. 0 keeps it
+#   loaded always. Default 5.
+#
+#   Only does anything when THIS server runs llama.cpp. In remote
+#   mode the process belongs to someone else and stopping it is
+#   not ours to do.
+#
+#   The reload costs the same as a cold start, so a short timeout
+#   trades waiting for memory. Also in CONFIG in the chat page.
+
+# show_engine_output
+#   Mirror llama.cpp's own output into this window as the model
+#   loads, so you can watch it happen and see whether your GPU
+#   is being used. Default true.
+#
+#   Turn it off for a machine where nobody reads the console.
+#   The log file is written either way; "gobbonet doctor" says
+#   where it is.
+
+# ================================================================
+# [ui] -- presets for the chat page
+# ================================================================
+#
+# Everything above is the server. This section is the browser: it
+# seeds the settings you would otherwise set by hand in CONFIG, on
+# every device that opens this server.
+#
+# It is a SEED, not a lock. A device with no settings of its own
+# takes these on its first visit. A device that already has
+# settings keeps them, and is offered these under DATA -> SERVER
+# PRESETS, where you can see exactly what differs and apply it in
+# one click. Nothing here ever overwrites a choice someone made on
+# their own device without being asked.
+#
+# Keys are the same ones the chat page uses. The full list, with
+# the value each one has right now, is shown under
+# DATA -> SERVER PRESETS -- read it there rather than from this
+# comment, because that list is generated from the page itself and
+# cannot go stale.
+#
+# Unknown keys and wrong types are ignored and reported there too,
+# so a typo is visible rather than silent.
+#
+# [ui]
+# stream_replies = true      # or streamReplies -- either spelling works
+# auto_scroll = "smart"      # "smart" | "always" | "off"
+# sticky_cards = true
+# token_limit = 24576
+
 `
 
 // WriteDefault creates path (and its directory) with the commented default
@@ -223,10 +279,19 @@ func fieldByTOMLKey(c *Config, key string) (reflect.Value, bool) {
 }
 
 // Keys lists every settable config key, in declaration order.
+//
+// Table-valued fields such as [ui] are skipped. `config get`/`config set` deal
+// in single scalar values for the launcher scripts, and there is no sensible
+// string form of a whole table -- so listing it as a key would only advertise
+// a command that cannot work. Detected by kind rather than by name, so a table
+// added later is excluded without anyone having to remember.
 func Keys() []string {
 	var out []string
 	t := reflect.TypeOf(Config{})
 	for i := 0; i < t.NumField(); i++ {
+		if t.Field(i).Type.Kind() == reflect.Map {
+			continue
+		}
 		if tag := t.Field(i).Tag.Get("toml"); tag != "" && tag != "-" {
 			out = append(out, tag)
 		}
@@ -292,13 +357,31 @@ func Set(path, key, value string) error {
 	// explanation and leaves the real commented default untouched below it.
 	pattern := regexp.MustCompile(`^#? ?` + regexp.QuoteMeta(key) + `\s*=`)
 
+	// Every key this function can set is a ROOT-level key, so both the search
+	// and the insert have to stay above the first table header.
+	//
+	// This used to append at EOF and match anywhere, which was correct for as
+	// long as the file had no tables in it. The [ui] section changed that, and
+	// the failure is silent in the worst way: `config set listen_port 9999`
+	// appended the line after [ui], TOML read it back as ui.listen_port, the
+	// real listen_port kept its old value, and the command reported success.
+	// The launcher scripts drive this, so a silently ineffective write is a
+	// machine that comes up on the wrong port with nothing in any log.
+	tableHeader := regexp.MustCompile(`^\s*\[`)
+
 	var out []string
 	replaced := false
+	inRoot := true
+	firstTableAt := -1
 	scanner := bufio.NewScanner(strings.NewReader(string(raw)))
 	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 	for scanner.Scan() {
 		text := scanner.Text()
-		if !replaced && pattern.MatchString(text) {
+		if inRoot && tableHeader.MatchString(text) {
+			inRoot = false
+			firstTableAt = len(out)
+		}
+		if inRoot && !replaced && pattern.MatchString(text) {
 			out = append(out, line)
 			replaced = true
 			continue
@@ -309,7 +392,25 @@ func Set(path, key, value string) error {
 		return err
 	}
 	if !replaced {
-		out = append(out, line)
+		if firstTableAt < 0 {
+			out = append(out, line)
+		} else {
+			// Insert above the comment block that introduces the table rather
+			// than immediately above the header, so the explanation stays
+			// attached to the section it explains.
+			at := firstTableAt
+			for at > 0 {
+				prev := strings.TrimSpace(out[at-1])
+				if prev == "" || strings.HasPrefix(prev, "#") {
+					at--
+					continue
+				}
+				break
+			}
+			out = append(out, "")
+			copy(out[at+1:], out[at:])
+			out[at] = line
+		}
 	}
 
 	body := strings.Join(out, "\n")

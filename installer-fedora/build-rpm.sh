@@ -28,7 +28,7 @@ fail() { printf '\nERROR: %s\n' "$*" >&2; exit 1; }
 
 # ---------------------------------------------------------------------------
 # Engine. Same pinned build as the .deb, from the same place, checked against
-# the same file. Bumping LLAMA_BUILD means updating installer-linux/engine.sha256
+# the same file. Bumping LLAMA_BUILD means updating engine.sha256
 # in the same commit -- that is the point of pinning.
 # ---------------------------------------------------------------------------
 LLAMA_BUILD="${LLAMA_BUILD:-b10456}"
@@ -103,18 +103,18 @@ else
         tmp="$(mktemp -d)"
         say "engine: fetching $asset"
         curl -fsSL -o "$tmp/$asset" "$LLAMA_BASE/$asset" || fail "download failed: $asset"
-        if [ -f "$ROOT/installer-linux/engine.sha256" ]; then
+        if [ -f "$ROOT/engine.sha256" ]; then
             local want got key
             key=$([ "$dest" = "$VENDOR/llama-cpp" ] && echo GPU_SHA256 || echo CPU_SHA256)
-            want="$(grep "^$key=" "$ROOT/installer-linux/engine.sha256" | cut -d= -f2)"
+            want="$(grep "^$key=" "$ROOT/engine.sha256" | cut -d= -f2)"
             got="$(sha256sum "$tmp/$asset" | cut -d' ' -f1)"
             [ "$want" = "$got" ] || fail \
 "engine hash mismatch for $asset
        expected $want
        got      $got
-       Either the pin in installer-linux/engine.sha256 is stale or the
+       Either the pin in engine.sha256 is stale or the
        download is not what it claims to be. Do not paper over this."
-            say "engine: sha256 verified against installer-linux/engine.sha256"
+            say "engine: sha256 verified against engine.sha256"
         fi
         rm -rf "$dest" && mkdir -p "$dest"
         tar xzf "$tmp/$asset" -C "$dest" --strip-components=1 2>/dev/null \
@@ -128,13 +128,10 @@ fi
 [ -x "$VENDOR/llama-cpp/llama-server" ] || [ -f "$VENDOR/llama-cpp/llama-server" ] \
     || fail "no llama-server under $VENDOR/llama-cpp"
 
-# ---------------------------------------------------------------------------
-# Frontend. stage-web.sh is the single source for what the browser gets, shared
-# with the Windows installer, so the two front ends cannot drift.
-# ---------------------------------------------------------------------------
-say "staging web payload"
-( cd "$ROOT" && ./stage-web.sh >/dev/null ) || fail "stage-web.sh failed"
-[ -d "$ROOT/web" ] || fail "stage-web.sh produced no web/"
+# No frontend staging here any more. It is compiled into the gobbonet binary
+# this script is handed (internal/webui), so it arrives with the binary and the
+# two cannot drift -- which is a stronger version of what staging here was for.
+# build-release.sh runs stage-web.sh before it builds.
 
 # ---------------------------------------------------------------------------
 # Payload tree, laid out the way the .deb lays it out. The spec relocates
@@ -153,17 +150,25 @@ install -m 0755 "$GOBBONET_BIN"            "$STAGE/usr/lib/gobbonet/gobbonet"
 # The spec rewrites its PREFIX line for %{_libdir} at install time.
 install -m 0755 "$ROOT/installer-linux/gobbonet-launch" "$STAGE/usr/lib/gobbonet/gobbonet-launch"
 install -m 0644 "$ROOT/installer/models.ini" "$STAGE/usr/lib/gobbonet/models.ini"
-cp -a "$ROOT/web"                          "$STAGE/usr/lib/gobbonet/web"
+# The first-run setup wizard and its page. These were missing from this build
+# entirely, which is what made the Fedora package install cleanly and then do
+# nothing: gobbonet-launch runs `python3 $PREFIX/gobbonet-setup.py` on first
+# start, and the file was not there. verify-payload.sh below is what stops the
+# next one going the same way.
+install -m 0644 "$ROOT/installer-linux/gobbonet-setup.py" "$STAGE/usr/lib/gobbonet/gobbonet-setup.py"
+install -m 0644 "$ROOT/installer-linux/wizard.html"       "$STAGE/usr/lib/gobbonet/wizard.html"
 cp -a "$VENDOR/llama-cpp"                  "$STAGE/usr/lib/gobbonet/llama-cpp"
 [ -d "$VENDOR/llama-cpp-cpu" ] && cp -a "$VENDOR/llama-cpp-cpu" "$STAGE/usr/lib/gobbonet/llama-cpp-cpu"
+
+# Before anything is packaged. A mismatch here is a package that would install
+# and not work, and finding that out at build time costs nothing.
+"$ROOT/verify-payload.sh" "$STAGE/usr/lib/gobbonet" "rpm payload"
 
 install -m 0644 "$ROOT/installer-linux/gobbonet.desktop" "$STAGE/usr/share/applications/gobbonet.desktop"
 install -m 0644 "$ROOT/installer-linux/icon/gobbonet-256.png" \
     "$STAGE/usr/share/icons/hicolor/256x256/apps/gobbonet.png"
 install -m 0644 "$ROOT/README.md"  "$STAGE/usr/share/doc/gobbonet/README.md"
 install -m 0644 "$ROOT/LICENSE"    "$STAGE/usr/share/doc/gobbonet/copyright"
-
-rm -rf "$ROOT/web"
 
 # ---------------------------------------------------------------------------
 # Build

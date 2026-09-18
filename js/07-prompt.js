@@ -283,6 +283,61 @@ function setThreadLore(thread, lore) {
   if (thread) thread.lore = lore;
 }
 
+/**
+ * Store the result of a compression pass without destroying a hand edit.
+ *
+ * THE RACE THIS EXISTS FOR
+ * A pass reads the current summary, hands it to a model, and `await`s — which
+ * on a local model is seconds, not milliseconds — and only then writes the
+ * result back. Lore is editable now, so the user can open the inspector and
+ * rewrite it inside that window. The naive write then replaces their text with
+ * something derived from the version they were replacing, and nothing anywhere
+ * says it happened.
+ *
+ * `before` is what the pass started from, `after` is what it produced, and the
+ * thread's CURRENT lore is whatever is actually stored right now. If those
+ * first and last agree, nothing happened underneath and the write is ordinary.
+ *
+ * When they disagree, the pass appended a beat to a summary that no longer
+ * exists. Beats are appended and not rewritten, so the new material is usually
+ * just the tail of `after` past `before`, and it can be moved onto the user's
+ * text instead: the edit survives AND the beat is not lost.
+ *
+ * When it cannot be separated — the LORE_MAX_CHARS trim rewrites the front, so
+ * `after` does not always start with `before` — the human's text wins and the
+ * beat is dropped. That costs one auto-generated sentence. The alternative
+ * costs someone the paragraph they just wrote, and the archived messages are
+ * still in the thread either way, marked rather than deleted.
+ *
+ * Returns { lore, merged, dropped } so the caller can record what happened
+ * rather than leaving it to be discovered later.
+ */
+function mergeLoreAfterPass(thread, before, after) {
+  const current = getThreadLore(thread);
+  const prior = before || '';
+  const produced = after || '';
+
+  if (current === prior) {
+    setThreadLore(thread, produced);
+    return { lore: produced, merged: false, dropped: false };
+  }
+
+  if (produced.startsWith(prior)) {
+    const delta = produced.slice(prior.length);
+    const joined = delta ? (current.replace(/\s+$/, '') + '\n' + delta.replace(/^\n+/, '')) : current;
+    setThreadLore(thread, joined);
+    console.warn('[lore] summary was edited during a compression pass; ' +
+                 'kept the edit and appended this pass\u2019s beat to it.');
+    return { lore: joined, merged: true, dropped: false };
+  }
+
+  console.warn('[lore] summary was edited during a compression pass and this ' +
+               'pass rewrote rather than appended; kept the edit and dropped ' +
+               'the generated beat.');
+  setThreadLore(thread, current);
+  return { lore: current, merged: false, dropped: true };
+}
+
 /* Maximum chars we'll retain in lore. Beyond this we trim from the front
    on a sentence boundary so the most recent context is preserved. */
 // Backstop only — the prompt targets ~180 words (roughly 1,100 chars), so

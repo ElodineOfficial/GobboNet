@@ -1592,6 +1592,34 @@ echo.
 :: STEP 3: START LLAMA-SERVER
 :: ---------------------------------------------------------------
 :start_server
+
+:: ---------------------------------------------------------------
+:: WHO STARTS llama-server
+::
+:: Everything above this line is unchanged: this window asked for the
+:: password, fetched the engine, probed the hardware, offered the
+:: model menu and checked what it downloaded. That is the Windows
+:: experience and it stays exactly where it was.
+::
+:: What changes is who runs the server from here on. When
+:: gobbonet.exe is present it starts llama-server ITSELF, which is
+:: what makes the features that live in the server work at all --
+:: idle stand-down has to own the process to unload it. So this
+:: script skips its own llama-server start and hands over the
+:: choices it just collected at STEP 5.
+::
+:: Without gobbonet.exe, or with GOBBONET_LEGACY_SERVER=1, the old
+:: path below runs untouched.
+:: ---------------------------------------------------------------
+if defined GOBBONET_LEGACY_SERVER goto :start_server_legacy
+if not exist "%~dp0gobbonet.exe" goto :start_server_legacy
+echo  [OK] gobbonet.exe is here -- it will start llama-server itself.
+echo       Your model choice and settings are handed to it below, and
+echo       its output appears in THIS window.
+echo.
+goto :start_embed
+
+:start_server_legacy
 echo  [..] Checking for running llama-server...
 
 call :http_alive "http://127.0.0.1:!SERVER_PORT!/health"
@@ -1999,6 +2027,49 @@ echo.
 :: STEP 5: FILE SERVER (serves chat.html over HTTP for LAN access)
 :: ---------------------------------------------------------------
 :launch
+
+:: ---------------------------------------------------------------
+:: HAND THE SERVER ROLE TO gobbonet.exe
+::
+:: Not a different experience -- the same window, carrying on. Every
+:: question was asked above; this passes the answers to the program
+:: that now serves them, and runs it HERE rather than in a minimised
+:: window, so the loading output, the GPU check and any errors land
+:: in front of the person who has been reading this screen.
+::
+:: The password needs no re-asking: .gobbonet-secret holds a
+:: salt:hash pair, which is exactly the legacy form gobbonet accepts
+:: (internal/auth/secret.go) and quietly upgrades to Argon2id on the
+:: first successful login.
+:: ---------------------------------------------------------------
+if defined GOBBONET_LEGACY_SERVER goto :launch_legacy
+if not exist "%~dp0gobbonet.exe" goto :launch_legacy
+
+echo  [..] Handing over to gobbonet.exe with the settings from this run...
+set "GN=%~dp0gobbonet.exe"
+"!GN!" config set server_exe      "!SERVER_EXE!"                >nul 2>&1
+"!GN!" config set model_dir       "!MODEL_DIR!"                 >nul 2>&1
+"!GN!" config set ctx_size        "!CTX_SIZE!"                  >nul 2>&1
+"!GN!" config set gpu_layers      "!GPU_LAYERS!"                >nul 2>&1
+"!GN!" config set kv_cache_type   "!KV_CACHE_TYPE!"             >nul 2>&1
+"!GN!" config set listen_port     "!WEB_PORT!"                  >nul 2>&1
+"!GN!" config set llm_url         "http://127.0.0.1:!SERVER_PORT!" >nul 2>&1
+"!GN!" config set embed_url       "http://127.0.0.1:!EMBED_PORT!"  >nul 2>&1
+"!GN!" config set access_secret   "!ACCESS_SECRET!"             >nul 2>&1
+echo  [OK] Settings written.
+echo.
+
+:: --model, because STEP 2 just asked which one. Letting the server
+:: pick the first file it scans would make that menu decorative.
+"!GN!" --open --model "!GGUF_BASENAME!"
+
+:: gobbonet runs until Ctrl+C. Reaching here means it stopped; the
+:: keep-open guard holds the window so its last words stay readable.
+echo.
+echo  [..] GobboNet has stopped.
+exit /b
+
+:launch_legacy
 
 if not exist "%~dp0chat.html" (
     echo  [ERROR] chat.html not found in: %~dp0

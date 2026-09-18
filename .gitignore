@@ -42,7 +42,16 @@ hardware.ini
 /gobbonet
 /gobbonet.exe
 
-# The served web root, assembled from the repo-root frontend by stage-web.sh.
+# The staged frontend, assembled from the repo-root frontend by stage-web.sh and
+# compiled into the binary by internal/webui. Generated, never committed -- the
+# repo root is the single source of truth. .gitkeep IS committed, so that
+# `go:embed all:assets` has a directory to embed in a fresh clone.
+/internal/webui/assets/*
+!/internal/webui/assets/.gitkeep
+
+# Older layout: stage-web.sh used to produce this, and installs before 1.7.5
+# shipped it beside the binary. Still ignored so an existing checkout does not
+# suddenly start offering one up.
 # Generated, never committed: a committed copy of chat.html + js/ + css/ goes
 # stale the moment upstream touches one of the 40 files, and serves the stale
 # copy without complaining.
@@ -56,7 +65,9 @@ hardware.ini
 /installer/payload/
 /installer/GobboNetSetup-*.exe
 
-# Bundled llama.cpp for the installer payload (fetched by hand).
+# Bundled llama.cpp for the installer payload. Fetched and hash-checked by
+# build-installer.sh against the pin in /engine.sha256, the same one the deb
+# and rpm builds read -- it used to be placed here by hand with no pin at all.
 # NOT /vendor/ -- that path at the module root is reserved by the Go
 # toolchain, and a non-Go directory there breaks `go build`.
 /installer/vendor/
@@ -74,6 +85,11 @@ installer-linux/vendor/
 installer-linux/stage/
 installer-linux/dist/
 
-# Staged Linux build output (binary + llama.cpp .so files).
-# Ships as a release asset, not in the tree.
-/linux-amd64/
+# installer-fedora build artefacts. Same shape as the Debian ones above, and
+# none of them were ignored -- a single build left an rpmbuild tree and a
+# 100 MB vendored engine sitting in the working copy.
+installer-fedora/rpmbuild/
+installer-fedora/stage/
+installer-fedora/vendor/
+installer-fedora/dist/
+/linux-amd64/gobbonet

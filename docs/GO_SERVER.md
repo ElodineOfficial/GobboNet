@@ -61,11 +61,25 @@ describe the code inside the binary is worse than no stamp: a bug gets reported
 against a commit that does not contain it and cannot be reproduced.
 `--allow-dirty` overrides, and marks the version `-dirty` so it stays obvious.
 
-The bundled `web/` directory is generated, not committed: `stage-web.sh` copies
-the repo-root frontend (`chat.html` plus `js/` and `css/`) into it and derives
-`favicon.ico` from `gobbonet.ico`. `build-release.sh` runs it for you. Keeping a
-second committed copy of 40 upstream files was how the fork previously drifted
-without anything reporting it.
+The frontend is compiled into the binary. `stage-web.sh` copies the repo-root
+frontend (`chat.html` plus `js/` and `css/`) into `internal/webui/assets` and
+derives `favicon.ico` from `gobbonet.ico`; `go:embed` takes it from there.
+`build-release.sh` and `make-zip.sh` run it for you, and a build that skips it
+produces a binary with no page in it, which the server reports rather than
+serving 404s.
+
+It used to be staged into `./web` and shipped beside the executable. Keeping a
+second *committed* copy of 40 upstream files was how the fork drifted without
+anything reporting it — and staging solved that only inside the repo. In a
+user's install the same two-copy problem remained, and the copy beside the
+binary won: dropping a new release over a folder replaced the root frontend and
+left `web/` alone, so the server went on serving the old page and every
+server-side feature of the release looked missing. One artifact cannot drift
+from itself.
+
+A disk directory is still served if `web_root` names one, layered over the
+built-in copy so a partial override is a modified page rather than a broken one.
+It is never discovered — see `internal/server/webroot.go`.
 
 ## Run
 
@@ -524,7 +538,7 @@ internal/models/       GGUF parsing, classifier, model metadata endpoints
 internal/jobs/         in-memory detached generation
 internal/proxy/        streaming reverse proxy
 internal/supervisor/   llama-server lifecycle, hot-swap, rollback
-internal/static/       static file serving
+internal/static/       static file serving (over an fs.FS)
 internal/httpx/        response helpers, CORS, MIME
-web/                   chat.html and friends
+internal/webui/        the frontend, compiled in; assets/ is staged, not committed
 ```

@@ -17,19 +17,101 @@
 
    The local copy stays authoritative for performance — we never
    wait on the network for a save. Server sync is best-effort.
+
+   ── SYNC TARGETS ────────────────────────────────────────────────
+   For a long time there was exactly one file on the server, so every
+   device that opened the page shared one history whether that was
+   wanted or not. The phone and the desktop were joined by an
+   implementation detail, not by a decision.
+
+   A device now picks one of three targets, and the choice is this
+   browser's alone:
+
+     'shared'  the single shared state.json. The default, and exactly
+               what every existing install already does.
+     'profile' state-<name>.json beside it. A separate history that
+               still gets the thing sync exists for — landing on a
+               rotated IP with an empty localStorage and being handed
+               your own chats back.
+     'off'     no network at all. Fully local, and the only mode where
+               nothing about this device reaches the server.
+
+   WHY THE CHOICE IS NOT IN state.settings
+   Because settings are part of the payload that gets synced, and a
+   restore overwrites them. A device that pulled the desktop's backup
+   would inherit the desktop's target and silently re-join the two
+   histories — the exact thing the user separated, undone by the act
+   of restoring. The target lives in its own localStorage key, beside
+   the sync metadata, for the same reason that metadata does.
 ================================================================ */
 
 // /state lives on the file server (same origin as chat.html when served).
 // On file:// it's not available; sync is silently disabled.
 const STATE_SYNC_AVAILABLE = IS_SERVED;
-const STATE_SYNC_URL = IS_SERVED ? (window.location.origin + '/state') : null;
+const STATE_SYNC_BASE = IS_SERVED ? (window.location.origin + '/state') : null;
+
+const SYNC_TARGET_KEY = 'gobbonet_sync_target';
+// { mode: 'shared' | 'profile' | 'off', profile: string }
+let syncTarget = { mode: 'shared', profile: '' };
+try {
+  const saved = JSON.parse(localStorage.getItem(SYNC_TARGET_KEY) || 'null');
+  if (saved && typeof saved === 'object') {
+    // Anything unrecognised falls back to 'shared'. An install that predates
+    // this key has no value at all, and must keep behaving exactly as it did.
+    if (saved.mode === 'off' || saved.mode === 'profile' || saved.mode === 'shared') {
+      syncTarget.mode = saved.mode;
+    }
+    if (typeof saved.profile === 'string') syncTarget.profile = normalizeSyncProfile(saved.profile);
+  }
+} catch (_) {}
+// A profile mode with no usable name is not a target, it is a typo. Fall back
+// rather than pushing to a URL the server will refuse on every save.
+if (syncTarget.mode === 'profile' && !syncTarget.profile) syncTarget.mode = 'shared';
+
+/** The client half of the server's allowlist. Kept deliberately identical, so
+ *  a name the UI accepts is a name the server accepts — a name that only fails
+ *  server-side would show up as an endless string of failed background syncs
+ *  with nothing on screen explaining why. */
+function normalizeSyncProfile(name) {
+  const n = String(name == null ? '' : name).trim().toLowerCase();
+  return /^[a-z0-9][a-z0-9_-]{0,31}$/.test(n) ? n : '';
+}
+
+/** True when this device should not talk to the server at all. */
+function syncIsOff() {
+  return syncTarget.mode === 'off';
+}
+
+/** Whether a push or a fetch should happen right now. Every network path in
+ *  this file goes through it, so 'off' is one decision rather than a condition
+ *  repeated in a dozen places where one could be forgotten. */
+function syncEnabled() {
+  return STATE_SYNC_AVAILABLE && !syncIsOff();
+}
+
+/** A /state URL for the current target. `suffix` is '' or '/info'. */
+function stateSyncUrl(suffix) {
+  if (!STATE_SYNC_AVAILABLE) return null;
+  const base = STATE_SYNC_BASE + (suffix || '');
+  if (syncTarget.mode !== 'profile' || !syncTarget.profile) return base;
+  return base + '?profile=' + encodeURIComponent(syncTarget.profile);
+}
+
+/** A stable label for the current target, for the UI and for log lines. */
+function syncTargetLabel() {
+  if (syncTarget.mode === 'off') return 'off';
+  if (syncTarget.mode === 'profile') return syncTarget.profile;
+  return 'shared';
+}
 
 const stateSync = {
   // Last mtime we successfully read from or wrote to the server.
   // Used to detect "the server has data we haven't seen" on next boot.
   lastKnownMtime: 0,
-  // Status for UI: 'idle' | 'syncing' | 'ok' | 'error' | 'disabled'
-  status: STATE_SYNC_AVAILABLE ? 'idle' : 'disabled',
+  // Status for UI: 'idle' | 'syncing' | 'ok' | 'error' | 'quota' | 'off' | 'disabled'
+  //   'off'      this device opted out; there is a server, we just don't use it
+  //   'disabled' there is no server to use (file://)
+  status: !STATE_SYNC_AVAILABLE ? 'disabled' : (syncIsOff() ? 'off' : 'idle'),
   lastError: null,
   pushTimer: null,
   pendingJson: null,
@@ -39,18 +121,48 @@ const stateSync = {
 // Persist lastKnownMtime in localStorage so we remember it across
 // reloads at the same origin. Keyed separately so a state restore
 // doesn't clobber it.
+//
+// Kept PER TARGET. lastKnownMtime answers "has something written to the file
+// I sync with since I last looked", and every decision in
+// checkServerStateOnBoot hangs off that answer. Carrying one number across a
+// target switch would compare the phone profile's mtime against the last time
+// the shared file was written -- two unrelated clocks -- and the boot check
+// would then either skip a restore it owed the user or offer one it did not.
 const SYNC_META_KEY = 'gobbonet_sync_meta';
+let syncMtimeByTarget = {};
 try {
   const meta = JSON.parse(localStorage.getItem(SYNC_META_KEY) || '{}');
-  if (typeof meta.lastKnownMtime === 'number') stateSync.lastKnownMtime = meta.lastKnownMtime;
+  if (meta && typeof meta.byTarget === 'object' && meta.byTarget) syncMtimeByTarget = meta.byTarget;
+  // The legacy shape is a bare lastKnownMtime, written before targets existed.
+  // It can only ever have described the shared file, because that was the only
+  // thing there was to describe.
+  if (typeof meta.lastKnownMtime === 'number' && syncMtimeByTarget.shared === undefined) {
+    syncMtimeByTarget.shared = meta.lastKnownMtime;
+  }
+  const mine = syncMtimeByTarget[syncTargetLabel()];
+  if (typeof mine === 'number') stateSync.lastKnownMtime = mine;
 } catch (_) {}
 
 function persistSyncMeta() {
   try {
+    const label = syncTargetLabel();
+    // 'off' is not a file on the server, so it has no mtime worth remembering.
+    // Without this guard a device that switched off would leave a meaningless
+    // "off" entry in the map beside the real ones.
+    if (label !== 'off') syncMtimeByTarget[label] = stateSync.lastKnownMtime;
     localStorage.setItem(SYNC_META_KEY, JSON.stringify({
-      lastKnownMtime: stateSync.lastKnownMtime
+      // Mirrored at the top level as well, so a downgrade to a build with no
+      // notion of targets still finds the shared file's mtime where it looks.
+      lastKnownMtime: syncMtimeByTarget.shared || 0,
+      byTarget: syncMtimeByTarget
     }));
   } catch (_) {}
+}
+
+/** Persist this device's choice of target. Its own key, never state.settings —
+ *  see the header. */
+function persistSyncTarget() {
+  try { localStorage.setItem(SYNC_TARGET_KEY, JSON.stringify(syncTarget)); } catch (_) {}
 }
 
 // True when the in-memory state is mid-flight and therefore unsafe to publish
@@ -80,14 +192,14 @@ function stateSyncWouldBeTransient() {
  * saves (typing, streaming tokens) into one network write every ~2s.
  */
 function scheduleStateSync(json) {
-  if (!STATE_SYNC_AVAILABLE) return;
+  if (!syncEnabled()) return;
   stateSync.pendingJson = json;
   if (stateSync.pushTimer) clearTimeout(stateSync.pushTimer);
   stateSync.pushTimer = setTimeout(flushStateSync, 2000);
 }
 
 async function flushStateSync() {
-  if (!STATE_SYNC_AVAILABLE) return;
+  if (!syncEnabled()) return;
   if (stateSync.inFlight) {
     // Another push is happening. Re-arm so we capture the latest.
     stateSync.pushTimer = setTimeout(flushStateSync, 2000);
@@ -112,7 +224,7 @@ async function flushStateSync() {
   stateSync.status = 'syncing';
   updateSyncIndicator();
   try {
-    const resp = await fetch(STATE_SYNC_URL, {
+    const resp = await fetch(stateSyncUrl(''), {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: json
@@ -151,7 +263,7 @@ async function flushStateSync() {
  * cleanly if the state somehow isn't settled yet.
  */
 function forceServerFlush() {
-  if (!STATE_SYNC_AVAILABLE) return;
+  if (!syncEnabled()) return;
   if (stateSync.pushTimer) { clearTimeout(stateSync.pushTimer); stateSync.pushTimer = null; }
   // Fire and forget — sync is best-effort and we never block the UI on it.
   flushStateSync();
@@ -182,11 +294,11 @@ function flushBeforeExit(opts) {
     // If a debounced full IDB save is still pending, issue it now (best-effort)
     // so a just-settled action isn't stranded by the teardown.
     flushPendingIdbSave();
-    if (beacon && STATE_SYNC_AVAILABLE && !stateSyncWouldBeTransient() &&
+    if (beacon && syncEnabled() && !stateSyncWouldBeTransient() &&
         typeof navigator !== 'undefined' && navigator.sendBeacon) {
       const json = redactedSyncJson();
       if (json && json !== '{}') {
-        navigator.sendBeacon(STATE_SYNC_URL, new Blob([json], { type: 'application/json' }));
+        navigator.sendBeacon(stateSyncUrl(''), new Blob([json], { type: 'application/json' }));
       }
     }
   } catch (_) {}
@@ -222,10 +334,10 @@ function markBootRestoreTried() {
   catch (_) {}
 }
 async function checkServerStateOnBoot() {
-  if (!STATE_SYNC_AVAILABLE) return;
+  if (!syncEnabled()) return;
   let info;
   try {
-    const resp = await fetch(STATE_SYNC_URL + '/info', { cache: 'no-store' });
+    const resp = await fetch(stateSyncUrl('/info'), { cache: 'no-store' });
     if (resp.status === 404) {
       // No backup yet — nothing to restore. Push current state to seed.
       if (state.threads && state.threads.length > 0) {
@@ -333,8 +445,17 @@ async function restoreFromServer(opts) {
     if (!opts.silent) alert('Server backup needs the GobboNet server. Open the chat at the address GobboNet prints when it starts.');
     return false;
   }
+  // An explicit restore while sync is off is a contradiction, and silently
+  // pulling from the shared file would be the worst possible reading of it.
+  if (syncIsOff() && !opts.force) {
+    if (!opts.silent) {
+      alert('Server sync is switched off for this device.\n\n' +
+            'Turn it on under DATA \u2192 DEVICE SYNC to restore from the server.');
+    }
+    return false;
+  }
   try {
-    const resp = await fetch(STATE_SYNC_URL, { cache: 'no-store' });
+    const resp = await fetch(stateSyncUrl(''), { cache: 'no-store' });
     if (resp.status === 404) {
       if (!opts.silent) alert('No backup found on the server yet.');
       return false;
@@ -424,7 +545,7 @@ async function restoreFromServer(opts) {
       storageQuotaHit = true;
       await loadState(text);        // parse + migrate the full blob into state
       state.activeThreadId = null;  // land on the dashboard like a normal boot
-      if (STATE_SYNC_AVAILABLE) stateSync.status = 'quota';
+      if (syncEnabled()) stateSync.status = 'quota';
       updateSyncIndicator();
       if (typeof render === 'function') render();
       return true;
@@ -445,7 +566,7 @@ function showRestorePrompt(info) {
   const when = mtime ? mtime.toLocaleString() : 'unknown';
   const sizeKB = info && info.size ? Math.round(info.size / 1024) : '?';
   const msg =
-    'A newer chat backup was found on the server.\n\n' +
+    'A newer chat backup was found on the server (' + syncTargetLabel() + ').\n\n' +
     'Saved: ' + when + '\n' +
     'Size: ' + sizeKB + ' KB\n\n' +
     'This usually means the server\'s LAN IP changed and your\n' +
@@ -474,7 +595,14 @@ function updateSyncIndicator() {
     el.className = 'sync-indicator';
     el.title = 'Click to manually restore from the server backup';
     el.addEventListener('click', () => {
-      if (confirm('Replace your current chat with the version saved on the server?')) {
+      if (syncIsOff()) {
+        // Offering a restore here would only produce the "sync is off" alert.
+        // Send the user where the switch actually is.
+        try { openDataManager(); } catch (_) {}
+        return;
+      }
+      if (confirm('Replace your current chat with the version saved on the server (' +
+                  syncTargetLabel() + ')?')) {
         restoreFromServer();
       }
     });
@@ -482,13 +610,18 @@ function updateSyncIndicator() {
     const footer = document.querySelector('.sidebar-footer') || document.querySelector('.sidebar') || document.body;
     footer.appendChild(el);
   }
-  const icons = { idle: '○', syncing: '⟳', ok: '✓', error: '!', quota: '⚠', disabled: '' };
+  const icons = { idle: '○', syncing: '⟳', ok: '✓', error: '!', quota: '⚠', off: '⦸', disabled: '' };
+  // The target is named on every label that involves the server. With more
+  // than one backup on disk, "synced" on its own no longer says which.
+  const where = syncTargetLabel();
+  const suffix = (syncTarget.mode === 'profile') ? ' (' + where + ')' : '';
   const labels = {
-    idle: 'sync idle',
-    syncing: 'syncing…',
-    ok: 'synced',
+    idle: 'sync idle' + suffix,
+    syncing: 'syncing…' + suffix,
+    ok: 'synced' + suffix,
     error: 'sync error: ' + (stateSync.lastError || 'unknown'),
     quota: 'local storage full — backed up to server (click to restore full history)',
+    off: 'sync off — this device only',
     disabled: ''
   };
   el.textContent = (icons[stateSync.status] || '') + ' ' + (labels[stateSync.status] || '');
@@ -929,3 +1062,146 @@ function applySamplerPreset(name) {
   const rn = document.getElementById('card-repeat-last-n');   if (rn) rn.value = p.repeatLastN;
 }
 
+
+/* ================================================================
+   CHOOSING A SYNC TARGET
+
+   The switch itself is the delicate part. Boot-time conflict resolution is
+   tuned for "I just opened the page and something may have changed while I was
+   away", and its heuristics are deliberately conservative -- in particular it
+   will keep local and re-publish when the server copy is much smaller, on the
+   grounds that a tiny newer snapshot is usually a mid-flight one.
+
+   Reusing that here would be wrong, and quietly destructive. Pointing a device
+   at a profile is not an ambiguous event that needs guessing at: the user has
+   just said which pile of data they mean. So the switch asks a direct question
+   instead, and the two answers are the only two things that can sensibly
+   happen -- take what is in the slot, or put this device's data into it.
+================================================================ */
+
+/** What is on the server. Returns [] rather than throwing, because every
+ *  caller is UI that should degrade to "nothing to show". */
+async function fetchSyncProfiles() {
+  if (!STATE_SYNC_AVAILABLE) return [];
+  try {
+    const resp = await fetch(STATE_SYNC_BASE + '/profiles', { cache: 'no-store' });
+    if (!resp.ok) return [];
+    const data = await resp.json();
+    return (data && Array.isArray(data.profiles)) ? data.profiles : [];
+  } catch (e) {
+    console.warn('[sync] Could not list profiles:', e.message);
+    return [];
+  }
+}
+
+/** Metadata for one target without switching to it, so the UI can say what a
+ *  slot holds before the user commits. */
+async function fetchSyncTargetInfo(mode, profile) {
+  if (!STATE_SYNC_AVAILABLE) return null;
+  let url = STATE_SYNC_BASE + '/info';
+  if (mode === 'profile') url += '?profile=' + encodeURIComponent(profile);
+  try {
+    const resp = await fetch(url, { cache: 'no-store' });
+    if (resp.status === 404) return { mtime: 0, size: 0 };
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch (e) {
+    return null;
+  }
+}
+
+/** Remove a stored backup from the server. */
+async function deleteSyncProfile(name) {
+  if (!STATE_SYNC_AVAILABLE) return false;
+  const norm = name === '' ? '' : normalizeSyncProfile(name);
+  if (name !== '' && !norm) return false;
+  let url = STATE_SYNC_BASE;
+  if (norm) url += '?profile=' + encodeURIComponent(norm);
+  try {
+    const resp = await fetch(url, { method: 'DELETE' });
+    if (!resp.ok) return false;
+    // A deleted backup is not one we have seen: leaving the old mtime behind
+    // would make the next boot treat a freshly re-seeded file as "not newer"
+    // and skip a restore that was owed.
+    delete syncMtimeByTarget[norm || 'shared'];
+    if ((norm || 'shared') === syncTargetLabel()) {
+      stateSync.lastKnownMtime = 0;
+    }
+    persistSyncMeta();
+    return true;
+  } catch (e) {
+    console.warn('[sync] Delete failed:', e.message);
+    return false;
+  }
+}
+
+/**
+ * Point this device at a different target.
+ *
+ * Returns one of 'unchanged' | 'off' | 'seeded' | 'restoring' | 'pushed' |
+ * 'cancelled' | 'invalid', so the caller can report what actually happened
+ * rather than assuming.
+ */
+async function applySyncTarget(mode, profileName) {
+  if (!STATE_SYNC_AVAILABLE) return 'invalid';
+
+  const profile = (mode === 'profile') ? normalizeSyncProfile(profileName) : '';
+  if (mode === 'profile' && !profile) return 'invalid';
+  if (mode !== 'off' && mode !== 'shared' && mode !== 'profile') return 'invalid';
+  if (mode === syncTarget.mode && profile === syncTarget.profile) return 'unchanged';
+
+  // Drop any queued push before the target moves. It would otherwise fire
+  // against the new URL on the old schedule, which is a write the user did not
+  // ask for at a moment they are still deciding.
+  if (stateSync.pushTimer) { clearTimeout(stateSync.pushTimer); stateSync.pushTimer = null; }
+  stateSync.pendingJson = null;
+
+  syncTarget = { mode: mode, profile: profile };
+  persistSyncTarget();
+  // Per-target bookkeeping: adopt whatever we last knew about the NEW target,
+  // not what we knew about the old one.
+  stateSync.lastKnownMtime = syncMtimeByTarget[syncTargetLabel()] || 0;
+  stateSync.lastError = null;
+
+  if (mode === 'off') {
+    stateSync.status = 'off';
+    updateSyncIndicator();
+    return 'off';
+  }
+
+  const info = await fetchSyncTargetInfo(mode, profile);
+  const serverSize = (info && typeof info.size === 'number') ? info.size : 0;
+
+  if (serverSize <= 0) {
+    // Nothing there yet. Seeding is the only sensible reading of "use this
+    // slot", and there is nothing to overwrite, so it needs no confirmation.
+    stateSync.status = 'idle';
+    scheduleStateSync(redactedSyncJson());
+    forceServerFlush();
+    updateSyncIndicator();
+    return 'seeded';
+  }
+
+  const when = info.mtime ? new Date(info.mtime).toLocaleString() : 'unknown';
+  const sizeKB = Math.max(1, Math.round(serverSize / 1024));
+  const label = (mode === 'profile') ? 'Profile "' + profile + '"' : 'The shared backup';
+  const answer = confirm(
+    label + ' already holds a backup.\n\n' +
+    'Saved: ' + when + '\n' +
+    'Size: ' + sizeKB + ' KB\n\n' +
+    'OK\t\tLoad that backup onto this device (replaces what is here now).\n' +
+    'Cancel\tKeep this device\u2019s data and overwrite the backup.'
+  );
+
+  if (answer) {
+    stateSync.status = 'syncing';
+    updateSyncIndicator();
+    await restoreFromServer();
+    return 'restoring';
+  }
+  stateSync.status = 'idle';
+  scheduleStateSync(redactedSyncJson());
+  forceServerFlush();
+  updateSyncIndicator();
+  return 'pushed';
+}

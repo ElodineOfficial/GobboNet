@@ -30,6 +30,7 @@ gets noticed.
 Run:  python3 test-engine-args.py
 """
 import os
+import pathlib
 import re
 import sys
 
@@ -115,9 +116,18 @@ def main():
     # Comments stripped first. The doc comment on BuildArgs necessarily NAMES
     # these tokens while explaining why it does not grep for them, so a raw
     # substring search over the file reports the opposite of the truth.
-    server_go = read("internal/supervisor/supervisor.go")
-    code_only = "\n".join(l for l in server_go.split("\n")
-                          if not l.lstrip().startswith("//"))
+    # The whole package, not one file. The offload markers moved to
+    # internal/supervisor/engineout.go in 1.7.5, when the check stopped being a
+    # log grep and became a scan of the engine's output as it streams past. A
+    # per-file search reported "does not grep" while the package plainly did,
+    # and the invariant is about the package's behaviour either way.
+    pkg = pathlib.Path(ROOT) / "internal" / "supervisor"
+    code_only = ""
+    for f in sorted(pkg.glob("*.go")):
+        if f.name.endswith("_test.go"):
+            continue
+        code_only += "\n".join(l for l in f.read_text().split("\n")
+                                if not l.lstrip().startswith("//"))
     greps_log = any(t in code_only for t in ("offloaded", "offloading", "Vulkan0", "CUDA0"))
     check("  Go path either greps for offload AND passes -lv, or does neither",
           greps_log == ("-lv" in go),

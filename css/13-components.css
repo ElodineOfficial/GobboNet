@@ -655,3 +655,262 @@ input[type="range"]::-moz-range-thumb {
   }
   .catalog-entry button { justify-self: start; }
 }
+
+/* ========================================================
+   DEVICE SYNC (DATA modal)
+
+   Three mutually exclusive targets, plus a list of what is actually on the
+   server. The list matters as much as the radio buttons: a profile created on
+   the phone is otherwise invisible from the desktop, and the only way to reach
+   it would be to type its name from memory.
+======================================================== */
+.sync-target-rows { display: flex; flex-direction: column; gap: 8px; }
+
+.sync-target-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  font-size: 13px;
+  line-height: 1.45;
+  cursor: pointer;
+}
+.sync-target-row input { margin-top: 3px; flex: 0 0 auto; }
+.sync-target-row em { color: var(--text-dim); font-style: normal; font-size: 11px; }
+
+.sync-profile-name {
+  display: flex;
+  gap: 8px;
+  margin-left: 24px;
+  flex-wrap: wrap;           /* the button drops below the field on a phone */
+}
+.sync-profile-name input {
+  flex: 1 1 140px;
+  min-width: 0;              /* or a long value stretches the modal sideways */
+  padding: 6px 9px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--white);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.sync-profile-name input:focus { outline: none; border-color: var(--cyan-dim); }
+.sync-profile-name input[aria-invalid="true"] { border-color: var(--red-neon); }
+
+.sync-target-status {
+  margin-top: 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-dim);
+  min-height: 1.5em;         /* reserved, so showing a message never reflows */
+}
+.sync-target-status[data-tone="ok"]  { color: var(--green-neon); }
+.sync-target-status[data-tone="err"] { color: var(--red-neon); }
+
+.data-section-subhead {
+  margin-top: 16px;
+  margin-bottom: 8px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--magenta);
+}
+
+.sync-profile-list { display: flex; flex-direction: column; gap: 6px; }
+.sync-profile-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  font-size: 12px;
+}
+.sync-profile-item[data-current="true"] { border-color: var(--cyan-dim); }
+.sync-profile-item .spi-name {
+  font-family: var(--font-mono);
+  color: var(--white);
+  font-weight: 700;
+}
+.sync-profile-item .spi-meta { color: var(--text-dim); margin-left: auto; white-space: nowrap; }
+.sync-profile-item .spi-tag {
+  font-size: 10px;
+  letter-spacing: 1px;
+  color: var(--cyan-bright);
+  border: 1px solid var(--cyan-dim);
+  border-radius: 3px;
+  padding: 1px 5px;
+}
+
+@media (max-width: 560px) {
+  /* The metadata wraps under the name rather than squeezing it to nothing. */
+  .sync-profile-item { flex-wrap: wrap; }
+  .sync-profile-item .spi-meta { margin-left: 0; width: 100%; }
+}
+
+/* ========================================================
+   AUTO-SCROLL MODE (CONFIG)
+
+   Same row shape as the device-sync targets above: three mutually exclusive
+   options, each with a sentence explaining the trade-off rather than a bare
+   label. "Always follow" in particular needs its consequence spelled out,
+   because a user who picks it and then cannot scroll up mid-reply will read
+   that as a bug rather than as the thing they asked for.
+======================================================== */
+.scroll-mode-rows { display: flex; flex-direction: column; gap: 8px; }
+
+.scroll-mode-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  font-size: 13px;
+  line-height: 1.45;
+  cursor: pointer;
+}
+.scroll-mode-row input { margin-top: 3px; flex: 0 0 auto; }
+.scroll-mode-row em { color: var(--text-dim); font-style: normal; font-size: 11px; }
+
+/* ========================================================
+   SERVER PRESETS (DATA modal)
+======================================================== */
+.preset-rows { display: flex; flex-direction: column; gap: 4px; }
+.preset-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 5px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  font-size: 12px;
+}
+/* A row that disagrees with this device is the only interesting kind, so it
+   is the only kind that is coloured. */
+.preset-row[data-differs="true"] { border-color: var(--magenta); }
+.preset-row .preset-key { font-family: var(--font-mono); color: var(--white); }
+.preset-row .preset-val {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  color: var(--text-dim);
+  text-align: right;
+  word-break: break-word;    /* a long string value wraps instead of overflowing */
+}
+.preset-note { margin: 10px 0 8px; font-size: 12px; color: var(--text-dim); }
+.preset-warn {
+  margin-top: 8px;
+  padding: 7px 10px;
+  border: 1px solid var(--red-neon);
+  border-radius: var(--radius);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--white);
+  background: rgba(255, 0, 60, 0.06);
+}
+.preset-key-list { margin-top: 14px; }
+.preset-key-list summary {
+  cursor: pointer;
+  font-size: 11px;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--magenta);
+}
+
+/* ========================================================
+   ABOUT — build info
+
+   Placed first in the panel and styled to be found, because "what version am
+   I on" is the question this panel gets opened for, and the answer used to
+   not be in it at all.
+======================================================== */
+.about-build {
+  padding: 12px 14px;
+  border: 1px solid var(--cyan-dim);
+  border-radius: var(--radius);
+  background: rgba(0, 243, 255, 0.04);
+}
+.about-build-head {
+  color: var(--cyan-bright);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  margin-bottom: 10px;
+}
+.about-build-rows { display: flex; flex-direction: column; gap: 5px; }
+.about-build-row {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  font-size: 12px;
+}
+.about-build-row span { color: rgba(255, 255, 255, 0.4); min-width: 62px; }
+.about-build-row b {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  color: var(--white);
+  word-break: break-all;    /* a long stamped version wraps instead of overflowing */
+}
+/* The headline number, which is what gets read out loud. */
+#about-version { color: var(--green-neon); font-size: 15px; }
+
+.about-build-warn {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--orange, #ff9500);
+  border-radius: var(--radius);
+  background: rgba(255, 149, 0, 0.07);
+  color: var(--white);
+  font-size: 12px;
+  line-height: 1.55;
+}
+.about-build-warn[hidden] { display: none; }
+
+#about-copy-btn { margin-top: 12px; }
+
+/* ========================================================
+   IDLE STAND-DOWN (CONFIG)
+
+   Hidden until /standdown says this server can actually unload the model.
+   In remote mode llama.cpp belongs to someone else, and a switch that looks
+   real but does nothing gets blamed when VRAM stays pinned.
+======================================================== */
+.standdown-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;           /* the button drops below the field on a phone */
+  font-size: 13px;
+}
+.standdown-row input {
+  width: 84px;
+  flex: 0 0 auto;
+  padding: 6px 9px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--white);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.standdown-row input:focus { outline: none; border-color: var(--cyan-dim); }
+.standdown-row span { color: var(--text-dim); }
+
+.standdown-status {
+  margin-top: 9px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-dim);
+  min-height: 1.4em;         /* reserved, so a message never reflows the panel */
+}
+.standdown-status[data-tone="ok"]  { color: var(--green-neon); }
+.standdown-status[data-tone="err"] { color: var(--red-neon); }
+
+/* A stand-down control that cannot do anything is disabled rather than hidden,
+   so the reason beside it is what the user reads. Dimmed enough to say "not
+   now" without being unreadable. */
+.standdown-row input:disabled,
+.standdown-row button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}

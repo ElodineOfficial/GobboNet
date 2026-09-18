@@ -64,12 +64,19 @@ properties every later sheet reads.
 - `js/23-card-code.js` is the only hand-written module — the other 23 were
   mechanically extracted, which is why their headers carry line ranges.
 - Adding a module means editing `chat.html`'s `<script>` list. `stage-web.sh`
-  refuses to build a web root whose file count disagrees with what `chat.html`
+  refuses to stage a frontend whose file count disagrees with what `chat.html`
   actually references, so a forgotten tag fails the build instead of producing
-  a blank page with console errors.
+  a blank page with console errors. `TestBuiltInFrontendIsServedAndIsComplete`
+  checks the same thing against the embed, from the other side.
 
 ## Where the server fits
 
-The Go server serves these as static files from its web root and adds nothing to
-them — no templating, no injection, no bundling. `web/` is assembled by
-`stage-web.sh`; edit the files at the repo root, never the copies under `web/`.
+The Go server serves these as static files and adds nothing to them — no
+templating, no injection, no bundling. Since 1.7.5 they are not on disk beside
+it at all: `stage-web.sh` assembles `internal/webui/assets` and `go:embed`
+compiles that into the binary, so the page and the server are one file. Edit the
+files at the repo root, re-run `stage-web.sh`, rebuild.
+
+A directory on disk is still served when `web_root` names one, and only then —
+never by discovery. That is what stops a `web/` left behind by an older install
+from shadowing the built-in copy, which is exactly what it used to do.

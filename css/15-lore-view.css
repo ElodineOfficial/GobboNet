@@ -159,3 +159,46 @@
    read identically to a genuine no-op, so the row itself has to say. */
 .lore-history tr.lore-failed td { color: rgba(232, 179, 74, 0.85); }
 .lore-history tr.lore-failed td:first-child::after { content: ' !'; font-weight: 700; }
+
+/* ========================================================
+   LORE EDITOR
+
+   Sits where .lore-summary-text sits in the read-only view, and is sized to
+   match it, so switching modes does not make the panel jump.
+======================================================== */
+.lore-edit-input {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 260px;
+  max-height: 50vh;
+  resize: vertical;
+  padding: 12px;
+  border: 1px solid var(--green-neon);
+  border-radius: var(--radius);
+  background: rgba(0, 0, 0, 0.35);
+  color: var(--white);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  /* The stored text has real newlines and is read one beat per line; a
+     textarea that soft-wraps without preserving them would make an edit look
+     like it had reflowed the summary. */
+  white-space: pre-wrap;
+  outline: none;
+}
+.lore-edit-input:focus { border-color: var(--cyan-bright); }
+
+.lore-edit-meter {
+  margin-top: 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  text-align: right;
+}
+.lore-edit-meter[data-over="true"] { color: var(--orange, #ff9500); }
+
+@media (max-width: 560px) {
+  .lore-edit-input { min-height: 200px; font-size: 11px; }
+  .lore-edit-meter { text-align: left; }
+}

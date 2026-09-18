@@ -1,4 +1,10 @@
-# Building the 1.7.3 packages
+# Building the packages
+
+> Renamed from `BUILDING-1.7.3.md`. A build guide whose *filename* carries a
+> version is a file that is wrong from the next release onward — the same
+> disease as the frontend build stamp that sat at `1.6.0-no-encoded-payload`
+> through the whole of 1.7.x. `VERSION` is the one place a release number
+> belongs.
 
 Three artefacts, three commands, in this order. Everything below was verified
 against the tree as it ships except where marked.
@@ -11,12 +17,25 @@ against the tree as it ships except where marked.
 
 ```sh
 ./build-release.sh                    # Go binaries, stamped from VERSION
-cd installer       && ./build-installer.sh    # GobboNetSetup-1.7.3-go-<sha>.exe
-cd ../installer-linux && ./build-deb.sh       # gobbonet_1.7.3+go.<sha>-1_amd64.deb
+cd installer       && ./build-installer.sh    # GobboNetSetup-1.7.4-go-<sha>.exe
+cd ../installer-linux && ./build-deb.sh       # gobbonet_1.7.4+go.<sha>-1_amd64.deb
 ```
 
-`VERSION` is the single input to all three — it already says `1.7.3`. Tag
-`v1.7.3` before building, or `TestVersionFileMatchesUpstreamRelease` will fail:
+The Debian revision — the `-1` — counts PACKAGING-only changes to one upstream
+version and resets when `VERSION` moves. `build-deb.sh` defaults it to 1 so a
+new release resets it with nobody having to remember; a packaging-only rebuild
+of the same upstream version passes the next number:
+
+```sh
+DEB_REVISION=2 ./build-deb.sh
+```
+
+It used to be the literal `-3`, left over from 1.7.3's three packaging repairs,
+which meant 1.7.4 shipped claiming two earlier Debian revisions that never
+existed.
+
+`VERSION` is the single input to all three — it already says `1.7.4`. Tag
+`v1.7.4` before building, or `TestVersionFileMatchesUpstreamRelease` will fail:
 it compares `VERSION` against the nearest git tag, on purpose.
 
 ---
@@ -67,7 +86,7 @@ dependency sources is not something to hand over — it would be the one
 unpinned thing in the build.
 
 **The alternative was worse.** Repacking the 1.7 binary out of the uploaded
-`.deb` and relabelling it 1.7.3 would produce packages that pass every
+`.deb` and relabelling it 1.7.4 would produce packages that pass every
 smoke test and contain none of this release: no upstream `/v1/models`, so #47,
 #48 and #27 still broken; no ranked LAN addresses; no `doctor` firewall section.
 The version string would name a release it was not built from — exactly what
@@ -93,7 +112,7 @@ the tree, and all five JS modules changed this release reach the payload.
 `gobbonet_1_7_go_9051875-1_amd64.deb`: same paths, same `usr/lib/gobbonet/`
 layout, same `usr/bin/gobbonet` shim, same `web/` placement.
 
-**`VERSION`** — `1.7.3`, and it is the only version literal. `build-release.sh`,
+**`VERSION`** — `1.7.4`, and it is the only version literal. `build-release.sh`,
 `build-installer.sh` and `build-deb.sh` all read it; the `.nsi` takes it as a
 `-D` define and hardcodes nothing.
 
@@ -101,15 +120,35 @@ layout, same `usr/bin/gobbonet` shim, same `web/` placement.
 
 ## Engine fetch
 
-`build-deb.sh` pulls llama.cpp from GitHub releases and checks it against
-`installer-linux/engine.sha256`. To reuse an engine you already have:
+**`engine.sha256` at the repo root is the single pin for all three builds.** It
+carries `LLAMA_BUILD` and one hash per platform archive; bumping the build means
+updating every hash in the same commit.
+
+It moved here from `installer-linux/` in 1.7.4. Before that only the deb build
+pinned anything — the Windows installer bundled whatever was sitting in
+`installer/vendor/`, with a look for `ggml-vulkan.dll` as the only check. An
+`.exe` and a `.deb` carrying the same version number could therefore contain
+different engines, with nothing recording which. That is precisely the question
+you want answered when one platform reproduces a bug and the other does not.
+
+All three builders now fetch from GitHub releases and refuse a mismatch. The
+Windows payload also carries `llama-cpp/ENGINE.txt`, so the bundled engine is
+still identifiable after installation. To reuse an engine you already have:
 
 ```sh
 SKIP_ENGINE_FETCH=1 ./build-deb.sh          # uses installer-linux/vendor/
 BUNDLE_CPU_ENGINE=1  ./build-deb.sh         # also ship the CPU-only archive
+
+SKIP_ENGINE_FETCH=1 ./build-installer.sh    # uses installer/vendor/
+LLAMA_CPP=/path/to/llama-cpp ./build-installer.sh   # bypasses the pin
 ```
+
+`LLAMA_CPP=` is the one route that skips verification, because a hand-placed
+directory cannot be hashed against an archive nobody kept. The build says so
+rather than implying a check that did not happen, and `ENGINE.txt` in the
+payload records it as unverified.
 
 The uploaded 1.7 deb carries a usable Vulkan engine at
 `usr/lib/gobbonet/llama-cpp/` if you want to populate `vendor/` from it rather
-than re-downloading — but check `engine.sha256` first, since 1.7.3 may pin a
+than re-downloading — but check `engine.sha256` first, since 1.7.4 may pin a
 newer `LLAMA_BUILD` than that package was cut against.

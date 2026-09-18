@@ -683,7 +683,17 @@ If it will not close, a reboot always clears it." \
   DetailPrint "Installing GobboNet ${VERSION}..."
   File "${PAYLOAD}\gobbonet.exe"
   File "${PAYLOAD}\gobbonet.ico"
-  File /r "${PAYLOAD}\web"
+
+  ; No web\ directory any more: the chat page is compiled into gobbonet.exe.
+  ;
+  ; It used to be installed here and found at runtime, and that made the app two
+  ; halves a user could update separately. They did -- dropping a new zip over
+  ; the folder replaced chat.html, js\ and css\ at the root while the old web\
+  ; kept being served, so every server-side feature of the release looked
+  ; missing. One file now carries both halves. See internal/webui.
+  ;
+  ; An upgrade over such an install leaves the old web\ behind; the server
+  ; ignores it and says so at startup, and the uninstaller removes it.
 
   ; The PowerShell helpers stay: launch.bat still uses them for adding
   ; further models. The probe page ran its own copy out of $PLUGINSDIR

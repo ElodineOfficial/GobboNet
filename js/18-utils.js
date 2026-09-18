@@ -52,6 +52,43 @@ function copyMessage(index) {
 }
 
 /**
+ * The exact text of a rendered code block, for the clipboard.
+ *
+ * `textContent` is the obvious read, and for the HTML this renderer produces
+ * today it is correct. It is also one <br> away from being silently wrong: a
+ * <br> contributes NOTHING to textContent, so a single stray one welds every
+ * line of the copied block into one line with no separator at all. That is
+ * not hypothetical — it is the exact bug this app shipped with, back when the
+ * markdown passes still ran over fenced content (see the long comment above
+ * mdExtractFences). The renderer no longer does that, but the clipboard
+ * should not be relying on a distant invariant to stay correct: counting a
+ * <br> as a newline here costs nothing and makes this function right on its
+ * own terms, whatever the HTML turns out to contain.
+ *
+ * CR is folded into LF for the same reason. The HTML parser normalises CRLF
+ * when it builds the DOM, so this is belt-and-braces for any path that
+ * assembles a node tree without going through the parser — a lone \r in the
+ * middle of pasted code is the kind of thing that produces a syntax error
+ * three days later with no visible cause.
+ */
+function codeBlockText(el) {
+  let out = '';
+  (function walk(node) {
+    const kids = node.childNodes;
+    for (let i = 0; i < kids.length; i++) {
+      const child = kids[i];
+      if (child.nodeType === 3) {            // text node
+        out += child.nodeValue;
+      } else if (child.nodeType === 1) {     // element
+        if (String(child.tagName).toLowerCase() === 'br') out += '\n';
+        else walk(child);
+      }
+    }
+  })(el);
+  return out.replace(/\r\n?/g, '\n');
+}
+
+/**
  * Copy the text of a code/file block to the clipboard.
  * `btn` is the clicked Copy button; we read the sibling <pre><code> within
  * the same .code-block / .file-block container. Reading from the DOM (rather
@@ -65,7 +102,7 @@ function copyCodeBlock(btn) {
   const block = btn.closest('.code-block, .file-block, .math-block');
   const codeEl = block && block.querySelector('pre code');
   if (!codeEl) return;
-  const text = codeEl.textContent;
+  const text = codeBlockText(codeEl);
 
   function flash(success) {
     const orig = btn.textContent;
@@ -1393,8 +1430,55 @@ function mdRestore(html, store) {
  *     backticks and unstyled text, and then the box snapped in at the end.
  *     An unclosed fence now runs to the end of the message, which is both
  *     what CommonMark says and what makes a code box appear immediately.
+ *   - A fence indented FOUR spaces or more, and a fence inside a blockquote.
+ *     See mdFenceOpen below -- these are the last two ways a code block could
+ *     still lose its line breaks on the way to the clipboard.
  */
 const MD_MATH_TAGS = /^(?:latex|math|tex|katex|equation|displaymath)$/i;
+
+/* A blockquote prefix: `>` markers, each optionally followed by one space,
+   nested or not. Matched against RAW text, so this is a literal `>` -- unlike
+   MD_QUOTE_RE in the block pass, which runs after escapeHtml and therefore
+   has to match `&gt;`. */
+const MD_FENCE_QUOTE_RE = /^(?:[ \t]{0,3}>[ \t]?)+/;
+
+/* Does this line open a fence, and under what container?
+ *
+ * Two things here are deliberately looser than they were:
+ *
+ *   - INDENT IS UNCAPPED. It used to be [ \t]{0,3}, which is CommonMark's
+ *     rule for a fence at the top level of a document. Inside a list item the
+ *     rule is three spaces past the item's CONTENT column, so the fence in
+ *
+ *         1. Install it:
+ *
+ *             ```sh
+ *             npm i
+ *             ```
+ *
+ *     is legal markdown and models emit it constantly -- four spaces is what
+ *     most of them indent list continuation by. The old cap declined it, and
+ *     a declined fence is not inert: it falls through to the paragraph pass,
+ *     where `\n -> <br>` runs over it. That is the ORIGINAL BUG at the top of
+ *     this comment block, reached by a different road. The block had no Copy
+ *     button at all, and selecting it by hand gave back code with the
+ *     indentation collapsed, because a <p> is white-space:normal.
+ *
+ *     Uncapping is free here because this renderer has no indented-code-block
+ *     rule for the looser reading to collide with -- four leading spaces have
+ *     never meant anything to it. A line of three-plus backticks alone is not
+ *     ambiguous enough to be worth a cap.
+ *
+ *   - A BLOCKQUOTE PREFIX IS ALLOWED. `> ```js` is how a fence arrives when
+ *     the model is quoting a source, and it had the same fate.
+ */
+function mdFenceOpen(line) {
+  const q = MD_FENCE_QUOTE_RE.exec(line);
+  const quote = q ? q[0] : '';
+  const open = /^([ \t]*)(`{3,}|~{3,})[ \t]*([^\r\n`]*?)[ \t]*\r?$/.exec(line.slice(quote.length));
+  if (!open) return null;
+  return { quote, indent: open[1], fence: open[2], info: open[3].trim() };
+}
 
 function mdExtractFences(raw, store) {
   const lines = String(raw).split('\n');
@@ -1405,26 +1489,41 @@ function mdExtractFences(raw, store) {
     const line = lines[i];
     // The closing fence must be at least as long as the opening one, so a
     // ```` block can legally contain ``` lines.
-    const open = /^([ \t]{0,3})(`{3,}|~{3,})[ \t]*([^\r\n`]*?)[ \t]*\r?$/.exec(line);
+    const open = mdFenceOpen(line);
     if (!open) { out.push(line); i++; continue; }
 
-    const indent = open[1];
-    const fence = open[2];
-    const info = open[3].trim();
-    const closeRe = new RegExp('^[ \\t]{0,3}' + fence[0] + '{' + fence.length + ',}[ \\t]*\\r?$');
+    const quote = open.quote;
+    const indent = open.indent;
+    const fence = open.fence;
+    const info = open.info;
+    const closeRe = new RegExp('^[ \\t]*' + fence[0] + '{' + fence.length + ',}[ \\t]*\\r?$');
 
     const body = [];
     let j = i + 1;
     let closed = false;
     for (; j < lines.length; j++) {
-      if (closeRe.test(lines[j])) { closed = true; break; }
+      let bl = lines[j];
+      // Inside a quoted fence every body line carries the same `>` prefix.
+      // Strip it before the line is read as code or as a closing fence,
+      // or the block would run to the end of the message and every line of
+      // it would arrive on the clipboard with a `> ` glued to the front.
+      if (quote) {
+        const bq = MD_FENCE_QUOTE_RE.exec(bl);
+        if (bq) bl = bl.slice(bq[0].length);
+      }
+      if (closeRe.test(bl)) { closed = true; break; }
       // Strip the opening indent from each body line, so a fence inside a
       // list item does not arrive with four spaces welded to every line.
-      body.push(indent && lines[j].startsWith(indent) ? lines[j].slice(indent.length) : lines[j]);
+      body.push(indent && bl.startsWith(indent) ? bl.slice(indent.length) : bl);
     }
 
     const code = body.join('\n').replace(/\r$/, '').replace(/\s+$/, '');
-    out.push(mdStash(store, mdRenderFence(info, code, closed), true));
+    // The quote prefix is put BACK in front of the placeholder rather than
+    // dropped. It is the only thing that tells the later block pass this
+    // block belongs inside a <blockquote>, and by then escapeHtml will have
+    // turned it into the `&gt;` that MD_QUOTE_RE is looking for. Nesting
+    // survives too: `>> ` is stripped one level per recursion, as usual.
+    out.push(quote + mdStash(store, mdRenderFence(info, code, closed), true));
     i = closed ? j + 1 : lines.length;
   }
   return out.join('\n');

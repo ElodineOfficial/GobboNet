@@ -1,0 +1,2 @@
+# stage-web.sh fills this directory; it is gitignored.
+# Committed so `go:embed all:assets` has a directory to embed in a fresh clone.

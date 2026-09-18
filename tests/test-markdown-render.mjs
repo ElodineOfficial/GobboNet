@@ -149,6 +149,56 @@ console.log('\n=== B2. streaming: an unclosed fence ===');
 }
 
 /* ================================================================
+   B3. WHERE A FENCE IS ALLOWED TO SIT
+
+   The scanner used to cap the opening indent at three spaces -- CommonMark's
+   rule for a fence at the TOP LEVEL of a document. Inside a list item the
+   limit is three past the item's content column, and four spaces is what most
+   models indent list continuation by, so the common case was declined.
+
+   A declined fence is not inert. It falls through to the paragraph pass and
+   gets `\n -> <br>` run over it, which is section A's bug reached by a
+   different road: no Copy button, and hand-selecting it returns code with the
+   indentation collapsed, because a <p> is white-space:normal.
+
+   The clipboard half of this lives in tests/test-code-copy.mjs, which drives
+   the real copyCodeBlock. This half is about what renders.
+================================================================ */
+console.log('\n=== B3. fence placement ===');
+{
+  for (const n of [0, 1, 2, 3, 4, 6, 8]) {
+    const pad = ' '.repeat(n);
+    const out = md('1. do this:\n\n' + pad + '```sh\n' + pad + 'npm i\n' + pad + 'npm test\n' + pad + '```');
+    ok(out.includes('code-block'), `a fence indented ${n} space(s) is a fence`);
+    if (out.includes('code-block')) {
+      eq(copyText(out), 'npm i\nnpm test', `  ...and the indent is stripped from the body at ${n}`);
+    }
+  }
+
+  // Uncapping is only safe because this renderer has no indented-code-block
+  // rule for the looser reading to collide with. Four leading spaces have
+  // never meant anything to it, and must still not.
+  const prose = md('    just indented prose\n    more of it');
+  ok(!prose.includes('code-block'), 'indented prose is still not a code block');
+
+  // A fence inside a blockquote was declined for the same reason and with the
+  // same consequence.
+  const quoted = md('> ```js\n> let a = 1;\n> let b = 2;\n> ```');
+  ok(quoted.includes('code-block'), 'a blockquoted fence is a fence');
+  ok(/<blockquote[^>]*>[\s\S]*class="code-block"[\s\S]*<\/blockquote>/.test(quoted),
+     'and it renders inside the blockquote rather than after it');
+  eq(copyText(quoted), 'let a = 1;\nlet b = 2;', 'with the > prefix stripped from every line');
+
+  const nested = md('>> ```js\n>> let a = 1;\n>> ```');
+  ok(nested.includes('code-block'), 'nested blockquotes work the same way');
+
+  ok(!md('```js\nlet a = 1;\n```').includes('blockquote'),
+     'an unquoted fence did not grow a blockquote');
+  ok(!md('> quoted prose\n> more of it').includes('code-block'),
+     'a blockquote of ordinary prose opens nothing');
+}
+
+/* ================================================================
    C. TABLES — "columns and grids"
 ================================================================ */
 console.log('\n=== C. tables ===');

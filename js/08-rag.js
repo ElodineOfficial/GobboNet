@@ -806,8 +806,12 @@ async function buildContextMessages(thread, card, opts) {
       // model's TRAINING context, not the --ctx-size the server was
       // started with -- which is why summarizeForLore still treats a 400
       // as the no-room case rather than trusting this number.
-      summary = await compressWithCardModel(summary, toArchive, _authored, tokenLimit, card);
-      setThreadLore(thread, summary);
+      const _produced = await compressWithCardModel(summary, toArchive, _authored, tokenLimit, card);
+      // Not setThreadLore directly: the await above is seconds long on a local
+      // model, and the summary is hand-editable, so what is stored now may no
+      // longer be what this pass started from. See mergeLoreAfterPass.
+      const _merge = mergeLoreAfterPass(thread, _loreBefore, _produced);
+      summary = _merge.lore;
 
       // Record what this pass actually did. Without a before/after size you
       // cannot tell a summary that is absorbing new events from one that is
@@ -836,7 +840,13 @@ async function buildContextMessages(thread, card, opts) {
           // Absent on rows written before this change, which is why the
           // inspector keeps the old check as a fallback.
           failed: (typeof _loreLastKind !== 'undefined')
-                  && _loreLastKind !== 'ok' && _loreLastKind !== 'skip'
+                  && _loreLastKind !== 'ok' && _loreLastKind !== 'skip',
+          // Set when the summary was hand-edited while this pass was in
+          // flight. Recorded rather than left to be noticed: a row whose
+          // `after` does not follow from its `before` otherwise looks like
+          // the pass misbehaving.
+          editedDuringPass: _merge.merged || _merge.dropped || false,
+          beatDropped: _merge.dropped || false
         });
         while (thread.loreLog.length > 6) thread.loreLog.shift();
       } catch (e) { /* telemetry must never break a turn */ }

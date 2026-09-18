@@ -29,6 +29,7 @@ import (
 
 	"github.com/ElodineOfficial/GobboNet/internal/auth"
 	"github.com/ElodineOfficial/GobboNet/internal/config"
+	"github.com/ElodineOfficial/GobboNet/internal/engine"
 	"github.com/ElodineOfficial/GobboNet/internal/models"
 	"github.com/ElodineOfficial/GobboNet/internal/server"
 	"github.com/ElodineOfficial/GobboNet/internal/setup"
@@ -153,6 +154,8 @@ func run(argv []string) error {
 		return cmdCheck(argv)
 	case "doctor":
 		return cmdDoctor(argv)
+	case "engine":
+		return cmdEngine(argv)
 	case "config":
 		return cmdConfig(argv)
 	case "version", "-v", "--version":
@@ -171,6 +174,7 @@ func usage() {
 	fmt.Print(`gobbonet - local AI chat server
 
   gobbonet [serve] [--config PATH] [--no-auth] [--host H] [--port N] [--open]
+                   [--model FILE.gguf]
   gobbonet set-password [--config PATH] [--stdin]
   gobbonet setup [--config PATH] [--catalog PATH] [--server-exe PATH]
                  [--no-browser] [--force]
@@ -178,6 +182,7 @@ func usage() {
   gobbonet uninstall [--keep-models] [--remove-models] [--yes]
   gobbonet check [--config PATH]
   gobbonet doctor [--config PATH]
+  gobbonet engine install|status [--config PATH] [--dir PATH]
   gobbonet config get [--config PATH] <key>
   gobbonet config set [--config PATH] <key> <value>
   gobbonet config keys
@@ -223,6 +228,16 @@ func cmdServe(argv []string) error {
 	llmURL := stringFlag(fs, "llm-url", "override llm_url")
 	port := fs.Int("port", 0, "override listen_port")
 	noAuth := fs.Bool("no-auth", false, "disable the password gate (only sensible on loopback)")
+
+	// --model names the .gguf to load, rather than letting the supervisor pick
+	// the first one it scans.
+	//
+	// It exists for launch.bat. The Windows launcher asks the user to choose a
+	// model from a hardware-aware menu, downloads it and checks it -- and then
+	// handing over to a server that boots whichever file sorts first would make
+	// that entire conversation decorative. The launcher knows the answer; this
+	// is how it says so.
+	modelFile := stringFlag(fs, "model", "the .gguf to load (default: pick one from model_dir)")
 
 	// NEW-5. `gobbonet` does not open a browser, and that is the intended
 	// behaviour rather than a missing feature — the report asked for a
@@ -308,15 +323,6 @@ func cmdServe(argv []string) error {
 		fmt.Println(" [*] WARNING: --no-auth is set. Anyone who can reach this port has full access.")
 	}
 
-	// Serving is the one command that genuinely needs the web assets, so this is
-	// where a missing web root becomes an error.
-	if cfg.WebRoot == "" {
-		return fmt.Errorf("could not find chat.html next to the binary or in the current directory.\n" +
-			"    Set web_root in the config file to the directory holding it.")
-	}
-	if _, err := os.Stat(filepath.Join(cfg.WebRoot, "chat.html")); err != nil {
-		return fmt.Errorf("chat.html not found in %s", cfg.WebRoot)
-	}
 	if err := os.MkdirAll(cfg.DataDir, 0o700); err != nil {
 		return fmt.Errorf("could not create data directory %s: %w", cfg.DataDir, err)
 	}
@@ -333,7 +339,17 @@ func cmdServe(argv []string) error {
 				GPULayers:   cfg.GPULayers,
 				KVCacheType: cfg.KVCacheType,
 			},
-			LogFile:          cfg.LogFile(),
+			LogFile: cfg.LogFile(),
+			// The engine's output, mirrored into this window as it arrives.
+			//
+			// Until 1.7.5 this was nil in effect: llama.cpp's stdout went to the
+			// log file and its stderr to the log file plus an in-memory error
+			// ring, so a model taking a minute to load printed nothing and the
+			// window looked frozen. launch.bat gave llama-server its own titled
+			// console; moving to one window was deliberate, losing the output
+			// was not.
+			ConsoleOut:       engineConsole(cfg),
+			EngineOutputFull: cfg.EngineOutputFull,
 			ChatTemplateName: cfg.ChatTemplateName,
 			ChatTemplateFile: cfg.ChatTemplateFile,
 		})
@@ -348,9 +364,29 @@ func cmdServe(argv []string) error {
 	}
 	defer srv.Shutdown()
 
+	// Serving is the one command that genuinely needs the frontend, so this is
+	// where its absence becomes an error. See internal/server/webroot.go.
+	if srv.WebMissing() {
+		return server.ErrNoWebAssets
+	}
+
 	fmt.Printf(" [OK] mode: %s\n", mode)
+	fmt.Printf(" [OK] chat interface: %s\n", srv.WebSource())
+	for _, note := range srv.WebNotes() {
+		// Wrapped rather than one long line: these are read by someone who has
+		// just had something not work, in a console window they did not choose
+		// the width of.
+		fmt.Printf(" [*]  %s\n", wrapNote(note, 72, "      "))
+	}
 	fmt.Printf(" [OK] llama.cpp upstream: %s\n", cfg.LLMURL)
 	fmt.Printf(" [OK] config: %s\n", cfg.Path)
+	if sup != nil {
+		// Said here rather than only in `gobbonet doctor`, which is where it
+		// used to live. When the engine will not start or is behaving oddly,
+		// this is the file to read, and the moment someone needs it is the
+		// moment they are least likely to go looking for a subcommand.
+		fmt.Printf(" [OK] engine log: %s\n", cfg.LogFile())
+	}
 	if cfg.PerfOverridden {
 		// Say it at startup, not only in the settings panel. A model that fails
 		// to load because of a context size someone set weeks ago is otherwise
@@ -362,7 +398,15 @@ func cmdServe(argv []string) error {
 
 	if sup != nil {
 		fmt.Printf(" [..] starting llama-server from %s\n", cfg.ServerExe)
-		if err := sup.Boot(""); err != nil {
+		// launch.bat explained this wait; the Go path left it blank, and a
+		// blank minute reads as a hang. The shader note is its wording, kept
+		// because it is the single most common "is it broken?" on a new PC.
+		fmt.Println("      The first launch on a NEW PC can take several minutes while your")
+		fmt.Println("      GPU compiles its shaders. Later starts are much faster.")
+		if cfg.ShowEngineOutput {
+			fmt.Println("      The engine's own output follows, marked [llama].")
+		}
+		if err := sup.Boot(*modelFile); err != nil {
 			// Not fatal. The UI still loads and reports the problem, and the
 			// user can pick a different model from the dropdown — which is more
 			// useful than exiting and making them read a log.
@@ -370,7 +414,19 @@ func cmdServe(argv []string) error {
 		} else {
 			fmt.Printf(" [OK] model loaded: %s\n", sup.CurrentFile())
 		}
+		reportAcceleration(os.Stdout, sup, cfg)
 	} else {
+		// No supervisor means no server_exe. If this machine has no engine at
+		// all, say how to get one rather than leaving "upstream is not
+		// answering" as the only clue -- that message describes a symptom, and
+		// the cause here has a one-line fix.
+		if cfg.ServerExe == "" && mode == config.ModeRemote {
+			if exe, wd := exeDirOf(), workDirOf(); engine.Installed(filepath.Join(exe, "llama-cpp")) == "" &&
+				engine.Installed(filepath.Join(wd, "llama-cpp")) == "" {
+				fmt.Println(" [*]  No llama.cpp engine is installed, and no remote one is configured.")
+				fmt.Println("      Install the pinned build with:  gobbonet engine install")
+			}
+		}
 		if props, err := srv.Info().FetchProps(); err != nil {
 			fmt.Println(" [*]  upstream is not answering yet -- the UI will report it until it does.")
 		} else {
@@ -886,4 +942,149 @@ func extractConfigFlag(argv []string) (rest []string, path string, err error) {
 		}
 	}
 	return rest, path, nil
+}
+
+// wrapNote soft-wraps a startup note to width, indenting continuation lines.
+//
+// The notes it formats explain why something a user just did had no effect, so
+// they are necessarily a few sentences long. A console window is whatever width
+// it is, and an unwrapped paragraph in one is a wall the reader skips.
+func wrapNote(text string, width int, indent string) string {
+	words := strings.Fields(text)
+	if len(words) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	line := 0
+	for i, w := range words {
+		switch {
+		case i == 0:
+			b.WriteString(w)
+			line = len(w)
+		case line+1+len(w) > width:
+			b.WriteString("\n")
+			b.WriteString(indent)
+			b.WriteString(w)
+			line = len(w)
+		default:
+			b.WriteString(" ")
+			b.WriteString(w)
+			line += 1 + len(w)
+		}
+	}
+	return b.String()
+}
+
+// engineConsole decides where llama.cpp's output goes on screen.
+//
+// os.Stdout, not os.Stderr: this is the narration of a normal startup sitting
+// among the banner's other [OK] lines, not a fault. Errors still reach the
+// stderr ring and the log file, and a failed launch is reported by the [!] line
+// above regardless.
+func engineConsole(cfg config.Config) io.Writer {
+	if !cfg.ShowEngineOutput {
+		return nil
+	}
+	return os.Stdout
+}
+
+// reportAcceleration answers "is this running on my GPU", on screen.
+//
+// This is a port of launch.bat's STEP 3b, which the Go path never had. Its
+// absence is why the console could not answer the FIRST troubleshooting entry
+// in README.md -- "it's very slow", whose cause is usually a model that landed
+// on the CPU.
+//
+// Two differences from the batch original, both deliberate:
+//
+//   - It reads the engine's output as it streams past rather than grepping the
+//     log afterwards, so it cannot race a file that is still being written.
+//   - It does NOT stop to ask "Continue anyway?". gobbonet is frequently
+//     started from a shortcut with nobody watching, and a server that waits
+//     forever for an unanswered question is worse than a slow one. It warns and
+//     carries on.
+func reportAcceleration(w io.Writer, sup *supervisor.Supervisor, cfg config.Config) {
+	if sup == nil || sup.CurrentFile() == "" {
+		return
+	}
+	// Let the pipe drain before judging. See Supervisor.AwaitGPUVerdict: the
+	// engine prints the offload lines before it starts listening, but reading
+	// the verdict the instant Boot() returns races the goroutine that scans
+	// them -- and losing that race prints a CPU-fallback warning on a machine
+	// with a working GPU, which is worse than printing nothing.
+	sup.AwaitGPUVerdict(3 * time.Second)
+
+	// The load sentence, assembled from the engine's output on the way past.
+	// One line carrying the device, the layer split and the VRAM, in place of
+	// the four padded columns llama.cpp says it in -- see
+	// internal/supervisor/loadsummary.go for why that matters here.
+	summary := sup.LoadSummaryLine()
+
+	switch {
+	case sup.GPUConfirmed() && summary != "":
+		fmt.Fprintf(w, " [OK] GPU acceleration confirmed: %s\n", summary)
+	case sup.GPUConfirmed():
+		fmt.Fprintln(w, " [OK] GPU acceleration confirmed -- layers reached the graphics card.")
+	case !sup.EngineSpoke():
+		// Nothing was heard at all, so "not confirmed" would be a guess about
+		// the GPU when the real news is that the engine said nothing.
+		fmt.Fprintln(w, " [*]  The engine produced no output, so GPU use could not be confirmed.")
+		fmt.Fprintf(w, "      Check %s\n", cfg.LogFile())
+	default:
+		fmt.Fprintln(w, "")
+		fmt.Fprintln(w, " [*]  WARNING: could not confirm GPU acceleration.")
+		fmt.Fprintln(w, "      The model may be running on your processor, which is VERY slow.")
+		fmt.Fprintln(w, "")
+		fmt.Fprintln(w, "      Usual causes, in order of likelihood:")
+		fmt.Fprintln(w, "        1. Graphics drivers out of date or not installed.")
+		fmt.Fprintln(w, "           AMD:    amd.com/en/support")
+		fmt.Fprintln(w, "           NVIDIA: nvidia.com/Download/index.aspx")
+		fmt.Fprintln(w, "        2. The wrong llama.cpp build for your card. The bundled Vulkan")
+		fmt.Fprintln(w, "           build covers AMD, Intel and most NVIDIA; a CUDA build is")
+		fmt.Fprintln(w, "           faster on NVIDIA if you have one.")
+		fmt.Fprintln(w, "        3. Not enough VRAM for this model. Try a smaller one, or lower")
+		fmt.Fprintln(w, "           gpu_layers in the config.")
+		fmt.Fprintln(w, "        4. A newer llama.cpp that has reworded its own log lines. It has")
+		fmt.Fprintln(w, "           moved them before, and then the GPU is fine and only this")
+		fmt.Fprintln(w, "           check is wrong -- which is why this is a warning and not a")
+		fmt.Fprintln(w, "           refusal to start.")
+		fmt.Fprintln(w, "")
+		fmt.Fprintf(w, "      The full engine log is at:\n        %s\n", cfg.LogFile())
+		if !cfg.ShowEngineOutput {
+			fmt.Fprintln(w, "      show_engine_output = true in the config puts it on screen as it happens.")
+		}
+		fmt.Fprintln(w, "")
+	}
+
+	// Notes are GobboNet's own words for something llama.cpp mentioned in
+	// passing and in jargon. The context mismatch that made an embedding model
+	// produce eleven minutes of nonsense is the reason these exist.
+	for _, n := range sup.LoadNotes() {
+		fmt.Fprintf(w, " [*]  note: %s\n", wrapNote(n, 66, "       "))
+	}
+
+	if sup.VRAMPressure() {
+		fmt.Fprintln(w, " [*]  VRAM WARNING: the engine said this model is tight on graphics memory.")
+		fmt.Fprintln(w, "      If chat replies start failing, lower ctx_size or use a smaller model.")
+		fmt.Fprintf(w, "      Current ctx_size = %d\n", cfg.CtxSize)
+	}
+}
+
+// exeDirOf and workDirOf are the two directories this program looks in for
+// things that sit beside it. "" when unavailable, which every caller treats as
+// "nothing there".
+func exeDirOf() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	return filepath.Dir(exe)
+}
+
+func workDirOf() string {
+	wd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	return wd
 }

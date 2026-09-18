@@ -55,7 +55,16 @@ OUT="$(pwd)/dist"
 # the point of pinning: a deliberate change, not a silent fetch of whatever is
 # current today.
 # ---------------------------------------------------------------------------
-LLAMA_BUILD="${LLAMA_BUILD:-b10456}"
+# LLAMA_BUILD and the hashes come from the shared pin at the repo root, so the
+# .deb and the .exe cannot end up carrying different engines under the same
+# version number. Sourced before the default below so an explicit env var still
+# wins for a one-off build.
+# The env var is captured BEFORE sourcing, because the pin file assigns
+# LLAMA_BUILD unconditionally and would otherwise silently override the
+# one-off build someone asked for on the command line.
+_env_llama_build="${LLAMA_BUILD:-}"
+[ -f "$ROOT/engine.sha256" ] && . "$ROOT/engine.sha256"
+LLAMA_BUILD="${_env_llama_build:-${LLAMA_BUILD:-b10456}}"
 LLAMA_BASE="https://github.com/ggml-org/llama.cpp/releases/download/${LLAMA_BUILD}"
 BUNDLE_CPU="${BUNDLE_CPU_ENGINE:-0}"
 
@@ -64,7 +73,6 @@ CPU_ASSET="llama-${LLAMA_BUILD}-bin-ubuntu-x64.tar.gz"
 
 GPU_SHA256="${GPU_SHA256:-}"
 CPU_SHA256="${CPU_SHA256:-}"
-[ -f engine.sha256 ] && . ./engine.sha256
 
 say()  { printf '  %s\n' "$*"; }
 fail() { printf '\nERROR: %s\n' "$*" >&2; exit 1; }
@@ -96,7 +104,23 @@ else
     SHA="nogit.$(date -u -d "@${SOURCE_DATE_EPOCH:-$(date +%s)}" +%Y%m%d 2>/dev/null || date -u +%Y%m%d)"
     echo "WARNING: no git metadata in $ROOT; stamping $SHA" >&2
 fi
-DEB_VERSION="${RELEASE}+go.${SHA}-3"
+# The Debian revision counts PACKAGING-only changes to one upstream version,
+# and resets whenever upstream moves. 1.7.3 went through three of them — the
+# original, the web/ permissions repair, and the guided-launcher rebuild — and
+# the -3 from that sequence was then left hardcoded here. It shipped as
+# 1.7.4+go...-3, claiming two earlier Debian revisions of 1.7.4 that never
+# existed, and leaving the next genuine packaging fix nowhere sensible to go.
+#
+# A default rather than a literal, so a new VERSION resets it with nobody
+# having to remember. A packaging-only rebuild of the SAME upstream version
+# passes the next number explicitly:
+#
+#   DEB_REVISION=2 ./build-deb.sh
+DEB_REVISION="${DEB_REVISION:-1}"
+case "$DEB_REVISION" in
+    ''|*[!0-9]*) fail "DEB_REVISION must be a positive integer, got '$DEB_REVISION'" ;;
+esac
+DEB_VERSION="${RELEASE}+go.${SHA}-${DEB_REVISION}"
 
 # ---------------------------------------------------------------------------
 # The Go binary. Built by ../build-release.sh, which refuses a dirty tree and
@@ -135,7 +159,7 @@ fetch_engine() {
     if [ -z "$want" ]; then
         fail "no pinned SHA-256 for $asset.
        Verify it against the release page, then record it in
-       installer-linux/engine.sha256:
+       engine.sha256 at the repo root:
            ${asset%%-bin-*}... actual hash was:
            $got"
     fi
@@ -265,8 +289,10 @@ if [ -x "$ROOT/installer/gen-catalog.py" ] && [ -f "$ROOT/launch.bat" ]; then
     "$ROOT/installer/gen-catalog.py" "$ROOT/launch.bat" "$ROOT/installer/models.ini"
 fi
 [ -f "$ROOT/installer/models.ini" ] || fail "installer/models.ini is missing"
-"$ROOT/stage-web.sh" >/dev/null
-[ -d "$ROOT/web" ] || fail "stage-web.sh produced no web/ directory"
+# No web staging here any more. The chat page is compiled into the gobbonet
+# binary this script is handed (see internal/webui), so the frontend arrives
+# with the binary and there is nothing to copy. build-release.sh runs
+# stage-web.sh before it builds, which is where that now belongs.
 
 # ---------------------------------------------------------------------------
 # Stage the tree.
@@ -285,10 +311,25 @@ install -d -m 0755 "$STAGE/usr/share/doc/gobbonet"
 
 install -m 0755 "$GOBBONET_BIN"        "$STAGE/usr/lib/gobbonet/gobbonet"
 install -m 0644 gobbonet-setup.py wizard.html "$STAGE/usr/lib/gobbonet/"
+
 install -m 0755 gobbonet-launch        "$STAGE/usr/lib/gobbonet/gobbonet-launch"
 install -m 0644 "$ROOT/installer/models.ini" "$STAGE/usr/lib/gobbonet/models.ini"
-cp -r "$ROOT/web"                      "$STAGE/usr/lib/gobbonet/web"
 cp -r "$VENDOR/llama-cpp"              "$STAGE/usr/lib/gobbonet/llama-cpp"
+
+# A marker that survives installation, matching the one the Windows payload
+# carries. Without it the bundled engine is anonymous once installed: no file
+# on a user's disk says which llama.cpp build it is, so "which engine are you
+# on?" has no answer short of hashing shared objects. The two platforms should
+# answer that question the same way, or comparing a bug across them starts
+# with an archaeology exercise.
+cat > "$STAGE/usr/lib/gobbonet/llama-cpp/ENGINE.txt" <<ENGINEEOF
+llama.cpp build: $LLAMA_BUILD
+asset:           $GPU_ASSET
+backend:         vulkan (with the CPU backends it also carries)
+pinned hash:     ${GPU_SHA256:-none}
+bundled by:      GobboNet $DEB_VERSION
+ENGINEEOF
+chmod 0644 "$STAGE/usr/lib/gobbonet/llama-cpp/ENGINE.txt"
 chmod -R a+rX                          "$STAGE/usr/lib/gobbonet"
 chmod 0755 "$STAGE/usr/lib/gobbonet/llama-cpp/llama-server"
 if [ "$BUNDLE_CPU" = "1" ]; then
@@ -359,6 +400,12 @@ rm -f "$DEB"
 
 # A staging directory can inherit 0700 from mktemp or a restrictive umask.
 # Enforce and check the public payload modes immediately before archiving.
+# Checked against the same payload.manifest the rpm build checks itself
+# against, and checked HERE rather than beside any one install line: staging
+# happens across thirty lines, so a check placed next to the first of them
+# reports every later file as missing. It caught exactly that on its first run.
+"$ROOT/verify-payload.sh" "$STAGE/usr/lib/gobbonet" "deb payload"
+
 "$ROOT/installer-linux/package-permissions.sh" "$STAGE"
 
 # Root-owned program files without needing to be root to build.

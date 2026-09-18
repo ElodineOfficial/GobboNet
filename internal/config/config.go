@@ -84,6 +84,11 @@ const (
 	DefaultKVCacheType = "q8_0"
 
 	DefaultSessionTTLHours = 12
+
+	// Five minutes, as specified. Long enough that a pause to read a reply or
+	// answer the door does not cost a reload; short enough that walking away
+	// gives the memory back while you are still in the next room.
+	DefaultIdleStandDownMinutes = 5
 	// One generation at a time. The app has always worked that way and
 	// llama-server is launched with a single slot, so a cap of 4 only ever
 	// bought a backlog it could not serve — press Stop, send again, and the new
@@ -170,6 +175,64 @@ type Config struct {
 	ChatTemplateFile string `toml:"chat_template_file"`
 
 	// --- Sessions and jobs -------------------------------------------------
+	// IdleStandDownMinutes unloads the model after this many minutes with no
+	// requests, freeing its VRAM, and reloads it on the next message.
+	//
+	// Server-side on purpose. The case that matters most is the browser being
+	// CLOSED, and a tab that has been shut cannot run a timer — a client-side
+	// version would free VRAM in every situation except the one where the user
+	// has most obviously finished.
+	//
+	// 0 disables it. Managed mode only: in remote mode llama.cpp is somebody
+	// else's process and stopping it is not ours to do.
+	IdleStandDownMinutes int `toml:"idle_standdown_minutes"`
+
+	// ShowEngineOutput mirrors llama.cpp's own output into this program's
+	// console as it arrives.
+	//
+	// Default TRUE, and the default is the point. Until 1.7.5 the engine's
+	// output went only to a log file and an in-memory error ring, so a model
+	// taking a minute to load printed nothing at all and the window looked
+	// frozen -- and whether the model reached the GPU, which is the first
+	// question anyone asks when it runs slowly, was unanswerable from the
+	// terminal. launch.bat had always shown both.
+	//
+	// Off is for a machine where nobody is reading the console: a service, a
+	// scheduled task, or anyone who finds a 70B load's chatter too much. It
+	// changes nothing else -- the log file and the error ring are written
+	// either way.
+	//
+	// A plain bool, not a pointer, for the same reason as ModelCatalogRemote:
+	// Load seeds from Default() before decoding, so an absent key keeps the
+	// default and an explicit false still wins, and `config set` can format it.
+	ShowEngineOutput bool `toml:"show_engine_output"`
+
+	// EngineOutputFull shows every line llama.cpp prints instead of the
+	// filtered set.
+	//
+	// Default FALSE, because unfiltered is what the complaint was about: a
+	// 13-minute session produced 901 console lines, 680 of them the engine's
+	// own load dump and per-reply bookkeeping, and the things being watched for
+	// were single lines adrift in that. The filter keeps the device list, the
+	// offload summary, the VRAM split, warnings, errors and every state change;
+	// it drops the GGUF metadata dump, the per-message slot chatter, and the
+	// formatted prompt the engine echoes at -lv 4.
+	//
+	// The log file always has everything, filtered or not.
+	EngineOutputFull bool `toml:"engine_output_full"`
+
+	// UI presets browser-side settings for every device that reaches this
+	// server. See the [ui] section of DefaultTOML for what goes in it.
+	//
+	// A free-form map on purpose. The keys are the frontend's own settings,
+	// which are defined in js/04-state.js and grow every release; mirroring
+	// them into a Go struct would mean two lists that drift, and the drift
+	// would be silent -- a setting added to the UI would simply stop being
+	// presettable, with nothing to notice it. Go carries the values without
+	// interpreting them, and the browser validates against the object that
+	// defines them. Neither side has to know what the other added.
+	UI map[string]any `toml:"ui"`
+
 	SessionTTLHours  int `toml:"session_ttl_hours"`
 	JobMaxConcurrent int `toml:"job_max_concurrent"`
 	JobMaxAgeHours   int `toml:"job_max_age_hours"`
@@ -223,11 +286,18 @@ func Default() Config {
 		// here would resolve against the *config* directory and put multi-
 		// gigabyte GGUFs under ~/.config, which is what the XDG split exists to
 		// prevent. A portable install opts back in by setting a relative path.
-		ModelDir:         "",
-		SessionTTLHours:  DefaultSessionTTLHours,
-		JobMaxConcurrent: DefaultJobMaxConcurrent,
-		JobMaxAgeHours:   DefaultJobMaxAgeHours,
-		RequireAuth:      true,
+		ModelDir:        "",
+		SessionTTLHours: DefaultSessionTTLHours,
+		// On by default, because the problem it solves is one users hit
+		// without knowing it is a setting: several gigabytes of VRAM pinned
+		// against an app nobody is using. The cost of being wrong is one model
+		// load on the next message, and it is visible while it happens.
+		IdleStandDownMinutes: DefaultIdleStandDownMinutes,
+		ShowEngineOutput:     true,
+		EngineOutputFull:     false,
+		JobMaxConcurrent:     DefaultJobMaxConcurrent,
+		JobMaxAgeHours:       DefaultJobMaxAgeHours,
+		RequireAuth:          true,
 		// The catalogue fetch is on by default. It is the only thing besides
 		// web search that leaves the machine, it is a plain GET of a static
 		// file with nothing identifying attached, and off by default would
@@ -333,15 +403,51 @@ func Load(path string) (Config, error) {
 	if err != nil {
 		return cfg, fmt.Errorf("parse %s: %w", path, err)
 	}
-	// An unrecognised key is almost always a typo in a hand-edited file, and
-	// silently ignoring it means the setting the user thought they changed
-	// never took effect. Say so rather than let it pass.
+	// An unrecognised key is one of two very different things, and they need
+	// opposite treatment.
+	//
+	// A TYPO in a hand-edited file is fatal. Silently ignoring `listen_prot`
+	// means the setting the user thought they changed never took effect, and
+	// they find out by wondering why the port is wrong. Refusing to start
+	// names the key and costs them ten seconds.
+	//
+	// A key from a NEWER VERSION is not fatal, and treating it as such was a
+	// real trap. Every config key this release added -- idle_standdown_minutes
+	// and the [ui] table -- is unknown to 1.7.3, so a config written by this
+	// build stopped the previous binary from starting at all:
+	//
+	//   [ERROR] gobbonet.toml: unknown setting(s): idle_standdown_minutes, ui
+	//
+	// which reads as "your config is broken" when the truth is "your binary is
+	// old". Anyone who updated the web files and the binary in either order,
+	// or rolled back to check whether something was a regression, met a server
+	// that would not boot. A config file should not be a one-way door.
+	//
+	// So: keys that look like a misspelling of something we know are refused;
+	// keys that resemble nothing are reported and ignored. See unknownKeyKind.
 	if undecoded := md.Undecoded(); len(undecoded) > 0 {
-		keys := make([]string, 0, len(undecoded))
+		var typos, future []string
 		for _, k := range undecoded {
-			keys = append(keys, k.String())
+			key := k.String()
+			if near := nearestKey(key); near != "" {
+				typos = append(typos, key+" (did you mean "+near+"?)")
+			} else {
+				future = append(future, key)
+			}
 		}
-		return cfg, fmt.Errorf("%s: unknown setting(s): %s", path, strings.Join(keys, ", "))
+		if len(future) > 0 {
+			// stderr, not silence: an ignored setting still has to be visible,
+			// and this is the line that tells someone their binary is behind
+			// their config rather than their config being wrong.
+			fmt.Fprintf(os.Stderr,
+				"WARNING: %s has setting(s) this version does not know: %s\n"+
+					"         They are being ignored. This usually means the config was written by a\n"+
+					"         newer GobboNet than the binary now running it \u2014 update the binary to use them.\n",
+				path, strings.Join(future, ", "))
+		}
+		if len(typos) > 0 {
+			return cfg, fmt.Errorf("%s: unknown setting(s): %s", path, strings.Join(typos, ", "))
+		}
 	}
 
 	cfg.applyEnv()
@@ -349,6 +455,77 @@ func Load(path string) (Config, error) {
 		return cfg, err
 	}
 	return cfg, nil
+}
+
+// nearestKey returns the known config key a misspelling was probably meant to
+// be, or "" if the name resembles nothing we have.
+//
+// The distinction it draws is the whole of the forward-compatibility rule
+// above, so it is deliberately conservative: only a very close match counts as
+// a typo. `listen_prot` is two edits from `listen_port` and is caught;
+// `idle_standdown_minutes` is nowhere near anything a 1.7.3 binary knows and is
+// let through with a warning.
+//
+// A table key arrives as "ui" and "ui.auto_scroll". Neither is close to
+// anything, which is what we want -- a whole table from a newer version should
+// never stop an older binary from starting.
+func nearestKey(name string) string {
+	// Short names are excluded from matching: at three characters or fewer,
+	// two edits reaches most of the alphabet and the guess would be noise.
+	if len(name) <= 3 {
+		return ""
+	}
+	best, bestDist := "", 1<<30
+	for _, known := range Keys() {
+		d := editDistance(name, known)
+		if d < bestDist {
+			best, bestDist = known, d
+		}
+	}
+	// Two edits, and no more than a quarter of the name's length, so a long
+	// key is not matched to an unrelated long key that happens to share a
+	// prefix.
+	limit := 2
+	if l := len(name) / 4; l < limit {
+		limit = l
+	}
+	if limit < 1 {
+		limit = 1
+	}
+	if bestDist <= limit {
+		return best
+	}
+	return ""
+}
+
+// editDistance is plain Levenshtein. The key list is short and this runs once
+// per unknown key at startup, so the obvious implementation is the right one.
+func editDistance(a, b string) int {
+	la, lb := len(a), len(b)
+	prev := make([]int, lb+1)
+	cur := make([]int, lb+1)
+	for j := 0; j <= lb; j++ {
+		prev[j] = j
+	}
+	for i := 1; i <= la; i++ {
+		cur[0] = i
+		for j := 1; j <= lb; j++ {
+			cost := 1
+			if a[i-1] == b[j-1] {
+				cost = 0
+			}
+			m := prev[j] + 1
+			if cur[j-1]+1 < m {
+				m = cur[j-1] + 1
+			}
+			if prev[j-1]+cost < m {
+				m = prev[j-1] + cost
+			}
+			cur[j] = m
+		}
+		prev, cur = cur, prev
+	}
+	return prev[lb]
 }
 
 // applyEnv lets environment variables override the file. GOBBONET_* is the
@@ -434,14 +611,16 @@ func (c *Config) normalise() error {
 	}
 	c.ModelDir = resolveAgainst(base, c.ModelDir)
 
-	if c.WebRoot == "" {
-		// Auto-detection failing is not a load error. `config get`, `config set`
-		// and `check` have no use for the web root, and failing here would stop
-		// them working on a machine where the assets live somewhere unusual.
-		// The serve path validates it explicitly, where the failure is real and
-		// the error message can say what to do about it.
-		c.WebRoot = detectWebRoot()
-	}
+	// WebRoot is NOT auto-detected any more.
+	//
+	// It used to be: an empty web_root became detectWebRoot(), which searched
+	// <exe dir>/web and then <exe dir>. Since the frontend now ships inside the
+	// binary (internal/webui), discovery does active harm — a stale web/ left by
+	// an older install would be found and served in preference to the copy the
+	// binary was built with, which is precisely the "I replaced the files and
+	// nothing changed" report. Empty means "use the one in the binary", and only
+	// an explicit web_root overrides it. internal/server/webroot.go owns that
+	// decision and explains it at length.
 	if c.WebRoot != "" {
 		c.WebRoot = resolveAgainst(base, c.WebRoot)
 	}
@@ -486,26 +665,6 @@ func (c *Config) normalise() error {
 		return fmt.Errorf("listen_port %d is out of range", c.ListenPort)
 	}
 	return nil
-}
-
-// detectWebRoot finds chat.html relative to the running binary, then the
-// current directory, and returns "" if it cannot. A dev run from the repo and an
-// installed binary sitting next to a web/ directory both work unconfigured.
-func detectWebRoot() string {
-	var candidates []string
-	if exe, err := os.Executable(); err == nil {
-		dir := filepath.Dir(exe)
-		candidates = append(candidates, filepath.Join(dir, "web"), dir)
-	}
-	if wd, err := os.Getwd(); err == nil {
-		candidates = append(candidates, filepath.Join(wd, "web"), wd)
-	}
-	for _, c := range candidates {
-		if fileExists(filepath.Join(c, "chat.html")) {
-			return c
-		}
-	}
-	return ""
 }
 
 func resolveAgainst(base, path string) string {

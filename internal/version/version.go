@@ -31,6 +31,24 @@ var Version = "dev"
 // String is the version alone.
 func String() string { return Version }
 
+// Release is the release half of the version, without the "-go-<sha>" build
+// suffix: "1.7.5" out of "1.7.5-go-afb7e0d".
+//
+// It exists to be compared with the frontend's own stamp (GOBBONET_UI_VERSION
+// in js/01-config.js), which carries the release and nothing else. The
+// comparison only matters when web_root points at a frontend on disk — the
+// built-in copy cannot disagree with the binary holding it — but that is the
+// case where the two used to drift silently, so it is worth a check.
+//
+// The frontend does the same split in _releaseOf(); if one changes, so must the
+// other.
+func Release() string {
+	if i := strings.Index(Version, "-go-"); i > 0 {
+		return Version[:i]
+	}
+	return Version
+}
+
 // Full adds the toolchain and platform — the things that differ between the
 // binaries handed to different testers, and the first things to check when one
 // of them behaves differently from the rest.

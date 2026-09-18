@@ -251,7 +251,7 @@ async function sendMessage(overrideContent) {
   // scrollTop to 0 and the resulting scroll event clears scrollPinnedToBottom
   // a frame before any pin-aware scroll could run, which would otherwise leave
   // the finished reply stranded a few messages up instead of at the bottom.
-  const wasFollowing = scrollPinnedToBottom;
+  const scrollAnchor = captureScrollAnchor();
   updateInputState();
   if (thread.id === state.activeThreadId) {
     renderMessages();
@@ -260,7 +260,7 @@ async function sendMessage(overrideContent) {
     // reading. The forced scroll inside settleScrollAfterGeneration overrides the
     // transient pin-flip the rebuild just caused. (updateInputState above already
     // refreshed the FAB so it stays offered in the unfollowed case.)
-    settleScrollAfterGeneration(wasFollowing);
+    settleScrollAfterGeneration(scrollAnchor);
   } else {
     // The user wandered to another thread while this one finished (now
     // possible: generations keep running when you look away). Refresh the
@@ -832,11 +832,11 @@ async function regenerateFromThread(options = {}) {
   abortController = null;
   saveState();
   forceServerFlush();   // collapse the debounce — see sendMessage for rationale
-  const wasFollowing = scrollPinnedToBottom;   // capture before the rebuild clobbers the pin
+  const scrollAnchor = captureScrollAnchor();   // capture before the rebuild clobbers it
   updateInputState();
   if (thread.id === state.activeThreadId) {
     renderMessages();
-    settleScrollAfterGeneration(wasFollowing);   // pin-aware end-of-stream scroll (see sendMessage)
+    settleScrollAfterGeneration(scrollAnchor);   // pin-aware end-of-stream scroll (see sendMessage)
   } else {
     renderSidebar();   // finished off-screen — refresh the preview, leave the view alone
   }
@@ -964,10 +964,16 @@ async function finalizeJobIntoThread(thread, jobId, { live = false } = {}) {
 
   saveState();
   forceServerFlush();
+  // Before renderMessages(), not after: the rebuild sets scrollTop to 0, so an
+  // anchor read afterwards describes the top of the thread rather than where
+  // the user actually was. This site used to read scrollPinnedToBottom here
+  // for the same reason and had the same problem -- the pin was already
+  // clobbered by the time it looked.
+  const scrollAnchor = captureScrollAnchor();
   updateInputState();
   if (thread.id === state.activeThreadId) {
     renderMessages();
-    settleScrollAfterGeneration(scrollPinnedToBottom);
+    settleScrollAfterGeneration(scrollAnchor);
   } else {
     renderSidebar();
   }

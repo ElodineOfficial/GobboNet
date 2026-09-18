@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	gguf "github.com/gpustack/gguf-parser-go"
+	"sync"
 )
 
 // GGUFMeta is the subset of a GGUF header that identification needs.
@@ -128,7 +129,9 @@ func identifyFrom(path string, meta *GGUFMeta, err error) Record {
 		// Say so rather than degrade quietly: a GGUF we can't parse is one
 		// llama-server will probably refuse to load too, and "the dropdown
 		// labelled it 'custom'" is a much worse first clue than the real error.
-		log.Printf("[models] could not read GGUF header from %s: %v (falling back to filename rules)", base, err)
+		warnOnce(base, func() {
+			log.Printf("[models] could not read GGUF header from %s: %v (falling back to filename rules)", base, err)
+		})
 		// Guess the architecture from the name, exactly as IdentifyProps does
 		// when a build predates model_hf_architecture. Both are the degraded
 		// path; there is no reason for a local file to be identified less well
@@ -178,7 +181,49 @@ func isProjector(name string, meta *GGUFMeta, err error) bool {
 	return projectorNameRe.MatchString(name)
 }
 
+// embeddingNameRe catches the embedding models people actually have, by name,
+// for when the GGUF header cannot be read.
+var embeddingNameRe = regexp.MustCompile(`(?i)(nomic-embed|[-_.]embed(ding)?[-_.]|^embed|bge-[a-z]*(base|large|small)|gte-[a-z]*(base|large|small)|e5-[a-z]*(base|large|small))`)
+
+// isEmbeddingOnly reports whether a GGUF is an embedding model rather than
+// something you can hold a conversation with.
+//
+// WHY THIS EXISTS. The optional RAG feature downloads nomic-embed-text into the
+// same models/ folder as the chat models, and ScanDir handed it back like any
+// other. So it appeared in the model dropdown, and selecting it swapped the
+// CHAT model to an embedding model -- launched with --jinja and
+// --reasoning-format, no --embeddings flag, on the chat port. It loads, and
+// then every reply is nonsense. In a real 1.7.4 session it was swapped in, ran
+// for eleven minutes, and was swapped back out, with this in the console:
+//
+//	[swap] active model is now nomic-embed-text-v1.5.Q8_0.gguf
+//	llama_context: n_ctx_seq (32768) > n_ctx_train (2048) -- possible overflow
+//
+// Both lines were technically present and neither says what is wrong. The
+// second one now also arrives in plain language -- see loadSummary.Notes --
+// but the real fix is not offering the file in the first place.
+//
+// The architecture is the reliable signal; the filename is the fallback for a
+// header that will not read, exactly as isProjector does it.
+func isEmbeddingOnly(name string, meta *GGUFMeta, err error) bool {
+	if err == nil && meta != nil {
+		switch strings.ToLower(meta.Architecture) {
+		case "bert", "nomic-bert", "nomic-bert-moe", "jina-bert-v2", "jina-bert-v3",
+			"gte", "new", "xlm-roberta":
+			return true
+		}
+		// A known architecture that is not on that list is chat-capable, and
+		// the name is not consulted -- a chat model called "embedder-7b" is
+		// still a chat model.
+		return false
+	}
+	return embeddingNameRe.MatchString(name)
+}
+
 // ScanDir identifies every chat-capable GGUF in dir, sorted by filename.
+//
+// Chat-capable is the operative word: projectors and embedding models live in
+// the same folder and are not things you can talk to.
 func ScanDir(dir string) []Record {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -197,10 +242,52 @@ func ScanDir(dir string) []Record {
 	for _, name := range names {
 		path := filepath.Join(dir, name)
 		meta, metaErr := ReadGGUFMeta(path)
+		if isEmbeddingOnly(name, meta, metaErr) {
+			continue
+		}
 		if isProjector(name, meta, metaErr) {
 			continue
 		}
 		records = append(records, identifyFrom(path, meta, metaErr))
 	}
 	return records
+}
+
+// warnOnce runs fn the first time it is called for a given file.
+//
+// One unreadable GGUF used to be announced twice on every boot, because two
+// unrelated callers both read its header: Boot's ScanDir, to find a model at
+// all, and start's IdentifyFile, to decide what flags to launch it with. Both
+// were right to look and both were right to complain, and the user heard the
+// same sentence twice.
+//
+// Worth a mutex and a map because of who reads this console. It is spoken by a
+// screen reader, one line at a time, in the order it arrives -- a duplicate is
+// not a glance-over, it is the same sentence read out again, and a model
+// directory with four bad files would say it eight times before the app
+// started.
+//
+// Keyed by base name and never cleared: the point is one warning per run, and a
+// file that becomes readable mid-session is not a case worth carrying state for.
+var (
+	warnedMu    sync.Mutex
+	warnedFiles = map[string]bool{}
+)
+
+func warnOnce(file string, fn func()) {
+	warnedMu.Lock()
+	first := !warnedFiles[file]
+	warnedFiles[file] = true
+	warnedMu.Unlock()
+	if first {
+		fn()
+	}
+}
+
+// ForgetWarningsForTest lets a test start from a clean slate, since the map is
+// deliberately never cleared in normal operation.
+func ForgetWarningsForTest() {
+	warnedMu.Lock()
+	warnedFiles = map[string]bool{}
+	warnedMu.Unlock()
 }

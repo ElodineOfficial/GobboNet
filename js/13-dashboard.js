@@ -621,7 +621,110 @@ function _loreRowFailed(e) {
   return !!e.why && e.after === 0;
 }
 
-function openLoreInspector() {
+/* ================================================================
+   LORE EDITOR
+
+   The summary is the model's running account of what happened, and it is
+   wrong often enough to be worth correcting by hand: a mangled name, a beat
+   recorded from the wrong character's point of view, a pass that appended
+   something it should have folded. It also feeds straight back into every
+   subsequent prompt, so an error in it propagates rather than sitting still.
+
+   Two things here are deliberate and are the reasons this is not the obvious
+   implementation.
+
+   ONE RENDERER, TWO MODES. The inspector is not only the summary: it also
+   shows the size-across-passes table and the failure notes, which are exactly
+   what a person needs in front of them while deciding what to fix. Replacing
+   the panel's whole body with a textarea would hide the evidence at the moment
+   it is being acted on, so the editor swaps only the summary region and
+   openLoreInspector renders both modes.
+
+   REAL BUTTONS. SAVE and CANCEL are their own controls rather than COPY
+   SUMMARY relabelled. Borrowing a button means putting it back afterwards,
+   which means re-creating its original handler from memory — a copy that is
+   correct only until copyLoreSummary changes, and that fails silently when it
+   does.
+================================================================ */
+
+// Non-null only while the editor is open: the text as it was when editing
+// started, for the unsaved-changes check.
+let _loreEditBaseline = null;
+
+function loreEditorIsOpen() { return _loreEditBaseline !== null; }
+
+function _loreEditTextarea() { return document.getElementById('lore-edit-input'); }
+
+function loreEditIsDirty() {
+  const ta = _loreEditTextarea();
+  return loreEditorIsOpen() && !!ta && ta.value !== _loreEditBaseline;
+}
+
+/** Show the right buttons for the mode we are in. */
+function _renderLoreActions() {
+  const editing = loreEditorIsOpen();
+  const show = (id, on) => { const el = document.getElementById(id); if (el) el.hidden = !on; };
+  show('lore-copy-btn', !editing);
+  show('lore-edit-btn', !editing);
+  show('lore-cancel-btn', editing);
+  show('lore-save-btn', editing);
+}
+
+function startLoreEdit() {
+  const thread = getActiveThread();
+  if (!thread) return;
+  _loreEditBaseline = getThreadLore(thread);
+  openLoreInspector({ editing: true, keepOpen: true });
+  const ta = _loreEditTextarea();
+  if (ta) {
+    ta.focus();
+    // At the end rather than selected: the common edit is adding or fixing a
+    // recent beat, and landing with everything selected means one keystroke
+    // can replace the lot.
+    try { ta.setSelectionRange(ta.value.length, ta.value.length); } catch (e) {}
+  }
+}
+
+function cancelLoreEdit() {
+  if (loreEditIsDirty() &&
+      !confirm('Discard your changes to this thread\u2019s lore summary?')) return;
+  _loreEditBaseline = null;
+  openLoreInspector({ keepOpen: true });
+}
+
+function saveLoreEdit() {
+  const thread = getActiveThread();
+  const ta = _loreEditTextarea();
+  if (!thread || !ta) return;
+  setThreadLore(thread, ta.value);
+  _loreEditBaseline = null;
+  saveState();
+  // The summary is part of every subsequent prompt, so the token figures in
+  // the status bar are wrong until something recomputes them.
+  try { render(); } catch (e) { console.warn('[lore] render after edit failed:', e); }
+  openLoreInspector({ keepOpen: true });
+}
+
+/** Live character count against the budget, so an edit that will be trimmed
+ *  says so before it is saved rather than after the next pass silently eats
+ *  the front of it. */
+function updateLoreEditMeter() {
+  const ta = _loreEditTextarea();
+  const meter = document.getElementById('lore-edit-meter');
+  if (!ta || !meter) return;
+  const n = ta.value.length;
+  const max = (typeof LORE_MAX_CHARS === 'number') ? LORE_MAX_CHARS : 2400;
+  meter.textContent = n + ' / ' + max + ' chars';
+  const over = n > max;
+  meter.dataset.over = over ? 'true' : 'false';
+  if (over) {
+    meter.textContent += ' \u2014 over budget; the next compression pass trims from the front';
+  }
+}
+
+function openLoreInspector(opts) {
+  const editing = !!(opts && opts.editing);
+  if (!editing && !(opts && opts.keepOpen)) _loreEditBaseline = null;
   const thread = getActiveThread();
   if (!thread) return;
   const lore = (thread.lore || '').trim();
@@ -634,7 +737,17 @@ function openLoreInspector() {
 
   // --- current summary -------------------------------------------------
   html += '<div class="lore-section-label">Current summary</div>';
-  if (lore) {
+  if (editing) {
+    // The raw stored text, not the trimmed `lore` above: editing a copy that
+    // has already had its whitespace changed would save that change back as
+    // though the user had made it.
+    html += '<textarea id="lore-edit-input" class="lore-edit-input" spellcheck="true" '
+          + 'aria-label="Edit the lore summary for this thread" '
+          + 'oninput="updateLoreEditMeter()" '
+          + 'placeholder="One short beat per line.">'
+          + escapeHtml(thread.lore || '') + '</textarea>';
+    html += '<div class="lore-edit-meter" id="lore-edit-meter"></div>';
+  } else if (lore) {
     const beatCount = lore.split('\n').filter(l => l.trim()).length;
     html += '<div class="lore-meta">' + beatCount + ' beat' + (beatCount === 1 ? '' : 's')
           + ' &middot; ' + lore.length + ' chars &middot; ~' + _loreTokens(lore)
@@ -720,10 +833,19 @@ function openLoreInspector() {
   }
 
   body.innerHTML = html;
+  _renderLoreActions();
+  if (editing) updateLoreEditMeter();
   document.getElementById('lore-inspect-modal').classList.add('open');
 }
 
 function closeLoreInspector() {
+  // The only way out of this modal, so it is the only place the guard is
+  // needed -- unlike the character editor, nothing here dismisses on Escape
+  // or on a backdrop click.
+  if (loreEditIsDirty() &&
+      !confirm('Discard your changes to this thread\u2019s lore summary?')) return;
+  _loreEditBaseline = null;
+  _renderLoreActions();
   const m = document.getElementById('lore-inspect-modal');
   if (m) m.classList.remove('open');
 }

@@ -5,14 +5,24 @@
    @end-split-header */
 /* ================================================================
    BUILD STAMP
-   Bumped any time the user-facing behavior of this file changes,
-   so a quick glance at DevTools Console tells you which version
-   the browser actually loaded. If you swapped chat.html on disk
-   but this stamp still shows the old date, you're on a cached
-   copy — hard-refresh (Ctrl+Shift+R) to bust it.
+
+   The release this frontend was shipped at. It answers a question the
+   server's own version cannot: WHICH COPY OF THIS FILE IS THE BROWSER
+   RUNNING. Those are different questions, and confusing them is the
+   most expensive kind of bug report — a stale cached script behaves
+   like a real regression, and the server will happily report the new
+   version while the page in front of the user is last week's.
+
+   Must match the VERSION file at the repo root exactly.
+   tests/test-version-stamp.mjs asserts that, because this string has
+   already gone stale once on its own: it read '1.6.0-no-encoded-payload'
+   through the whole of 1.7.x, so the one thing in the app that claimed
+   to identify the build was wrong by two minor releases and nothing
+   noticed. A constant that is only correct when someone remembers is
+   not a version stamp, it is a comment.
 ================================================================ */
-const CHAT_HTML_BUILD = '1.6.0-no-encoded-payload';
-console.log(`%c[chat.html build] ${CHAT_HTML_BUILD}`, 'color:#0a0;font-weight:bold');
+const GOBBONET_UI_VERSION = '1.7.5';
+console.log(`%c[gobbonet ui] ${GOBBONET_UI_VERSION}`, 'color:#0a0;font-weight:bold');
 
 /* ================================================================
    API ENDPOINTS

@@ -110,9 +110,14 @@
 .thread-ctrl-btn:hover { color: var(--cyan-bright); background: rgba(0,243,255,0.1); }
 .thread-del-btn:hover  { color: var(--red-neon) !important; background: rgba(255,0,60,0.1) !important; }
 
+/* Six controls now fit in this row. The mobile cap below is what decides
+   whether they all show, so it is raised to match rather than left to clip the
+   last one silently. */
+.thread-export-btn:hover { color: var(--green-neon); background: rgba(0,255,65,0.1); }
+
 /* Mobile: controls always visible (touch has no hover) */
 @media (pointer: coarse) {
-  .thread-ctrl { max-width: 200px; opacity: 0.65; }
+  .thread-ctrl { max-width: 240px; opacity: 0.65; }
 }
 
 /* ── Drag and drop ────────────────────────────────────────────── */

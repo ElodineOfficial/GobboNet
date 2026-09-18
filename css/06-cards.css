@@ -246,3 +246,48 @@
 }
 .bg-preset:hover { border-color: var(--cyan-bright); transform: scale(1.1); }
 .bg-preset.selected { border-color: var(--magenta); box-shadow: var(--glow-magenta); transform: scale(1.1); }
+
+/* ========================================================
+   CHARACTER MODAL — dismissal notice
+
+   Shown when the modal refuses to close: a sticky backdrop click, or Escape
+   while an editor is open. Before this, both were silent, and a silent no-op
+   reads as a broken window -- it is also why the double-click way out was
+   never discovered.
+
+   Fixed rather than absolute. The modal is the scroll container and the card
+   editor is long, so an absolutely-positioned notice would appear wherever
+   the user happened not to be looking. Pinned to the viewport it is in the
+   same place every time, next to the thumb on a phone.
+======================================================== */
+.char-dismiss-notice {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  transform: translate(-50%, 12px);
+  z-index: 110;                 /* over .modal-backdrop (100) */
+  max-width: min(460px, calc(100vw - 32px));
+  padding: 10px 16px;
+  border: 1px solid var(--magenta);
+  border-radius: var(--radius);
+  background: rgba(10, 10, 14, 0.96);
+  box-shadow: 0 0 18px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(217, 0, 255, 0.15);
+  color: var(--white);
+  font-size: 13px;
+  line-height: 1.45;
+  text-align: center;
+  letter-spacing: 0.3px;
+  opacity: 0;
+  pointer-events: none;         /* never in the way of the click that follows */
+  transition: opacity var(--transition), transform var(--transition);
+}
+.char-dismiss-notice.show {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+/* The notice explains how to leave; a user who cannot see motion still needs
+   it to appear. Only the movement is dropped, not the message. */
+@media (prefers-reduced-motion: reduce) {
+  .char-dismiss-notice { transition: none; transform: translate(-50%, 0); }
+}

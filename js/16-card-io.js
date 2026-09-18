@@ -151,15 +151,27 @@ async function _readCardJsonFromPng(buffer) {
 /* ---- Minimal ZIP reader for .charx (V3) ------------------------- */
 
 /** Read a ZIP central directory into { name -> {method, compSize, localOff} }. */
+/** Byte offset of the End Of Central Directory record, or -1.
+ *
+ *  Scanning BACKWARDS from the end is not an implementation detail -- it is
+ *  the property that lets a ZIP ride at the tail of another file, which is
+ *  what the "for Discord" export relies on. The comment field can be 64KB, so
+ *  the scan has to be willing to walk back that far. */
+function _findZipEocd(buffer) {
+  const len = buffer.byteLength;
+  if (len < 22) return -1;
+  const dv = new DataView(buffer);
+  const minPos = Math.max(0, len - 22 - 65536);
+  for (let i = len - 22; i >= minPos; i--) {
+    if (dv.getUint32(i, true) === 0x06054b50) return i;
+  }
+  return -1;
+}
+
 function _readZipDirectory(buffer) {
   const u8 = new Uint8Array(buffer);
   const dv = new DataView(buffer);
-  // Locate End Of Central Directory (scan back; comment can be up to 64KB).
-  let eocd = -1;
-  const minPos = Math.max(0, u8.length - 22 - 65536);
-  for (let i = u8.length - 22; i >= minPos; i--) {
-    if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
-  }
+  const eocd = _findZipEocd(buffer);
   if (eocd < 0) throw new Error('Not a valid .charx archive (no ZIP end record).');
   const count = dv.getUint16(eocd + 10, true);
   let p = dv.getUint32(eocd + 16, true);
@@ -228,6 +240,37 @@ async function _readCardFromCharx(buffer) {
   } catch (e) { /* avatar is optional — ignore */ }
 
   return { json, imageDataUrl };
+}
+
+/** The image type a buffer's leading magic bytes claim, or ''. */
+function _imageMimeFromMagic(buffer) {
+  const b = new Uint8Array(buffer, 0, Math.min(16, buffer.byteLength));
+  if (b[0] === 0xFF && b[1] === 0xD8 && b[2] === 0xFF) return 'image/jpeg';
+  if (b[0] === 137 && b[1] === 80 && b[2] === 78 && b[3] === 71) return 'image/png';
+  if (b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46 &&
+      b[8] === 0x57 && b[9] === 0x45 && b[10] === 0x42 && b[11] === 0x50) return 'image/webp';
+  return '';
+}
+
+/** Read a card from a ZIP that may be riding at the tail of an image.
+ *
+ *  The archive layout is the .charx one, so the existing reader handles it
+ *  unchanged -- that is deliberate, and it is why the export writes charx
+ *  rather than inventing a container. The one addition is the avatar: a
+ *  "for Discord" export does not duplicate the portrait inside the archive,
+ *  because the file IS the portrait. If the ZIP carried no asset and the
+ *  bytes in front of it are an image, that image is the avatar. */
+async function _readCardFromZipTail(buffer) {
+  const res = await _readCardFromCharx(buffer);
+  if (!res.imageDataUrl) {
+    const mime = _imageMimeFromMagic(buffer);
+    if (mime) {
+      try {
+        res.imageDataUrl = await _shrinkImageToDataUrl(new Blob([buffer], { type: mime }), 256);
+      } catch (e) { /* avatar is optional */ }
+    }
+  }
+  return res;
 }
 
 /* ---- Avatar thumbnailing ---------------------------------------- */
@@ -435,15 +478,47 @@ async function importCharacterCard(fileInput) {
     } else if (isJson) {
       jsonStr = await file.text();
     } else {
-      // Unknown extension — try to sniff: PNG magic bytes, else JSON.
+      // Unknown extension — sniff. ZIP first: a "for Discord" export is a JPG
+      // with a whole ZIP archive after the image data, and a .jpg matches none
+      // of the branches above, so this is the path it arrives on. Checking for
+      // the end-of-central-directory record rather than the file's leading
+      // magic is the point — the archive is at the TAIL, so the head of the
+      // file is still a perfectly ordinary JPEG.
       const buf = await file.arrayBuffer();
-      const head = new Uint8Array(buf.slice(0, 8));
-      const isPngMagic = head[0] === 137 && head[1] === 80 && head[2] === 78 && head[3] === 71;
-      if (isPngMagic) {
-        jsonStr = await _readCardJsonFromPng(buf);
-        try { imageDataUrl = await _shrinkImageToDataUrl(new Blob([buf], { type: 'image/png' }), 256); } catch (e) {}
+      if (_findZipEocd(buf) >= 0) {
+        const res = await _readCardFromZipTail(buf);
+        jsonStr = res.json;
+        imageDataUrl = res.imageDataUrl;
       } else {
-        jsonStr = new TextDecoder('utf-8').decode(new Uint8Array(buf));
+        const head = new Uint8Array(buf.slice(0, 8));
+        const isPngMagic = head[0] === 137 && head[1] === 80 && head[2] === 78 && head[3] === 71;
+        if (isPngMagic) {
+          jsonStr = await _readCardJsonFromPng(buf);
+          try { imageDataUrl = await _shrinkImageToDataUrl(new Blob([buf], { type: 'image/png' }), 256); } catch (e) {}
+        } else if (_imageMimeFromMagic(buf)) {
+          // An image with no card in it. Overwhelmingly this is a "for
+          // sharing" export that has been through something which re-encoded
+          // it -- the picture survives, the archive on the end of it does not,
+          // and that is the documented limit of the format.
+          //
+          // Without this branch the file falls through to the line below,
+          // gets decoded as UTF-8 text, and the user is told "Embedded card
+          // data is not valid JSON" -- a message about JSON, for a picture,
+          // which says nothing about what happened or what to do next. The
+          // fix is almost never on the importing end, so the message has to
+          // point at the sending end.
+          throw new Error(
+            'This image has no character card inside it.\n\n' +
+            'If it was shared through a chat app, the app re-encoded the picture ' +
+            'and stripped the card out with it. Ask the sender to attach the ' +
+            'original file and download it with the app\u2019s download button \u2014 ' +
+            'copying or saving the preview image gives you the re-encoded copy, ' +
+            'which is this.\n\n' +
+            'A .png card export survives some places a .jpg does not, so it is ' +
+            'worth trying that too.');
+        } else {
+          jsonStr = new TextDecoder('utf-8').decode(new Uint8Array(buf));
+        }
       }
     }
 
@@ -570,11 +645,16 @@ function _loadImageForExport(src) {
   });
 }
 
-/** Produce PNG bytes for the card's portrait. Uses the avatar if it can
- *  be drawn safely; otherwise renders a neon placeholder so the export
- *  is always a valid, shareable PNG. */
-async function _cardImagePngBytes(card) {
+/** Render the card's portrait to a data URL in the requested format. Uses
+ *  the avatar if it can be drawn safely; otherwise renders a neon
+ *  placeholder, so an export is always a valid, shareable image. */
+async function _cardPortraitDataUrl(card, mime, quality) {
   const MAX = 512;
+  // JPEG has no alpha channel. An avatar with transparency drawn onto a bare
+  // canvas encodes those pixels as black speckle, so the background is laid
+  // down first -- in the app's own surface colour, which is also what the
+  // placeholder paints, so the two exports look like the same family.
+  const opaque = mime === 'image/jpeg';
   const canvas = document.createElement('canvas');
   const ctx = canvas.getContext('2d');
 
@@ -599,6 +679,7 @@ async function _cardImagePngBytes(card) {
       if (w && h) {
         if (w > MAX || h > MAX) { const s = MAX / Math.max(w, h); w = Math.round(w * s); h = Math.round(h * s); }
         canvas.width = w; canvas.height = h;
+        if (opaque) { ctx.fillStyle = '#0a0e12'; ctx.fillRect(0, 0, w, h); }
         ctx.drawImage(img, 0, 0, w, h);
         drewAvatar = true;
       }
@@ -606,19 +687,31 @@ async function _cardImagePngBytes(card) {
   }
   if (!drewAvatar) drawPlaceholder();
 
-  let dataUrl;
   try {
-    dataUrl = canvas.toDataURL('image/png');
+    return canvas.toDataURL(mime, quality);
   } catch (e) {
     // Avatar tainted the canvas (cross-origin) — redraw a clean placeholder.
     drawPlaceholder();
-    dataUrl = canvas.toDataURL('image/png');
+    return canvas.toDataURL(mime, quality);
   }
-  const b64 = dataUrl.split(',')[1];
-  const bin = atob(b64);
+}
+
+/** base64 data URL -> bytes. */
+function _dataUrlToBytes(dataUrl) {
+  const bin = atob(dataUrl.split(',')[1]);
   const out = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
   return out;
+}
+
+/** PNG bytes for the card's portrait. */
+async function _cardImagePngBytes(card) {
+  return _dataUrlToBytes(await _cardPortraitDataUrl(card, 'image/png'));
+}
+
+/** JPEG bytes for the card's portrait. */
+async function _cardImageJpegBytes(card, quality) {
+  return _dataUrlToBytes(await _cardPortraitDataUrl(card, 'image/jpeg', quality));
 }
 
 /** Internal card -> CharacterCardV3 object. */
@@ -705,12 +798,225 @@ function _downloadBlob(blob, filename) {
  *  Reads live form values so unsaved edits are included — without closing
  *  the editor. */
 async function exportCardAsV3() {
-  const card = state.characterCards.find(c => c.id === editingCardId);
-  if (!card) { showModelSwitchToast('No character selected to export.', 'err'); return; }
+  const snap = _liveCardSnapshot();
+  if (!snap) { showModelSwitchToast('No character selected to export.', 'err'); return; }
 
+  try {
+    const v3 = _cardToV3(snap);
+    const v2 = _v3ToV2(v3);
+    const imgBytes = await _cardImagePngBytes(snap);
+    const png = _injectPngChunks(imgBytes, [
+      _pngTextChunk('ccv3', _utf8ToB64(JSON.stringify(v3))),
+      _pngTextChunk('chara', _utf8ToB64(JSON.stringify(v2)))
+    ]);
+    _downloadBlob(new Blob([png], { type: 'image/png' }), _cardFileStem(snap.name) + '.png');
+    showModelSwitchToast(`Exported "${snap.name}" as a V3 card (PNG, V2-compatible).`, 'ok');
+  } catch (err) {
+    console.error('[export] character card failed:', err);
+    showModelSwitchToast('Export failed: ' + (err && err.message ? err.message : 'unknown error'), 'err');
+  }
+}
+
+
+/* ================================================================
+   CHARACTER CARD EXPORT — "For Discord"
+   ----------------------------------------------------------------
+   The PNG export above carries the card in tEXt chunks, which is the de-facto
+   interchange format and stays exactly as it is. Its weakness is that chunks
+   are metadata, and metadata does not survive a platform that re-encodes an
+   upload.
+
+   THIS USED TO BE A POLYGLOT, and that was a mistake worth recording so it is
+   not made again. It produced a .jpg with a complete ZIP appended after the
+   end-of-image marker: a real picture that rendered inline in the channel and
+   still carried the card.
+
+   Rendering inline IS the re-encode path. Discord's own description of what it
+   does to an uploaded image is that it runs it "through our resizing player",
+   and resizing means rebuilding the file from decoded pixels — at which point
+   anything that is not pixel data is not copied across. Not a tEXt chunk, not
+   EXIF, and not an archive glued to the end. The property the polyglot was
+   optimising for was the exact mechanism that destroyed its payload, and JPEG
+   is the format that gets the heaviest processing of the lot. It worked
+   perfectly off disk and lost on the one platform it was named after.
+
+   So this is a plain ZIP now. Not an image, therefore no preview pipeline
+   touches it, therefore it travels as a file attachment — which is the path
+   reported to arrive byte-for-byte intact.
+
+     card.json        Character Card V3
+     card_v2.json     the same card in V2, for apps that only speak V2
+     assets/icon.jpg  the portrait, as a real entry
+     README.txt       what it is and how to open it
+
+   WHY THE ARCHIVE IS A .charx LAYOUT
+     Because that is already a defined container for a character card, and this
+     file already knows how to read one. Rename the export to .charx and any
+     V3-aware app imports it. The container is not a private invention.
+
+   WHAT THIS COSTS
+     The card no longer appears as a picture in the channel. That is a real
+     loss and there is no way around it: being a picture and surviving are the
+     same question with opposite answers. Post the .png export alongside it if
+     the channel should show the character.
+
+   WHY _zipArchiveBytes STILL TAKES A PREFIX LENGTH
+     Nothing here uses it now — it is called with 0. It stays because reading
+     a prefixed archive is still supported: anyone who shared a .jpg from an
+     earlier build has files in the wild, and _readCardFromZipTail still opens
+     them. Removing the write side would not help them and would cost the
+     tests that document how the offsets work.
+================================================================ */
+
+/** Current time as a DOS date/time pair, the format ZIP headers use. */
+function _dosDateTime(d) {
+  const time = ((d.getHours() & 31) << 11) | ((d.getMinutes() & 63) << 5)
+             | ((Math.floor(d.getSeconds() / 2)) & 31);
+  const year = Math.max(1980, d.getFullYear());
+  const date = (((year - 1980) & 127) << 9) | (((d.getMonth() + 1) & 15) << 5) | (d.getDate() & 31);
+  return { time, date };
+}
+
+/** Raw-deflate some bytes, or null if this browser has no CompressionStream.
+ *  Optional by design: a stored entry is a valid entry, so the export still
+ *  works on anything that cannot compress. */
+async function _deflateRaw(bytes) {
+  if (typeof CompressionStream !== 'function') return null;
+  try {
+    const cs = new CompressionStream('deflate-raw');
+    const w = cs.writable.getWriter();
+    w.write(bytes);
+    w.close();
+    return new Uint8Array(await new Response(cs.readable).arrayBuffer());
+  } catch (e) {
+    return null;
+  }
+}
+
+/** Build a ZIP archive whose recorded offsets are biased by `prefixLen`
+ *  bytes, so it is correct when placed at that offset inside a larger file.
+ *  Pass 0 for a standalone archive.
+ *  `files` is [{ name, bytes }]. */
+async function _zipArchiveBytes(files, prefixLen) {
+  const enc = new TextEncoder();
+  const stamp = _dosDateTime(new Date());
+  const locals = [];
+  const centrals = [];
+  let offset = 0;
+
+  for (const f of files) {
+    const nameBytes = enc.encode(f.name);
+    const raw = f.bytes;
+    const crc = _crc32(raw);
+
+    // Only take the deflated form if it actually helps. An already-compressed
+    // payload usually deflates LARGER, and a stored entry is simpler for
+    // anything reading this by hand.
+    let method = 0, payload = raw;
+    const z = await _deflateRaw(raw);
+    if (z && z.length < raw.length) { method = 8; payload = z; }
+
+    const lh = new Uint8Array(30 + nameBytes.length);
+    const ldv = new DataView(lh.buffer);
+    ldv.setUint32(0, 0x04034b50, true);  // local file header
+    ldv.setUint16(4, 20, true);          // version needed
+    ldv.setUint16(6, 0x0800, true);      // flags: names are UTF-8
+    ldv.setUint16(8, method, true);
+    ldv.setUint16(10, stamp.time, true);
+    ldv.setUint16(12, stamp.date, true);
+    ldv.setUint32(14, crc, true);
+    ldv.setUint32(18, payload.length, true);
+    ldv.setUint32(22, raw.length, true);
+    ldv.setUint16(26, nameBytes.length, true);
+    ldv.setUint16(28, 0, true);          // no extra field
+    lh.set(nameBytes, 30);
+
+    const ch = new Uint8Array(46 + nameBytes.length);
+    const cdv = new DataView(ch.buffer);
+    cdv.setUint32(0, 0x02014b50, true);  // central directory header
+    cdv.setUint16(4, 20, true);          // version made by
+    cdv.setUint16(6, 20, true);          // version needed
+    cdv.setUint16(8, 0x0800, true);
+    cdv.setUint16(10, method, true);
+    cdv.setUint16(12, stamp.time, true);
+    cdv.setUint16(14, stamp.date, true);
+    cdv.setUint32(16, crc, true);
+    cdv.setUint32(20, payload.length, true);
+    cdv.setUint32(24, raw.length, true);
+    cdv.setUint16(28, nameBytes.length, true);
+    cdv.setUint16(30, 0, true);          // extra
+    cdv.setUint16(32, 0, true);          // comment
+    cdv.setUint16(34, 0, true);          // disk number
+    cdv.setUint16(36, 0, true);          // internal attrs
+    cdv.setUint32(38, 0, true);          // external attrs
+    cdv.setUint32(42, prefixLen + offset, true);   // <- the bias
+    ch.set(nameBytes, 46);
+
+    locals.push(lh, payload);
+    centrals.push(ch);
+    offset += lh.length + payload.length;
+  }
+
+  const cdSize = centrals.reduce((n, c) => n + c.length, 0);
+  const eocd = new Uint8Array(22);
+  const edv = new DataView(eocd.buffer);
+  edv.setUint32(0, 0x06054b50, true);    // end of central directory
+  edv.setUint16(4, 0, true);             // this disk
+  edv.setUint16(6, 0, true);             // disk with the central directory
+  edv.setUint16(8, files.length, true);
+  edv.setUint16(10, files.length, true);
+  edv.setUint32(12, cdSize, true);
+  edv.setUint32(16, prefixLen + offset, true);     // <- and here
+  edv.setUint16(20, 0, true);            // no archive comment
+
+  const parts = locals.concat(centrals, [eocd]);
+  const out = new Uint8Array(parts.reduce((n, part) => n + part.length, 0));
+  let p = 0;
+  for (const part of parts) { out.set(part, p); p += part.length; }
+  return out;
+}
+
+/** The instructions that ride inside the archive, for whoever opens it by
+ *  hand. Kept plain ASCII and short -- it is read in a Notepad window by
+ *  someone who has just renamed a picture and is not sure that was right. */
+function _discordReadmeText(name) {
+  return [
+    'GobboNet character card: ' + (name || 'Character'),
+    '',
+    'This is an ordinary ZIP file.',
+    '',
+    'To use it:',
+    '  * In GobboNet, import this .zip as it is.',
+    '  * In another app that reads Character Card V3, rename it to .charx',
+    '    and import that.',
+    '  * To read it by hand, open it like any zip. card.json is the character',
+    '    in Character Card V3 format; card_v2.json is the same character in',
+    '    the older V2 format, for apps that only speak V2; assets/icon.jpg is',
+    '    the portrait.',
+    '',
+    'WHY A ZIP AND NOT A PICTURE',
+    '',
+    'Chat platforms re-encode uploaded images to resize them, and re-encoding',
+    'rebuilds the file from its pixels — which drops anything that is not',
+    'pixel data, including the character data an ordinary card PNG relies on.',
+    'A zip is not an image, so nothing re-encodes it and it arrives exactly as',
+    'it left.',
+    '',
+    'Send it as a FILE, not by pasting it as an image. If you want the channel',
+    'to show the character too, post the .png export alongside this.',
+    ''
+  ].join('\n');
+}
+
+/** The card as it stands in the editor right now, including unsaved edits.
+ *  Shared by both exports so they can never disagree about what is being
+ *  exported. */
+function _liveCardSnapshot() {
+  const card = state.characterCards.find(c => c.id === editingCardId);
+  if (!card) return null;
   const val = (id) => { const el = document.getElementById(id); return el ? el.value : undefined; };
   const chk = (id) => { const el = document.getElementById(id); return el ? el.checked : undefined; };
-  const snap = {
+  return {
     ...card,
     name: ((val('card-name') || card.name || '').trim()) || 'Character',
     avatar: (val('card-avatar') ?? card.avatar ?? '').trim(),
@@ -722,22 +1028,51 @@ async function exportCardAsV3() {
     startingLore: val('card-starting-lore') ?? card.startingLore,
     ragStorybook: val('card-rag-storybook') ?? card.ragStorybook
   };
+}
+
+/** A filesystem-safe stem for an export filename. */
+function _cardFileStem(name) {
+  return (name || 'character').toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'character';
+}
+
+/** Export the card currently open in the editor as a JPG that is also a ZIP.
+ *  Reads live form values so unsaved edits are included — without closing
+ *  the editor. */
+async function exportCardForDiscord() {
+  const snap = _liveCardSnapshot();
+  if (!snap) { showModelSwitchToast('No character selected to export.', 'err'); return; }
 
   try {
     const v3 = _cardToV3(snap);
     const v2 = _v3ToV2(v3);
-    const imgBytes = await _cardImagePngBytes(snap);
-    const png = _injectPngChunks(imgBytes, [
-      _pngTextChunk('ccv3', _utf8ToB64(JSON.stringify(v3))),
-      _pngTextChunk('chara', _utf8ToB64(JSON.stringify(v2)))
-    ]);
-    const fname = (snap.name || 'character').toLowerCase()
-      .replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'character';
-    _downloadBlob(new Blob([png], { type: 'image/png' }), fname + '.png');
-    showModelSwitchToast(`Exported "${snap.name}" as a V3 card (PNG, V2-compatible).`, 'ok');
+    const enc = new TextEncoder();
+
+    // 0.9 rather than maximum: the difference is invisible on a 512px
+    // portrait and the file is going somewhere with an upload limit.
+    const jpg = await _cardImageJpegBytes(snap, 0.9);
+
+    // prefixLen 0: an ordinary standalone archive. The portrait is an ENTRY
+    // rather than a prefix, which is both why this is not an image any more
+    // and why opening the zip shows the character -- on the old polyglot the
+    // picture sat outside the entries, so a "zip" appeared to contain no image
+    // while the image was sitting right there in the bytes.
+    //
+    // assets/icon.jpg because that is where the .charx layout puts it, which
+    // is the same reason card.json is called card.json: rename this file to
+    // .charx and any V3-aware app reads it.
+    const zip = await _zipArchiveBytes([
+      { name: 'card.json', bytes: enc.encode(JSON.stringify(v3, null, 2)) },
+      { name: 'card_v2.json', bytes: enc.encode(JSON.stringify(v2, null, 2)) },
+      { name: 'assets/icon.jpg', bytes: jpg },
+      { name: 'README.txt', bytes: enc.encode(_discordReadmeText(snap.name)) }
+    ], 0);
+
+    _downloadBlob(new Blob([zip], { type: 'application/zip' }), _cardFileStem(snap.name) + '.zip');
+    showModelSwitchToast(
+      `Exported "${snap.name}" as a zip — post it as a file, not as an image.`, 'ok');
   } catch (err) {
-    console.error('[export] character card failed:', err);
+    console.error('[export] discord card failed:', err);
     showModelSwitchToast('Export failed: ' + (err && err.message ? err.message : 'unknown error'), 'err');
   }
 }
-

@@ -75,11 +75,41 @@ type Options struct {
 	Tuning  Tuning
 	LogFile string
 
+	// ConsoleOut is where the engine's own output is mirrored as it arrives.
+	// nil keeps it off the screen, which is what every release up to 1.7.4 did
+	// -- and the reason "loading" looked like a frozen window: llama.cpp's
+	// stdout went only to LogFile and its stderr only to LogFile plus the error
+	// ring, so a model taking a minute to load printed nothing at all.
+	//
+	// cmd/gobbonet sets this to os.Stdout unless show_engine_output is off.
+	// See internal/supervisor/engineout.go.
+	ConsoleOut io.Writer
+
+	// EngineOutputFull turns the console filter off, so every line the engine
+	// prints is shown. Off by default: a real session was 680 engine lines to
+	// 221 of everything else, and the events people watch for -- a model
+	// loaded, a hot swap, the server standing down -- were lost in it.
+	//
+	// The LOG FILE is never filtered, either way.
+	EngineOutputFull bool
+
 	// ChatTemplateName / ChatTemplateFile override what the classifier picked.
 	// Only set these when a model's embedded template is known-broken.
 	ChatTemplateName string
 	ChatTemplateFile string
 }
+
+// GPUConfirmed reports that the running engine said layers reached the GPU.
+//
+// False is "not confirmed", not "on the CPU" -- see engineWatch.GPUConfirmed
+// for why that distinction is load-bearing.
+func (s *Supervisor) GPUConfirmed() bool { return s.engine.GPUConfirmed() }
+
+// VRAMPressure reports that the engine complained about fitting the model.
+func (s *Supervisor) VRAMPressure() bool { return s.engine.VRAMPressure() }
+
+// EngineSpoke reports whether any engine output was seen at all.
+func (s *Supervisor) EngineSpoke() bool { return s.engine.SawOutput() }
 
 // Status is the /swap-status payload.
 type Status struct {
@@ -122,6 +152,30 @@ type Supervisor struct {
 	// exited is closed by the reaper when the current process ends.
 	exited chan struct{}
 
+	// engine watches the output going past for the two facts a user needs out
+	// of it: whether layers reached the GPU, and whether VRAM is tight. Both
+	// were reported on screen by launch.bat's STEP 3b and by nothing at all on
+	// this path. Reset per launch, like the stderr ring beside it.
+	engine *engineWatch
+
+	// console is the prefixing writer for the running process, kept so the
+	// reaper can flush a final partial line -- the last thing a crashing engine
+	// prints is usually the reason, and it often arrives without a newline.
+	console *prefixWriter
+
+	// Idle stand-down bookkeeping. See standdown.go for the whole mechanism.
+	// lastUse is the last time a request reached the backend; inFlight is how
+	// many are in progress right now, which is what stops a long generation
+	// being mistaken for an idle one. stoodDown means the model was unloaded
+	// deliberately rather than having crashed, and standFile is the model to
+	// bring back. waking is non-nil while a reload is under way, so several
+	// simultaneous requests wait for one load instead of starting several.
+	lastUse   time.Time
+	inFlight  int
+	stoodDown bool
+	standFile string
+	waking    chan struct{}
+
 	// OnReady runs after a model finishes loading, so caches keyed on model
 	// identity can be dropped.
 	OnReady func()
@@ -149,6 +203,7 @@ func New(opts Options) (*Supervisor, error) {
 		host:   host,
 		port:   port,
 		stderr: newRingBuffer(stderrRingSize),
+		engine: newEngineWatch(),
 		client: &http.Client{Timeout: 3 * time.Second},
 		status: Status{Phase: PhaseIdle},
 	}, nil
@@ -208,17 +263,29 @@ func (s *Supervisor) setStatus(phase, file, name, message string, startedAt int6
 // used to exist separately and could disagree, whereas here the record comes
 // from the same classifier in both cases.
 //
-// It matches launch.bat flag for flag with ONE deliberate exception: -lv.
-// launch.bat raises llama.cpp's log verbosity because its STEP 3b greps the log
-// for "offloaded"/"Vulkan0"/"CUDA0" to confirm GPU acceleration, and llama.cpp
-// files those lines above the default threshold. The Go path does no such
-// confirmation, so raising verbosity would only cost ring-buffer room -- the
-// stderr ring is a fixed 64 KB, and a noisier startup banner would evict the
-// error text it exists to preserve.
+// It matches launch.bat flag for flag, including -lv.
 //
-// If offload confirmation is ever added here, -lv has to be added with it or
-// the check will silently never match. tests/test-engine-args.py holds that
-// pairing and fails if one arrives without the other.
+// -lv was left off until 1.7.5, on the reasoning that launch.bat only raised
+// llama.cpp's verbosity so its STEP 3b could grep the log for
+// "offloaded"/"Vulkan0"/"CUDA0", this path did no such check, and a noisier
+// banner would only evict error text from the fixed 64 KB stderr ring.
+//
+// Self-consistent, and the wrong trade. What it cost was the answer to "is this
+// running on my GPU or my CPU" -- the FIRST troubleshooting entry in README.md
+// -- which launch.bat printed on screen and this path could not, because the
+// lines were not merely unread, they were never emitted. The ring objection is
+// answered by the output now reaching the console as it happens
+// (Options.ConsoleOut), so the ring is no longer the only copy of anything.
+//
+// llama.cpp files those lines above its default threshold: in common/log.cpp,
+// common_get_verbosity maps GGML_LOG_LEVEL_INFO to LOG_LEVEL_TRACE (4) while
+// the default is LOG_LEVEL_INFO (3). 4 is trace, not debug -- DEBUG is 5 and
+// stays filtered -- so this asks for exactly the messages that used to arrive
+// by default rather than opening the floodgates.
+//
+// -lv and the offload check are one decision, not two: either alone is useless,
+// and passing neither is what made every GPU invisible. tests/test-engine-args.py
+// holds the pairing and fails if one arrives without the other.
 func (s *Supervisor) BuildArgs(rec models.Record, modelPath string) []string {
 	useJinja := rec.UseJinja != 0
 	chatTemplate := rec.ChatTemplate
@@ -285,6 +352,9 @@ func (s *Supervisor) BuildArgs(rec models.Record, modelPath string) []string {
 		"--cache-type-k", tune.KVCacheType,
 		"--cache-type-v", tune.KVCacheType,
 		"--parallel", "1",
+		// See the note above: without this the offload lines are never emitted
+		// and engineWatch can never confirm a working GPU.
+		"-lv", "4",
 	}
 	if useJinja {
 		args = append(args, "--jinja")
@@ -319,18 +389,55 @@ func (s *Supervisor) start(file string) error {
 	configureProcessGroup(cmd)
 
 	s.stderr.Reset()
-	// Tee stderr: the ring buffer answers "why did this fail" immediately, and
-	// the log file keeps the full history for anything the ring rotated past.
-	var logFile *os.File
-	if f, err := os.OpenFile(s.opts.LogFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600); err == nil {
-		logFile = f
-		cmd.Stderr = io.MultiWriter(s.stderr, logFile)
-		cmd.Stdout = logFile
-	} else {
-		cmd.Stderr = s.stderr
+	s.engine.Reset()
+
+	// Four destinations, each for a different question.
+	//
+	//   the ring     "why did this fail" -- quoted back immediately
+	//   the log      the full history, for anything the ring rotated past
+	//   the watcher  did it reach the GPU, is VRAM tight
+	//   the console  what the user is watching right now
+	//
+	// The console is the one that was missing. Nothing that was already written
+	// stops being written -- this adds a reader, it does not move the output.
+	var (
+		logFile *os.File
+		console *prefixWriter
+	)
+	if s.opts.ConsoleOut != nil {
+		// Prefixed, so two programs in one window stay tellable apart. This is
+		// the "funnel it back to the gobbonet console" half of the fix.
+		console = newPrefixWriter(s.opts.ConsoleOut, " [llama] ", !s.opts.EngineOutputFull)
 	}
 
-	log.Printf("[swap] launching: %s %s", s.opts.ServerExe, strings.Join(args, " "))
+	errSinks := []io.Writer{s.stderr, s.engine}
+	outSinks := []io.Writer{s.engine}
+	if f, err := os.OpenFile(s.opts.LogFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600); err == nil {
+		logFile = f
+		errSinks = append(errSinks, logFile)
+		outSinks = append(outSinks, logFile)
+	}
+	if console != nil {
+		errSinks = append(errSinks, console)
+		outSinks = append(outSinks, console)
+	}
+	cmd.Stderr = io.MultiWriter(errSinks...)
+	cmd.Stdout = io.MultiWriter(outSinks...)
+	s.console = console
+
+	// No load announcement here. start() is reached from five places and every
+	// one of them has already named the model in its own words -- "restart
+	// attempt 2 for x", "rolling back to x", "WAKING -- reloading x for your
+	// message". A line here as well meant two announcements per load, under two
+	// different tags, for one event. The two callers that had nothing to say
+	// (Boot and runSwap) say it themselves now.
+	//
+	// The full command line stays out of the console for its own reason: it is
+	// ~300 characters and was the single longest thing on screen, scrolling the
+	// event it announced out of view. It goes to the log file every time.
+	if s.opts.EngineOutputFull {
+		log.Printf("[swap] command: %s %s", s.opts.ServerExe, strings.Join(args, " "))
+	}
 	if err := cmd.Start(); err != nil {
 		if logFile != nil {
 			logFile.Close()
@@ -365,6 +472,12 @@ func (s *Supervisor) start(file string) error {
 		close(exited)
 		if logFile != nil {
 			logFile.Close()
+		}
+		// The last thing a dying engine prints is usually the reason, and it
+		// often arrives without a trailing newline -- so it would sit in the
+		// line buffer forever, which is the one line you most want to see.
+		if console != nil {
+			console.Flush()
 		}
 
 		s.mu.Lock()
@@ -607,9 +720,11 @@ func (s *Supervisor) Boot(preferred string) error {
 		file = records[0].File
 	}
 
-	startedAt := time.Now().Unix()
+	began := time.Now()
+	startedAt := began.Unix()
 	s.setStatus(PhaseStarting, file, file, "Loading model", startedAt)
 
+	log.Printf("[swap] LOADING %s", file)
 	if err := s.start(file); err != nil {
 		s.setStatus(PhaseError, file, file, err.Error(), startedAt)
 		return err
@@ -623,6 +738,11 @@ func (s *Supervisor) Boot(preferred string) error {
 	s.previous = file
 	s.mu.Unlock()
 
+	// NOT announced here. Boot is called once, from cmd/gobbonet, which prints
+	// the banner's own "[OK] model loaded" and GPU report immediately after --
+	// so announcing would say the same thing twice in two different voices.
+	// The summary is handed to that report instead (LoadSummaryLine below).
+	_ = began
 	s.setStatus(PhaseReady, file, file, "Ready", startedAt)
 	if s.OnReady != nil {
 		s.OnReady()
@@ -672,6 +792,8 @@ func (s *Supervisor) runSwap(file, name, previous string, startedAt int64) {
 	s.stop()
 	s.setStatus(PhaseStarting, file, name, "Loading new model", startedAt)
 
+	began := time.Now()
+	log.Printf("[swap] LOADING %s", file)
 	if err := s.start(file); err != nil {
 		s.rollback(previous, file, name, startedAt, err.Error())
 		return
@@ -685,7 +807,7 @@ func (s *Supervisor) runSwap(file, name, previous string, startedAt int64) {
 	s.previous = file
 	s.mu.Unlock()
 
-	log.Printf("[swap] active model is now %s", file)
+	s.announceLoad("swap", "loaded", file, began)
 	s.setStatus(PhaseReady, file, name, "Ready", startedAt)
 	if s.OnReady != nil {
 		s.OnReady()

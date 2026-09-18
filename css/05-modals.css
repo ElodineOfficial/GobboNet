@@ -88,7 +88,7 @@
 .form-hint { font-size: 12px; color: var(--cyan-dim); margin-top: 6px; font-style: italic; }
 .form-row { display: flex; gap: 16px; }
 .form-row .form-group { flex: 1; }
-.modal-actions { display: flex; gap: 12px; justify-content: flex-end; margin-top: 30px; border-top: 1px solid var(--border); padding-top: 20px; }
+.modal-actions { display: flex; flex-wrap: wrap; gap: 12px; justify-content: flex-end; margin-top: 30px; border-top: 1px solid var(--border); padding-top: 20px; }
 
 /* ========================================================
    AVATAR PICKER (image-based)

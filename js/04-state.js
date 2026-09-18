@@ -165,6 +165,37 @@ const DEFAULT_SETTINGS = {
   // images are unaffected and always work.
   allowRemoteImages: false,
   remoteImageNoticeSeen: false,   // one-time notice bookkeeping; see 24-boot.js
+  // The character modal refuses casual dismissal (single backdrop click,
+  // Escape) while an editor is open, because closeCharacters() saves nothing
+  // and openCharacters() rebuilds the list -- a half-written character is
+  // simply gone. Some people want the modal to behave like every other one.
+  //
+  // Read with `!== false` everywhere, never as a truthy test: a settings blob
+  // saved before this option existed has no key at all, and must keep the
+  // sticky behaviour it already had rather than silently switching to
+  // click-to-dismiss on upgrade.
+  //
+  // Turning this off does NOT turn off the unsaved-changes confirm. Sticky
+  // governs whether a CASUAL gesture can dismiss; the confirm governs whether
+  // ANY dismissal can destroy work. See js/22-scheduler.js.
+  stickyCards: true,
+  // How the viewport behaves while a reply is streaming in.
+  //
+  //   'smart'  follow the bottom, and stop following the moment the user
+  //            scrolls up or touches the message area. The default, and what
+  //            the app has always done.
+  //   'always' follow the bottom and keep following. Scrolling up during a
+  //            reply is a fight you cannot win -- which is the point for
+  //            someone who never wants to read back mid-reply and finds the
+  //            smart version letting go too easily.
+  //   'off'    never move the viewport on its own. The jump-to-latest button
+  //            is the way down.
+  //
+  // Read through autoScrollMode() in js/14-scroll.js, never directly: an
+  // unrecognised or absent value has to resolve to 'smart', or an install
+  // that predates this option would boot into a scrolling behaviour nobody
+  // chose.
+  autoScroll: 'smart',
   // ---- RAG retrieval knobs (Stage 1) ----
   // Full snapshot of these rides into every telemetry record's `config`
   // block so any turn is reproducible. Tune one knob at a time; the shadow
@@ -321,6 +352,11 @@ let serverOfflinePhase = '';
 // bottom and the resulting scroll event just re-confirms pinned=true.
 // Starts true so the very first stream auto-follows before any user
 // scroll has happened.
+// Set by applyLoadedState() when a saved blob with settings was found. False
+// on a device that has never been used, which is the one case where the
+// server's [ui] presets are taken without asking.
+let hadOwnSettings = false;
+
 let scrollPinnedToBottom = true;
 // When lore compression fires during a turn, this holds {count: N, threadId}
 // until the next user input. Read by renderMessages to inject a persistent

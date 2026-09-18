@@ -269,6 +269,7 @@ function renderThreadItem(t) {
       <button class="thread-ctrl-btn thread-pin-btn${t.pinned?' is-pinned':''}" onclick="togglePin('${escapeJsAttr(t.id)}',event)" title="${t.pinned?'Unpin':'Pin'}">&#128204;</button>
       <button class="thread-ctrl-btn thread-folder-btn" onclick="openFolderPicker('${escapeJsAttr(t.id)}',event)" title="Move to folder">&#128193;</button>
       <button class="thread-ctrl-btn thread-tag-btn" onclick="openTagEditor('${escapeJsAttr(t.id)}',event)" title="Tags">&#127991;</button>
+      <button class="thread-ctrl-btn thread-export-btn" onclick="exportThread('${escapeJsAttr(t.id)}',event)" title="Export this conversation as JSON, with the characters it was held with">&#8681;</button>
       <button class="thread-ctrl-btn thread-edit-btn" onclick="startRename('${escapeJsAttr(t.id)}',event)" title="Rename">&#9998;</button>
       <button class="thread-ctrl-btn thread-del-btn" onclick="deleteThread('${escapeJsAttr(t.id)}',event)" title="Delete">&times;</button>
     </div>

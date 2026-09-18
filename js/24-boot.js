@@ -14,6 +14,15 @@
 (async function boot() {
   await loadState();
 
+  // The [ui] presets from gobbonet.toml. Awaited rather than fired and
+  // forgotten: on a device with no settings of its own these become the
+  // starting values, and that has to happen before the first render or the
+  // user watches the page repaint itself. It is one small same-origin request
+  // and it cannot throw — a server too old to have the route, or a page opened
+  // from file://, simply has no presets.
+  await loadServerPresets();
+  seedSettingsFromServerPresets(hadOwnSettings);
+
   // Check if the server has newer state than our local copy (handles the
   // LAN-IP-rotated case where each origin has its own localStorage / IDB).
   // Fire-and-forget; on conflict it'll prompt the user.

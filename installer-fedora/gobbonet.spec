@@ -102,14 +102,24 @@ mkdir -p %{buildroot}%{_datadir}/icons/hicolor/256x256/apps
 cp -a usr/lib/gobbonet/. %{buildroot}%{_libdir}/gobbonet/
 
 # The Debian package puts everything under /usr/lib/gobbonet. On Fedora,
-# architecture-specific content belongs in %%{_libdir} -- /usr/lib64 here -- so
-# the two hardcoded paths are rewritten to match rather than shipping a
-# Debian-shaped tree on a Fedora system. Both files are the only places the
-# prefix appears; gobbonet-launch derives everything else from PREFIX.
-sed -i 's|^PREFIX="/usr/lib/gobbonet"|PREFIX="%{_libdir}/gobbonet"|' \
-    %{buildroot}%{_libdir}/gobbonet/gobbonet-launch
-grep -q '^PREFIX="%{_libdir}/gobbonet"' %{buildroot}%{_libdir}/gobbonet/gobbonet-launch \
-    || { echo "ERROR: PREFIX rewrite missed in gobbonet-launch" >&2; exit 1; }
+# architecture-specific content belongs in %%{_libdir} -- /usr/lib64 here.
+#
+# gobbonet-launch needs no rewrite for that. It resolves its own location:
+#
+#     PREFIX="$(dirname "$(readlink -f "$0")")"
+#
+# so it lands on /usr/lib64/gobbonet by itself, and everything else it uses --
+# the binary, the engine, the web root -- hangs off PREFIX.
+#
+# There WAS a rewrite here, from when that line was a hardcoded
+# PREFIX="/usr/lib/gobbonet", with a grep guarding that the rewrite had
+# landed. The launcher changed to self-locating and the rewrite was left
+# behind: the sed then matched nothing, the guard fired, and %install exited 1.
+# The guard was doing its job. What it guarded no longer existed, and it was
+# the only thing stopping this package from building at all.
+#
+# The desktop entry is a different matter and IS rewritten below -- a .desktop
+# Exec line cannot resolve anything for itself.
 
 install -m 0644 usr/share/applications/gobbonet.desktop \
     %{buildroot}%{_datadir}/applications/gobbonet.desktop

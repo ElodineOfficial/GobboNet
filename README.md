@@ -66,6 +66,7 @@ You should end up with this:
 ```
 Gobbonet\
 ├── launch.bat            <- start here
+├── gobbonet.exe          <- the server launch.bat hands over to
 ├── setup-lan.bat         <- phone access, run as Administrator once
 ├── stop-gobbonet.bat
 ├── teardown-lan.bat
@@ -73,18 +74,29 @@ Gobbonet\
 ├── hardware-probe.ps1
 ├── hw-recommend.ps1
 ├── identify-model.ps1
-├── chat.html
+├── engine.sha256         <- which llama.cpp build, and its checksum
+├── chat.html             <- source of the chat screen (built into the .exe)
 ├── default-characters.json
 ├── gobbonet.ico
-├── css\     (17 files)
-├── js\      (24 files)
+├── css\     (17 files)   <- source, as above
+├── js\      (24 files)   <- source, as above
+├── linux-amd64\          <- the Linux build; Windows users can ignore it
 ├── docs\    reference notes and the per-change changelog
 └── tests\   developer tests; not needed to run anything
 ```
 
 A `models` folder and a few small bookkeeping files (`models-list.json`, `active-model.json`) get created for you on the first run — that's normal, you don't need to make them yourself.
 
-Going this route, run `launch.bat` and `setup-lan.bat` wherever the rest of this guide says `launch.exe` and **LAN Setup**. Everything else works the same.
+Going this route, run **`launch.bat`** wherever the rest of this guide says
+`launch.exe`, and `setup-lan.bat` where it says **LAN Setup**. Everything else
+works the same.
+
+`launch.bat` is the black-and-green window that walks you through everything —
+setting a password, downloading the AI engine, checking your hardware, picking a
+model. When it has your answers it hands over to `gobbonet.exe`, which serves the
+chat and keeps running in that same window, so the model loading and the GPU
+check appear right where you have been reading. You do not need to start
+`gobbonet.exe` yourself.
 
 One cosmetic difference: the installer bundles a font that the source ZIP does not, so a browser console opened on a source install will show a 404 for `fonts/atkinson-hyperlegible.woff2`. Nothing is broken — the interface falls back to a monospace font your system already has. The font is left out on purpose rather than committed, so that GobboNet never fetches one from a font CDN at runtime.
 
@@ -225,6 +237,43 @@ This tool was built to be private, but a few honest notes:
 
 ---
 
+## Updating to a newer version
+
+**Replace one file: `gobbonet.exe`.** That's the whole update.
+
+Download the new ZIP, open it, and copy `gobbonet.exe` into your GobboNet
+folder, replacing the one already there. Your models, conversations, characters
+and password are all kept — none of them live in that file.
+
+The chat screen is built *inside* `gobbonet.exe`, so you cannot end up with a
+new chat screen and an old program, or the other way round. That used to be the
+most common way an update went wrong: people copied `chat.html`, `js\` and
+`css\` across, which changed how the app looked while everything that runs
+behind the scenes stayed on the old version. Features would appear in the menus
+and then do nothing.
+
+**Windows won't let you replace it while it's running.** Close GobboNet first
+(see *Shutting it down*, below). If Windows offers to **Skip** the file because
+it's in use, don't — that leaves you half-updated. Close GobboNet and copy it
+again.
+
+Copying the rest of the folder across as well is harmless. Nothing else is
+required, and a leftover `web\` folder from an older version is ignored — the
+launcher window says so when it starts, and you can delete it.
+
+**Checking it worked.** Open the **≡** menu, choose **ABOUT**, and look at the
+version. If something is out of step, that panel says so and what to do about
+it.
+
+**Did you install with `GobboNetSetup.exe`?** Then run the new
+`GobboNetSetup.exe` instead; it replaces the file for you and keeps your
+models.
+
+**On Linux?** Replace the whole `linux-amd64` folder, or install the new
+`.deb`/`.rpm` over the old one.
+
+---
+
 ## Shutting it down
 
 To stop everything: find the launcher window (the black window with green text — it shrinks to your taskbar after a few seconds) and **close it**, or click it and press **Ctrl + C**.
@@ -236,7 +285,7 @@ That window quietly watches the AI in the background and restarts it if it ever 
 ## Troubleshooting
 
 **The chat says it can't connect to the AI / it's very slow.**
-The model may be running on your processor instead of your graphics card, which is slow. The launcher warns you if it couldn't confirm your GPU is being used. Make sure your graphics drivers are up to date (search your card maker's site: AMD, Intel, or NVIDIA). If it's still slow, pick a smaller model next time.
+The model may be running on your processor instead of your graphics card, which is slow. **Look at the GobboNet window:** it says `GPU acceleration confirmed` once the model has loaded, or prints a warning with the likely causes if it could not confirm it. The engine's own loading output appears there too, marked `[llama]`. Make sure your graphics drivers are up to date (search your card maker's site: AMD, Intel, or NVIDIA). If it's still slow, pick a smaller model next time.
 
 **The chat screen is blank, unstyled, or looks broken.**
 The `css` and `js` folders aren't where the app expects them. This only happens on a manual install — re-extract the ZIP and keep the folder structure exactly as it comes, or just use the installer.
@@ -428,13 +477,33 @@ deleted, and nothing you run has moved.
 
 | | |
 |---|---|
-| `launch.bat` | The launcher. Still the first thing you run. |
+| `launch.bat` | The launcher. Still the first thing you run: it asks the questions, fetches the engine and the model, then hands over to `gobbonet.exe` in the same window. |
+| **`gobbonet.exe`** | **GobboNet itself — the server, with the chat screen inside it. This is the one file an update replaces.** |
 | `setup-lan.bat`, `stop-gobbonet.bat`, `teardown-lan.bat` | Phone access on/off, and shutdown. |
-| `chat.html`, `js/`, `css/` | The chat interface itself. |
+| `gobbonet`, `linux-amd64/` | The Linux program and its bundled engine. |
+| `web\` | The chat interface GobboNet is actually serving. Written by `gobbonet.exe` on startup, and replaced when you update. Edit it and reload to see changes. |
+| `chat.html`, `js/`, `css/` | The **source** those files are built from, kept so you can read and diff it. Editing the source changes nothing until it is recompiled — edit `web\` instead. |
 | [`docs/`](docs/) | Reference material, plus [`docs/changelog/`](docs/changelog/) — one write-up per fix. |
 | [`tests/`](tests/) | Developer tests and browser preview pages. Not needed to run anything. |
 | `internal/`, `cmd/` | The Go server's source. |
-| `installer/`, `installer-linux/` | How the Windows `.exe` and the Linux `.deb` are built. |
+| `installer/`, `installer-linux/`, `installer-fedora/` | How the Windows `.exe` and the Linux `.deb`/`.rpm` are built. |
+
+**Want to change how the chat looks?** Edit the files in the `web\` folder and
+reload the page. GobboNet writes that folder itself on startup and serves it, so
+what is on disk is exactly what you get — nothing is hidden inside the program.
+
+One catch worth knowing: `web\` is **replaced when you update**, because that is
+how a new version reaches the chat screen. The launcher window says so when it
+happens. To keep changes across updates, copy them somewhere else and point
+GobboNet at that folder instead:
+
+```
+gobbonet config set web_root "C:\Users\you\my-gobbonet-theme"
+```
+
+Only the files you put there override the built-in ones, so a folder holding one
+CSS file changes that one thing and leaves the rest alone. Remove the setting to
+go back to normal.
 
 `README.md`, `TROUBLESHOOTING.md` and `SECURITY.md` stay at the root, because
 that is where you would look for them and because the launcher points at the

@@ -158,6 +158,31 @@
         <input type="checkbox" id="set-stream-replies">
         <span>Stream replies as they're written</span>
       </label>
+
+      <div class="form-hint" style="margin-top:12px;margin-bottom:8px;">While a reply comes in, the view normally follows along and stops the moment you scroll up or touch the message area. Change that if it holds on too long, or lets go too easily.</div>
+      <div class="scroll-mode-rows">
+        <label class="scroll-mode-row">
+          <input type="radio" name="set-auto-scroll" value="smart">
+          <span><strong>Follow, but let go</strong> &mdash; stops as soon as you scroll up or touch the messages <em>(default)</em></span>
+        </label>
+        <label class="scroll-mode-row">
+          <input type="radio" name="set-auto-scroll" value="always">
+          <span><strong>Always follow</strong> &mdash; stays glued to the newest text. You won't be able to read back until the reply finishes.</span>
+        </label>
+        <label class="scroll-mode-row">
+          <input type="radio" name="set-auto-scroll" value="off">
+          <span><strong>Don't follow</strong> &mdash; the view never moves on its own. Use the jump button to catch up.</span>
+        </label>
+      </div>
+    </div>
+
+    <div class="form-group" style="margin-top:12px; padding:12px; border:1px solid rgba(0,243,255,0.18); border-radius:var(--radius); background:rgba(0,243,255,0.02);">
+      <label>&#9906; Character Editor</label>
+      <div class="form-hint" style="margin-top:2px;margin-bottom:10px;">The CAST window normally ignores a single click on the backdrop while you have a character open, so a stray click can't throw away what you were writing. Double-click to leave, or use CANCEL / SAVE. Turn this off and it closes on one click like every other window. Either way, you'll still be asked before unsaved edits are discarded.</div>
+      <label class="code-enable-row">
+        <input type="checkbox" id="set-sticky-cards">
+        <span>Sticky character editor</span>
+      </label>
     </div>
 
     <div class="form-group" style="margin-top:4px; padding:10px 12px; border:1px dashed rgba(0,243,255,0.15); border-radius:var(--radius); background:rgba(0,243,255,0.02);">
@@ -262,6 +287,27 @@
       <div class="form-hint" id="add-model-unavailable" style="display:none;margin-top:8px;"></div>
     </div>
 
+    <!-- Bottom of CONFIG, directly above Privacy Status.
+
+         NOT hidden when unsupported any more. It used to hide itself entirely
+         unless the server manages llama.cpp, on the reasoning that a switch
+         which cannot do anything gets blamed when VRAM stays pinned. The cost
+         of that turned out to be worse: an invisible feature is
+         indistinguishable from one that was never built, and the first
+         question it produced was "did we implement this at all?".
+
+         So it is always here, and when it cannot work it says why. -->
+    <div class="form-group" id="standdown-group" style="margin-top:12px; padding:12px; border:1px solid rgba(0,243,255,0.18); border-radius:var(--radius); background:rgba(0,243,255,0.02);">
+      <label>&#128268; Idle Stand-Down</label>
+      <div class="form-hint" style="margin-top:2px;margin-bottom:10px;">llama.cpp holds the whole model in VRAM for as long as it runs, whether or not anyone is talking to it. Leaving GobboNet open therefore pins several gigabytes against nothing. After this many minutes with no messages the model is unloaded, and the next message reloads it &mdash; that reload takes as long as starting up does, so a shorter timeout trades waiting for memory. Set it to 0 to keep the model loaded always.</div>
+      <div class="standdown-row" id="standdown-row">
+        <input type="number" id="set-standdown-minutes" min="0" max="1440" step="1">
+        <span>minutes idle before unloading</span>
+        <button class="btn btn-sm" id="standdown-apply" onclick="applyStandDown()">APPLY</button>
+      </div>
+      <div class="standdown-status" id="standdown-status"></div>
+    </div>
+
     <div class="form-group" style="margin-top:12px; padding:12px; border:1px solid var(--green-dim); border-radius:var(--radius); background:rgba(0,255,65,0.03);">
       <label style="color:var(--green-neon);">&#128274; Privacy Status</label>
       <div class="form-hint" style="color:var(--green-dim);">
@@ -340,9 +386,9 @@
       </div>
       <div class="card-grid" id="card-grid"></div>
       <button class="btn btn-fill btn-block" onclick="createCard()" style="margin-bottom:8px;">+ NEW CHARACTER</button>
-      <label class="btn btn-block" style="margin-bottom:20px; cursor:pointer;" title="Import a SillyTavern / TavernAI character card (V1, V2 or V3) — .png, .json or .charx">
+      <label class="btn btn-block" style="margin-bottom:20px; cursor:pointer;" title="Import a SillyTavern / TavernAI character card (V1, V2 or V3) — .png, .json, .charx, or a .zip exported for Discord">
         &#8593; IMPORT CARD
-        <input type="file" accept=".png,.json,.charx,image/png,application/json" style="display:none" onchange="importCharacterCard(this)">
+        <input type="file" accept=".png,.jpg,.jpeg,.zip,.json,.charx,image/png,image/jpeg,application/zip,application/json" style="display:none" onchange="importCharacterCard(this)">
       </label>
 
       <div class="cast-divider"></div>
@@ -668,6 +714,7 @@ gobbo.every(5, async () =&gt; {
       <div class="modal-actions">
         <button class="btn btn-danger btn-sm" onclick="deleteCard()" id="card-delete-btn" style="margin-right:auto;">DELETE</button>
         <button class="btn" onclick="exportCardAsV3()" title="Export as a Character Card V3 PNG (also embeds a V2 chunk for backward compatibility)">EXPORT V3</button>
+        <button class="btn" onclick="exportCardForDiscord()" title="Export a .zip holding the card and its portrait. Post it as a FILE, not as an image: chat platforms re-encode uploaded images to resize them, which drops the character data a card PNG keeps. A zip is not an image, so it arrives intact. Rename it to .charx to import into other apps.">EXPORT FOR DISCORD</button>
         <button class="btn" onclick="cancelCardEdit()">Cancel</button>
         <button class="btn btn-fill" onclick="saveCard()">SAVE</button>
       </div>
@@ -742,6 +789,10 @@ gobbo.every(5, async () =&gt; {
     <div class="modal-actions" id="char-close-row">
       <button class="btn" onclick="closeCharacters()">CLOSE</button>
     </div>
+
+    <!-- Shown when a dismissal is refused, so the refusal is not silent.
+         Text is written by _charNotice() in js/22-scheduler.js. -->
+    <div class="char-dismiss-notice" id="char-dismiss-notice" role="status" aria-live="polite"></div>
   </div>
 </div>
 
@@ -933,6 +984,54 @@ gobbo.every(5, async () =&gt; {
       </div>
     </div>
 
+    <!-- SERVER PRESETS -->
+    <div class="data-section" id="server-presets-section">
+      <div class="data-section-header">&#9881; SERVER PRESETS</div>
+      <div class="data-section-body">
+        <div class="form-hint" style="margin-bottom:10px;">The <code>[ui]</code> section of <code>gobbonet.toml</code> can preset the things you would otherwise set by hand in CONFIG, for every device that opens this server. It is a starting point, not a lock: a device with no settings of its own takes these on its first visit, and a device that already has settings keeps them until you apply these here.</div>
+        <div id="server-presets-body"></div>
+        <details class="preset-key-list">
+          <summary>All settings you can preset</summary>
+          <div class="form-hint" style="margin:6px 0 8px;">Generated from this page, so it is never out of date. Either spelling works in the file &mdash; <code>stream_replies</code> or <code>streamReplies</code>.</div>
+          <div id="server-presets-keys"></div>
+        </details>
+      </div>
+    </div>
+
+    <!-- DEVICE SYNC -->
+    <div class="data-section">
+      <div class="data-section-header">&#8644; DEVICE SYNC</div>
+      <div class="data-section-body">
+        <div class="form-hint" style="margin-bottom:10px;">GobboNet keeps a copy of your chats on the server so a device that lands on a new address &mdash; a phone after the PC&rsquo;s IP changes, say &mdash; can be handed its history back instead of showing an empty chat. By default every device shares one copy. Give this device its own profile and it keeps that safety net without sharing a history with your other devices.</div>
+
+        <div id="sync-target-rows" class="sync-target-rows">
+          <label class="sync-target-row">
+            <input type="radio" name="sync-target-mode" value="shared" onchange="onSyncTargetModeChange()">
+            <span><strong>Shared</strong> &mdash; one history across every device <em>(default)</em></span>
+          </label>
+          <label class="sync-target-row">
+            <input type="radio" name="sync-target-mode" value="profile" onchange="onSyncTargetModeChange()">
+            <span><strong>Separate profile</strong> &mdash; this device keeps its own history on the server</span>
+          </label>
+          <div class="sync-profile-name" id="sync-profile-name-row">
+            <input type="text" id="sync-profile-name" placeholder="phone" maxlength="32"
+                   oninput="onSyncProfileNameInput()" autocomplete="off" spellcheck="false">
+            <button class="btn btn-sm" id="sync-profile-apply" onclick="onSyncTargetApply()">USE THIS PROFILE</button>
+          </div>
+          <div class="form-hint" id="sync-profile-hint" style="margin:0 0 8px 24px;">Lower-case letters, numbers, <code>-</code> and <code>_</code>. Up to 32 characters.</div>
+          <label class="sync-target-row">
+            <input type="radio" name="sync-target-mode" value="off" onchange="onSyncTargetModeChange()">
+            <span><strong>Off</strong> &mdash; this device only, nothing sent to the server</span>
+          </label>
+        </div>
+
+        <div id="sync-target-status" class="sync-target-status"></div>
+
+        <div class="data-section-subhead">On the server</div>
+        <div id="sync-profile-list" class="sync-profile-list"><div class="form-hint">Loading&hellip;</div></div>
+      </div>
+    </div>
+
     <!-- PURGE -->
     <div class="data-section data-section-danger">
       <div class="data-section-header" style="color:var(--red-neon);border-color:rgba(255,0,60,0.2);background:rgba(255,0,60,0.04);">&#128465; PURGE</div>
@@ -959,13 +1058,18 @@ gobbo.every(5, async () =&gt; {
     <h2>LORE SUMMARY</h2>
     <div class="form-hint" style="margin-bottom:14px;">
       The running plot log for this thread. One short beat is appended per compression
-      pass, never rewritten, so it only ever grows &mdash; steady growth is correct here.
+      pass, so it only ever grows on its own &mdash; steady growth is correct here.
       What to watch is the size of each addition: beats should be one sentence.
+      EDIT lets you correct it by hand; it feeds every later prompt, so a mistake in
+      here propagates rather than sitting still.
     </div>
     <div id="lore-inspect-body"></div>
     <div class="modal-actions">
-      <button class="btn" onclick="copyLoreSummary(this)">COPY SUMMARY</button>
-      <button class="btn btn-fill" onclick="closeLoreInspector()">CLOSE</button>
+      <button class="btn" id="lore-copy-btn" onclick="copyLoreSummary(this)">COPY SUMMARY</button>
+      <button class="btn" id="lore-edit-btn" onclick="startLoreEdit()" title="Correct the summary by hand. It feeds every later prompt, so a mistake in it propagates.">EDIT</button>
+      <button class="btn" id="lore-cancel-btn" onclick="cancelLoreEdit()" hidden>CANCEL</button>
+      <button class="btn btn-fill" id="lore-save-btn" onclick="saveLoreEdit()" hidden>SAVE</button>
+      <button class="btn btn-fill" id="lore-close-btn" onclick="closeLoreInspector()">CLOSE</button>
     </div>
   </div>
 </div>
@@ -981,6 +1085,24 @@ gobbo.every(5, async () =&gt; {
       </div>
 
       <div style="display:flex;flex-direction:column;gap:12px;font-size:13px;">
+
+        <!-- First, because it is what people open this panel to find. -->
+        <div class="about-build" id="about-build">
+          <div class="about-build-head">&#9432; THIS BUILD</div>
+          <!-- One line. There were three - Version, Page and Server - and in a
+               healthy install two of them showed the same number and the third
+               showed it again with build metadata after a dash. Three rows to
+               say one thing.
+
+               The page-versus-server distinction is not gone, it has moved to
+               where it earns its space: the warning below, which stays hidden
+               unless the two actually disagree. -->
+          <div class="about-build-rows">
+            <div class="about-build-row"><span>Version</span><b id="about-version">&hellip;</b></div>
+          </div>
+          <div class="about-build-warn" id="about-version-warn" hidden></div>
+          <button class="btn btn-sm" id="about-copy-btn" onclick="copyAboutDiagnostics(this)" title="Copy a short summary of this build to paste into a bug report">COPY BUILD INFO</button>
+        </div>
 
         <div style="padding:10px 12px;border:1px solid rgba(0,255,65,0.15);border-radius:var(--radius);background:rgba(0,255,65,0.03);">
           <div style="color:var(--green-neon);font-size:11px;font-weight:700;letter-spacing:1px;margin-bottom:6px;">&#128274; PRIVATE BY DESIGN</div>

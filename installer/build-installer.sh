@@ -92,15 +92,85 @@ if [ -z "$GOBBONET_EXE" ] || [ ! -f "$GOBBONET_EXE" ]; then
 fi
 cp "$GOBBONET_EXE" "$PAYLOAD/gobbonet.exe"
 
-# llama.cpp -- bundled, not downloaded. See the header comment in gobbonet.nsi.
+# ---------------------------------------------------------------------------
+# llama.cpp.
+#
+# Fetched and hash-checked against the shared pin at the repo root, the same
+# one build-deb.sh and build-rpm.sh read. Until 1.7.4 this side had NO pin: it
+# bundled whatever was sitting in vendor/, with a look for ggml-vulkan.dll as
+# the only check. An .exe and a .deb carrying the same version number could
+# therefore contain different engines, and nothing anywhere recorded which --
+# which is exactly the question you want answered when one platform reproduces
+# a bug and the other does not.
+#
 # Deliberately not $ROOT/vendor: a "vendor" directory at a Go module root is
 # reserved by the toolchain, and putting non-Go files there breaks go build.
-LLAMA_CPP="${LLAMA_CPP:-$(pwd)/vendor/llama-cpp}"
+# ---------------------------------------------------------------------------
+_env_llama_build="${LLAMA_BUILD:-}"
+[ -f "$ROOT/engine.sha256" ] && . "$ROOT/engine.sha256"
+LLAMA_BUILD="${_env_llama_build:-${LLAMA_BUILD:-b10456}}"
+WIN_GPU_SHA256="${WIN_GPU_SHA256:-}"
+LLAMA_ASSET="llama-${LLAMA_BUILD}-bin-win-vulkan-x64.zip"
+LLAMA_URL="https://github.com/ggml-org/llama.cpp/releases/download/${LLAMA_BUILD}/${LLAMA_ASSET}"
+
+VENDOR="$(pwd)/vendor"
+LLAMA_CPP="${LLAMA_CPP:-$VENDOR/llama-cpp}"
+
+# Only fetch when pointing at the default vendor location. Someone who passed
+# LLAMA_CPP=/somewhere has said which engine they mean, and downloading over
+# the top of it would be the opposite of what they asked for.
+if [ "$LLAMA_CPP" = "$VENDOR/llama-cpp" ]; then
+    mkdir -p "$VENDOR"
+    ARCHIVE="$VENDOR/$LLAMA_ASSET"
+    if [ ! -f "$ARCHIVE" ]; then
+        [ "${SKIP_ENGINE_FETCH:-0}" = "1" ] && {
+            echo "ERROR: $LLAMA_ASSET is missing and SKIP_ENGINE_FETCH=1" >&2
+            exit 1
+        }
+        echo "  fetching $LLAMA_ASSET"
+        curl -fL --retry 3 -o "$ARCHIVE.part" "$LLAMA_URL" || {
+            echo "ERROR: could not download $LLAMA_ASSET" >&2
+            echo "       $LLAMA_URL" >&2
+            exit 1
+        }
+        mv "$ARCHIVE.part" "$ARCHIVE"
+    fi
+
+    GOT="$(sha256sum "$ARCHIVE" | cut -d' ' -f1)"
+    if [ -z "$WIN_GPU_SHA256" ]; then
+        echo "ERROR: no pinned SHA-256 for $LLAMA_ASSET." >&2
+        echo "       Verify it against the release page, then record it in" >&2
+        echo "       engine.sha256 at the repo root as WIN_GPU_SHA256." >&2
+        echo "       The hash of what was just downloaded is:" >&2
+        echo "         $GOT" >&2
+        exit 1
+    fi
+    if [ "$GOT" != "$WIN_GPU_SHA256" ]; then
+        echo "ERROR: SHA-256 mismatch for $LLAMA_ASSET" >&2
+        echo "       expected $WIN_GPU_SHA256" >&2
+        echo "       got      $GOT" >&2
+        echo "       Either the pin is stale or the download is not what it claims." >&2
+        echo "       Delete $ARCHIVE and retry before changing the pin." >&2
+        exit 1
+    fi
+
+    # Re-extract every time. A directory left over from a previous build could
+    # be a different engine entirely, and the hash above only speaks for the
+    # archive.
+    rm -rf "$LLAMA_CPP"
+    mkdir -p "$LLAMA_CPP"
+    unzip -q -o "$ARCHIVE" -d "$LLAMA_CPP"
+    ENGINE_VERIFIED="yes (sha256 matches the pin)"
+else
+    # A hand-placed engine cannot be hashed against an archive nobody kept, so
+    # say so rather than implying a check that did not happen.
+    ENGINE_VERIFIED="NO -- LLAMA_CPP was set by hand, so the pin was not applied"
+fi
+
 if [ ! -f "$LLAMA_CPP/llama-server.exe" ]; then
     echo "ERROR: llama-server.exe not found under $LLAMA_CPP" >&2
     echo "       Download the Windows build and extract it there:" >&2
-    echo "         https://github.com/ggml-org/llama.cpp/releases" >&2
-    echo "         (the asset ending in -bin-win-vulkan-x64.zip)" >&2
+    echo "         $LLAMA_URL" >&2
     echo "       Or point at it:  LLAMA_CPP=/path/to/llama-cpp $0" >&2
     exit 1
 fi
@@ -127,13 +197,26 @@ fi
 
 mkdir -p "$PAYLOAD/llama-cpp"
 cp -r "$LLAMA_CPP/." "$PAYLOAD/llama-cpp/"
-echo "  engine:   $LLAMA_CPP ($LLAMA_BACKEND)"
 
-# Web assets. web/ is generated from the repo-root frontend rather than
-# committed -- see stage-web.sh -- so assemble it fresh rather than trusting
-# whatever a previous run left behind.
-"$ROOT/stage-web.sh"
-cp -r "$ROOT/web" "$PAYLOAD/web"
+# A marker that survives installation. Until now the bundled engine was
+# anonymous once installed: no file on a user's disk said which llama.cpp build
+# it was, so "which engine are you on?" had no answer short of hashing DLLs.
+cat > "$PAYLOAD/llama-cpp/ENGINE.txt" <<ENGINEEOF
+llama.cpp build: $LLAMA_BUILD
+asset:           $LLAMA_ASSET
+backend:         $LLAMA_BACKEND
+pinned hash:     ${WIN_GPU_SHA256:-none}
+verified:        $ENGINE_VERIFIED
+bundled by:      GobboNet $VERSION
+ENGINEEOF
+
+echo "  engine:   $LLAMA_BUILD ($LLAMA_BACKEND) -- $ENGINE_VERIFIED"
+
+# No web assets in the payload. The chat page is compiled into gobbonet.exe
+# (internal/webui), so it arrives with the binary -- which is the point: the
+# installer can no longer put a frontend and a server out of step, and neither
+# can a user replacing files afterwards. build-release.sh runs stage-web.sh
+# before building the .exe this script bundles.
 
 # Scripts kept from the Windows lineage. launch.bat still owns adding further
 # models; hardware-probe.ps1 is called by the installer's probe page.

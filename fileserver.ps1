@@ -101,6 +101,23 @@ $ListenPrefix = $(if ($env:GEMMA_LISTEN_PREFIX) { $env:GEMMA_LISTEN_PREFIX } els
 # other logs, and is removed by the uninstaller with them.
 # ---------------------------------------------------------------------------
 $StartupLog = Join-Path $Root 'fileserver.log'
+
+# The release this copy of the file came out of, read from the VERSION file the
+# rest of the build already treats as the single source of truth. A hardcoded
+# literal here would be a second one, and the two things in this project that
+# have gone stale on their own were both hardcoded version literals.
+#
+# 'unknown' rather than a guess when the file is absent: a wrong version is
+# worse than an admitted missing one, because the panel that reads it uses it
+# to tell the user what to update.
+$AppVersion = 'unknown'
+try {
+    $versionFile = Join-Path $Root 'VERSION'
+    if (Test-Path $versionFile -PathType Leaf) {
+        $raw = (Get-Content -Raw -LiteralPath $versionFile).Trim()
+        if ($raw) { $AppVersion = $raw }
+    }
+} catch { }
 try { Remove-Item -LiteralPath $StartupLog -Force -ErrorAction SilentlyContinue } catch { }
 function Say {
     param([string]$Msg, [string]$Colour = 'Gray')
@@ -2003,7 +2020,29 @@ while ($listener.IsListening) {
         # Order matters: more-specific prefixes must come before catch-alls.
 
         elseif ($path -eq '/health-fileserver') {
-            Write-Json $response 200 @{ status = 'ok'; pid = $PID; hotswap = $HotSwapEnabled }
+            # `server` and `version` were added in 1.7.5, and the reason is the
+            # chat page, not this file.
+            #
+            # This reply used to be {status, pid, hotswap}. The Go server's
+            # reply carries a version, so with no version here the ABOUT panel
+            # fell back to the PAGE's own build stamp and displayed it as the
+            # version of the whole install -- reporting a healthy 1.7.x while
+            # the server half in front of it was this script, which has none of
+            # that release's server-side features. At the same time the CONFIG
+            # panel saw /standdown 404 and told the reader their gobbonet binary
+            # was out of date and to replace it beside the web/ folder: an
+            # install made from the source ZIP has neither of those things.
+            #
+            # Both lies came from the page being unable to tell which program
+            # was answering it. So this one says so by name, and reports the
+            # version of the download it came out of.
+            Write-Json $response 200 @{
+                status  = 'ok'
+                server  = 'fileserver.ps1'
+                version = $AppVersion
+                pid     = $PID
+                hotswap = $HotSwapEnabled
+            }
         }
         elseif ($path -eq '/state' -or $path -like '/state/*') {
             Handle-State -Request $request -Response $response

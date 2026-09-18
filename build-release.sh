@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 #
-# Cross-compile gobbonet for every platform we hand to testers and bundle each
-# binary with the web assets it needs.
+# Cross-compile gobbonet for every platform we hand to testers. Since 1.7.5 each
+# binary CONTAINS the web assets it needs, so there is nothing to bundle beside
+# it but the fallback model catalogue.
 #
 #   ./build-release.sh              build dist/ for all platforms
 #   ./build-release.sh --allow-dirty  build anyway with an uncommitted tree
@@ -68,9 +69,15 @@ DIST="dist/$VERSION"
 rm -rf "$DIST"
 mkdir -p "$DIST"
 
-# The web assets ship with every platform. web/ is generated from the repo-root
-# frontend rather than committed -- see stage-web.sh for why -- so assemble it
-# fresh here instead of trusting whatever a previous run left behind.
+# Stage the frontend BEFORE the builds, because it is now an INPUT to them:
+# internal/webui compiles it into every binary with go:embed. It used to be a
+# copy step that ran alongside the build and produced a web/ directory shipped
+# beside the executable -- which is how a user could end up with a new page and
+# an old server, or the reverse, and no way to tell.
+#
+# A build that skips this produces binaries with no chat page in them.
+# webui.Staged() reports that and the server refuses to serve, rather than
+# starting up and answering 404 for everything.
 ./stage-web.sh
 
 echo "building $VERSION with $($GO version)"
@@ -84,7 +91,6 @@ for target in linux/amd64 linux/arm64 windows/amd64 darwin/arm64 darwin/amd64; d
 
     stage="$DIST/gobbonet-$VERSION-$GOOS-$GOARCH"
     mkdir -p "$stage"
-    cp -r web "$stage/web"
     cp docs/GO_SERVER.md "$stage/README.md"
 
     # The fallback model catalogue. catalog.Discover() looks beside the binary,

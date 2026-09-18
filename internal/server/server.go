@@ -25,6 +25,7 @@ package server
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"net"
 	"net/http"
@@ -52,6 +53,13 @@ type Server struct {
 	cfg  config.Config
 	mode config.Mode
 
+	// web is the frontend: the copy built into the binary, or a disk directory
+	// layered over it when web_root names one. Resolved once in New rather than
+	// looked up per request, so a request can never be served by a different
+	// frontend than the one the boot banner described. See webroot.go.
+	web    fs.FS
+	webSrc webSource
+
 	sessions *auth.SessionStore
 	limiter  *auth.LoginLimiter
 	info     *models.Info
@@ -61,7 +69,10 @@ type Server struct {
 	// read off cfg because /perf changes it while the server runs.
 	tuning *tuning
 
-	llmProxy    *proxy.Proxy
+	llmProxy *proxy.Proxy
+	// standDown is the idle timer's mutable timeout plus its stop channel.
+	// See standdown.go.
+	standDown   standDown
 	searchProxy *proxy.Proxy
 	embedProxy  *proxy.Proxy
 
@@ -111,9 +122,16 @@ type Server struct {
 // New builds a Server. sup may be nil, which selects remote mode behaviour for
 // the swap routes.
 func New(cfg config.Config, mode config.Mode, sup *supervisor.Supervisor) (*Server, error) {
+	webSrc, err := resolveWeb(cfg)
+	if err != nil {
+		return nil, err
+	}
+
 	s := &Server{
 		cfg:      cfg,
 		mode:     mode,
+		web:      webSrc.FS,
+		webSrc:   webSrc,
 		sessions: auth.NewSessionStore(cfg.SessionTTLHours),
 		limiter:  auth.NewLoginLimiter(),
 		sup:      sup,
@@ -130,7 +148,6 @@ func New(cfg config.Config, mode config.Mode, sup *supervisor.Supervisor) (*Serv
 
 	s.jobs = jobs.NewManager(cfg.LLMURL, cfg.LLMAPIKey, cfg.JobMaxConcurrent, cfg.JobMaxAgeHours)
 
-	var err error
 	// Only the LLM upstream gets the API key: it is the one we authenticate to.
 	if s.llmProxy, err = proxy.New("/llm", cfg.LLMURL, cfg.LLMAPIKey); err != nil {
 		return nil, fmt.Errorf("llm_url: %w", err)
@@ -142,6 +159,11 @@ func New(cfg config.Config, mode config.Mode, sup *supervisor.Supervisor) (*Serv
 		return nil, fmt.Errorf("embed_url: %w", err)
 	}
 
+	// Started here rather than at Boot: the timer has to be running before the
+	// first request arrives, and a Server built by a test harness with no
+	// supervisor is a no-op inside it.
+	s.startStandDownWatch()
+
 	return s, nil
 }
 
@@ -150,6 +172,7 @@ func (s *Server) Info() *models.Info { return s.info }
 
 // Shutdown releases everything the server owns.
 func (s *Server) Shutdown() {
+	s.stopStandDownWatch()
 	s.jobs.Shutdown()
 	if s.sup != nil {
 		s.sup.Shutdown()
@@ -205,7 +228,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	case path == "/favicon.ico" && !s.authenticated(r):
 		// Served without auth purely so the login tab isn't ugly.
-		static.Serve(w, r, s.cfg.WebRoot, "/favicon.ico")
+		static.Serve(w, r, s.web, "/favicon.ico")
 		return
 	}
 
@@ -246,11 +269,30 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case path == "/model-download":
 		s.handleModelDownload(w, r)
 
+	case path == "/ui-defaults.json":
+		// The [ui] table from the config file, handed to the chat page as-is.
+		// The server does not interpret it: the keys are the frontend's own
+		// settings and the frontend is the only place that knows which exist
+		// and what type each should be. Validating here would mean a second
+		// list of every setting, kept in step by hand.
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			httpx.Error(w, r, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		ui := s.cfg.UI
+		if ui == nil {
+			ui = map[string]any{}
+		}
+		httpx.WriteJSON(w, r, http.StatusOK, map[string]any{"ui": ui})
+
 	case path == "/state" || strings.HasPrefix(path, "/state/"):
 		state.Handle(w, r, s.cfg.StatePath())
 
 	case path == "/perf":
 		s.handlePerf(w, r)
+
+	case path == "/standdown":
+		s.handleStandDown(w, r)
 
 	// Wrapped rather than delegated straight through: the model about to be
 	// launched may have a published ctx/kv, and this is the only point at which
@@ -265,10 +307,16 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// llama.cpp's. Living under /llm keeps the client's relative addressing
 	// (and the session cookie) working unchanged.
 	case path == "/llm/jobs" || strings.HasPrefix(path, "/llm/jobs/"):
-		s.jobs.Handle(w, r)
+		// Wrapped for the same reason as the proxy below: this is the route the
+		// chat page actually generates through, so it is the one that has to
+		// mark activity and wake a stood-down model. See standdown.go.
+		s.serveLLMJobs(w, r)
 
 	case path == "/llm" || strings.HasPrefix(path, "/llm/"):
-		s.llmProxy.ServeHTTP(w, r)
+		// Wrapped rather than proxied straight through: the model may have
+		// been unloaded to free VRAM, in which case it is reloaded before the
+		// request is forwarded. See standdown.go.
+		s.serveLLMProxy(w, r)
 
 	case path == "/search" || strings.HasPrefix(path, "/search/"):
 		s.handleSearch(w, r, path)
@@ -279,7 +327,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.embedProxy.ServeHTTP(w, r)
 
 	default:
-		static.Serve(w, r, s.cfg.WebRoot, path)
+		static.Serve(w, r, s.web, path)
 	}
 }
 
@@ -488,7 +536,19 @@ func (s *Server) handleModelsList(w http.ResponseWriter, r *http.Request) {
 // debug.
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	body := map[string]any{
-		"status":      "ok",
+		"status": "ok",
+		// WHICH PROGRAM IS ANSWERING. Two different servers can be in front of
+		// the same chat page: this one, and the older fileserver.ps1 that
+		// launch.bat starts on Windows. They have different capabilities —
+		// /standdown exists only here — and the page used to have to guess
+		// which it was talking to by watching a route 404.
+		//
+		// It guessed wrong in the most common case and gave advice that could
+		// not be followed. So each server now says what it is, by name. The
+		// page keeps the old fallback too (a reply with no `version` is the
+		// PowerShell server from before it learned to introduce itself), but
+		// this is the field that answers the question outright.
+		"server":      "gobbonet",
 		"version":     version.String(),
 		"pid":         os.Getpid(),
 		"hotswap":     s.sup != nil,

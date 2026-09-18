@@ -199,6 +199,13 @@ function applyLoadedState(saved) {
       }
 
       state.activeThreadId = saved.activeThreadId || null;
+      // Whether this device has ever chosen for itself. Read once, by the
+      // server-preset seed in js/21-data.js: presets are taken by a device
+      // with nothing of its own, and only offered to one that has settings
+      // already. Recorded here because this is the only place that can tell
+      // the difference — by the time boot looks, state.settings is populated
+      // either way.
+      hadOwnSettings = !!(saved.settings && Object.keys(saved.settings).length);
       state.settings = { ...DEFAULT_SETTINGS, ...(saved.settings || {}) };
       state.sidebarOpen = saved.sidebarOpen !== undefined ? saved.sidebarOpen : true;
       state.characterCards = saved.characterCards || [{ ...DEFAULT_CARD }];
@@ -627,7 +634,7 @@ function writeFullToIdb(blob) {
                        'on-disk server backup remains the source of truth.');
         }
         storageQuotaHit = true;
-        if (STATE_SYNC_AVAILABLE) { stateSync.status = 'quota'; updateSyncIndicator(); }
+        if (syncEnabled()) { stateSync.status = 'quota'; updateSyncIndicator(); }
       } else {
         console.warn('[storage] IndexedDB full save failed:', e && e.message);
       }
@@ -735,7 +742,7 @@ function saveState(opts) {
                      'Reload to pull the full history back.');
       }
       storageQuotaHit = true;
-      if (STATE_SYNC_AVAILABLE) { stateSync.status = 'quota'; updateSyncIndicator(); }
+      if (syncEnabled()) { stateSync.status = 'quota'; updateSyncIndicator(); }
     } else {
       console.error('Failed to save state to localStorage:', e);
     }

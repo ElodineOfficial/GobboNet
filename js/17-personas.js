@@ -99,6 +99,9 @@ function editPersona(id) {
   document.getElementById('char-close-row').style.display = 'none';
   document.getElementById('persona-delete-btn').style.display = state.personaCards.length > 1 ? '' : 'none';
   previewAvatar('persona-avatar', 'persona-avatar-preview');
+  // Clean snapshot, taken once the fields are populated -- same contract as
+  // the character editor. See charEditorOpened in js/22-scheduler.js.
+  charEditorOpened();
 }
 
 function savePersona() {
@@ -114,6 +117,7 @@ function savePersona() {
   persona.dialogColor = document.getElementById('persona-dialogcolor').value;
   editingPersonaId = null;
   saveState();
+  charEditorClosed();
   document.getElementById('persona-editor').style.display = 'none';
   document.getElementById('char-modal-list').style.display = '';
   document.getElementById('char-close-row').style.display = '';
@@ -122,6 +126,10 @@ function savePersona() {
 }
 
 function cancelPersonaEdit() {
+  // Same guard the character editor's Cancel goes through, for the same
+  // reason: this is the destructive way out, and it used to be the one that
+  // asked nothing.
+  if (!charDismissGuard()) return;
   // Discard a freshly-created persona that the user backed out of without
   // touching anything — matches the same nicety we have for character cards.
   const persona = state.personaCards.find(p => p.id === editingPersonaId);
@@ -130,6 +138,7 @@ function cancelPersonaEdit() {
     saveState();
   }
   editingPersonaId = null;
+  charEditorClosed();
   document.getElementById('persona-editor').style.display = 'none';
   document.getElementById('char-modal-list').style.display = '';
   document.getElementById('char-close-row').style.display = '';
@@ -143,6 +152,7 @@ function deletePersona() {
   if (state.activePersonaId === editingPersonaId) state.activePersonaId = state.personaCards[0].id;
   editingPersonaId = null;
   saveState();
+  charEditorClosed();
   document.getElementById('persona-editor').style.display = 'none';
   document.getElementById('char-modal-list').style.display = '';
   document.getElementById('char-close-row').style.display = '';

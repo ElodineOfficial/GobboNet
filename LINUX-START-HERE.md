@@ -1,8 +1,14 @@
-# GobboNet 1.7.3 — Linux installer revision 3
+# GobboNet 1.7.5 — Linux
 
-Install the Debian package with `sudo apt install ./gobbonet_1.7.3+go.nogit.20260908-3_amd64.deb`, then run `gobbonet` as your normal user or select GobboNet in the application menu.
+Install the Debian package with `sudo apt install ./gobbonet_1.7.5+go.nogit.*_amd64.deb`, then run `gobbonet` as your normal user or select GobboNet in the application menu.
 
 For the ZIP, extract it, open a terminal in GobboNet and run `./gobbonet`. The ZIP includes a Linux amd64 runtime and the editable source. It needs Python 3.8+, Bash, coreutils, xdg-utils and the same engine libraries listed in the Debian package. Keep the extracted folder in place while using it. Do not run the application with sudo.
+
+## Updating
+
+Replace the `linux-amd64` folder with the one from the new ZIP, or install the new package over the old one. The chat page is compiled into `linux-amd64/gobbonet`, so that single binary carries both halves of the app and they cannot go out of step.
+
+Editing `chat.html`, `js/` or `css/` at the root of the ZIP changes nothing by itself — they are the *source* of the page, and it is built in at compile time. To run your own copy, put the files you want to change in a folder of your own and `gobbonet config set web_root /path/to/that/folder`; files you do not include still come from the binary. Older versions of the launcher wrote a `web_root` line into your config automatically, pointing at the packaged `web/` folder; this release clears that line and says so, because leaving it would serve you the previous version's page forever.
 
 ## First launch
 
@@ -29,7 +35,7 @@ For the ZIP, substitute `./gobbonet` in those commands. Launch errors and URLs a
 
 ## Changes and validation
 
-This is a launcher/packaging revision. The supplied Go server binary and pinned llama.cpp b10456 engine are retained; neither was recompiled. Windows installer files are unchanged. The Linux Python setup shell uses the existing Go wizard APIs for password hashing and model downloads, with added screens and completion checks.
+1.7.5 rebuilds the Go server binary: the frontend is now compiled into it, and there is no packaged `web/` directory any more. The pinned llama.cpp b10456 engine is retained and was not recompiled. The Windows side gains `gobbonet.exe` in the ZIP, which it never carried before. The Linux Python setup shell uses the existing Go wizard APIs for password hashing and model downloads, with added screens and completion checks.
 
 Fixed: command bypassing setup/browser launch; engine shared-library discovery; stale setup URL on retries; suppressed terminal output; premature 30-second startup timeout; accepting a missing/failed model at Finish; optional Nomic download and launch; child cleanup on interruption.
 

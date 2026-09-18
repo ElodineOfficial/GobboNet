@@ -26,6 +26,15 @@ function openSettings() {
   // saved before this option existed streams as it always did instead of
   // silently switching the user to held replies on upgrade.
   document.getElementById('set-stream-replies').checked = (state.settings.streamReplies !== false);
+  // Same `!== false` reason as above: absent means sticky, which is what
+  // every install that predates this option already had.
+  document.getElementById('set-sticky-cards').checked = (state.settings.stickyCards !== false);
+  // autoScrollMode() owns the "what counts as valid" rule, so an unrecognised
+  // stored value checks the same radio here that it will actually behave as.
+  document.querySelectorAll('input[name="set-auto-scroll"]').forEach(el => {
+    el.checked = (el.value === autoScrollMode());
+  });
+  loadStandDownPanel();
   document.getElementById('avatar-scale-val').textContent = Math.round(aScale * 100) + '%';
   // The Add a Model button needs a server to download with; in file:// mode it
   // is hidden with an explanation instead. Runs on open rather than at boot so
@@ -48,6 +57,16 @@ function saveSettings() {
   state.settings.avatarScale = parseFloat(document.getElementById('set-avatar-scale').value) || 1;
   state.settings.allowRemoteImages = document.getElementById('set-allow-remote-images').checked;
   state.settings.streamReplies = document.getElementById('set-stream-replies').checked;
+  state.settings.stickyCards = document.getElementById('set-sticky-cards').checked;
+  const scrollPick = document.querySelector('input[name="set-auto-scroll"]:checked');
+  if (scrollPick && AUTO_SCROLL_MODES.indexOf(scrollPick.value) >= 0) {
+    state.settings.autoScroll = scrollPick.value;
+  }
+  // Switching to 'always' while a reply is mid-flight would otherwise wait for
+  // the next scroll event to re-pin, which never comes if the user is sitting
+  // still. Re-pin now so the change takes effect on the very next chunk.
+  if (state.settings.autoScroll === 'always') scrollPinnedToBottom = true;
+  updateFollowButton();
   saveState();
   closeSettings();
   renderMessages();
@@ -79,6 +98,7 @@ let editingCardId = null;
 function openCharacters() {
   editingCardId = null;
   editingPersonaId = null;
+  charEditorClosed();
   document.getElementById('card-editor').style.display = 'none';
   document.getElementById('persona-editor').style.display = 'none';
   document.getElementById('char-modal-list').style.display = '';
@@ -89,6 +109,7 @@ function openCharacters() {
 }
 
 function closeCharacters() {
+  charEditorClosed();
   document.getElementById('char-modal').classList.remove('open');
   applyActiveCardBackground();
   renderMessages();
@@ -208,6 +229,7 @@ function renderCardGrid() {
       <div class="card-actions">
         <button class="msg-action-btn btn-edit" onclick="event.stopPropagation();editCard('${escapeJsAttr(c.id)}')">Edit</button>
         <button class="msg-action-btn" onclick="event.stopPropagation();copyCard('${escapeJsAttr(c.id)}')" title="Duplicate this character">Copy</button>
+        <button class="msg-action-btn" onclick="event.stopPropagation();exportCharacter('${escapeJsAttr(c.id)}')" title="Export this character as JSON — GobboNet's own format, nothing lost. For sharing with other apps, open Edit and use EXPORT V3 or FOR SHARING.">Save</button>
         ${state.characterCards.length > 1 ? `<button class="msg-action-btn btn-delete" onclick="event.stopPropagation();deleteCardById('${escapeJsAttr(c.id)}')" title="Delete this character">Del</button>` : ''}
       </div>
     </div>`;
@@ -358,6 +380,11 @@ function editCard(id) {
   updateCardCodeStatus();
   previewAvatar('card-avatar', 'card-avatar-preview');
   previewBg();
+  // Snapshot AFTER every field is populated, so "clean" means "exactly as
+  // loaded". A card the user created and has not typed into is clean, and
+  // backing out of it costs no confirm. See charEditorOpened in
+  // js/22-scheduler.js.
+  charEditorOpened();
 }
 
 function saveCard() {
@@ -415,6 +442,7 @@ function saveCard() {
   if (_wasActive) {
     try { applyCardCode(); } catch (e) { console.error('[card-code]', e); }
   }
+  charEditorClosed();
   document.getElementById('card-editor').style.display = 'none';
   document.getElementById('char-modal-list').style.display = '';
   document.getElementById('char-close-row').style.display = '';
@@ -466,12 +494,18 @@ async function populateLoreModelSelect(selected) {
 }
 
 function cancelCardEdit() {
+  // Cancel is a deliberate action, so sticky does not apply -- but it is the
+  // most destructive way out of the editor, and until now it was the only one
+  // that asked nothing. The backdrop and Escape were both refused to protect
+  // these edits while the UI pointed at a button that dropped them silently.
+  if (!charDismissGuard()) return;
   const card = state.characterCards.find(c => c.id === editingCardId);
   if (card && !card.writingStyle && card.name === 'New Character') {
     state.characterCards = state.characterCards.filter(c => c.id !== editingCardId);
     saveState();
   }
   editingCardId = null;
+  charEditorClosed();
   document.getElementById('card-editor').style.display = 'none';
   document.getElementById('char-modal-list').style.display = '';
   document.getElementById('char-close-row').style.display = '';
@@ -491,6 +525,7 @@ function deleteCard() {
   if (state._cardCodeStore) delete state._cardCodeStore[_deletedId];
   saveState();
   try { applyCardCode(); } catch (e) { console.error('[card-code]', e); }
+  charEditorClosed();
   document.getElementById('card-editor').style.display = 'none';
   document.getElementById('char-modal-list').style.display = '';
   document.getElementById('char-close-row').style.display = '';
@@ -533,4 +568,178 @@ function updateCardCtxHint() {
          + ceiling.toLocaleString() + ')';
   }
   el.textContent = msg + '. 90% is the input budget; the rest is reply headroom.';
+}
+
+/* ================================================================
+   IDLE STAND-DOWN PANEL
+
+   The only setting in CONFIG that lives on the SERVER rather than in
+   state.settings, and it has to: the case it exists for is the browser being
+   closed, and a tab that has been shut cannot run a timer. So this reads and
+   writes /standdown instead of the settings object, and unlike everything else
+   in this modal it applies on its own button rather than on SAVE — a value the
+   server owns should not be written by a panel that is mostly about the
+   browser's own preferences.
+================================================================ */
+
+/** The release half of a version string: "1.7.5" out of "1.7.5-go-afb7e0d".
+ *
+ *  A local copy rather than a call to _releaseOf(), which lives in
+ *  js/22-scheduler.js and therefore loads after this file. At runtime that
+ *  would be fine; it is the panel's own test, which evaluates this section on
+ *  its own, that would be reaching for something that is not there. */
+function _sdRelease(v) {
+  return String(v || '').split('-')[0].trim();
+}
+
+function _standDownStatus(msg, tone) {
+  const el = document.getElementById('standdown-status');
+  if (!el) return;
+  el.textContent = msg || '';
+  if (tone) el.dataset.tone = tone; else delete el.dataset.tone;
+}
+
+/** Fill the panel from the server.
+ *
+ *  This used to hide the whole section unless the server manages llama.cpp,
+ *  on the reasoning that a switch which cannot do anything gets blamed when
+ *  the VRAM stays pinned. That reasoning was not wrong, but it traded one
+ *  problem for a worse one: an invisible feature is indistinguishable from a
+ *  feature that was never built, and the first thing it produced was someone
+ *  opening CONFIG, finding nothing, and asking whether it had been implemented
+ *  at all.
+ *
+ *  So the section is always visible, and when it cannot work it says why and
+ *  disables the control. Nobody flips a switch that does nothing, and nobody
+ *  is left wondering whether the switch exists.
+ *
+ *  WHY IT ASKS /health-fileserver FIRST. It used to infer everything from one
+ *  request: if /standdown did not answer, it said the server was older than
+ *  these web files and told the reader to replace the gobbonet program file
+ *  beside web/. That was a guess off a 404, and on the most common Windows
+ *  setup it was wrong in a way the reader could not act on -- GobboNet started
+ *  from launch.bat is served by fileserver.ps1, which has no /standdown and
+ *  never will, and an install made from the source ZIP has no gobbonet program
+ *  file and no web/ folder to put one beside. The advice named two things that
+ *  were not there.
+ *
+ *  /health-fileserver is answered by BOTH servers and only the Go one reports a
+ *  version, so it is what actually distinguishes them. Ask it first, and every
+ *  branch below can say something true. */
+async function loadStandDownPanel() {
+  const group = document.getElementById('standdown-group');
+  if (!group) return;
+  group.style.display = '';
+
+  const input = document.getElementById('set-standdown-minutes');
+  const apply = document.getElementById('standdown-apply');
+  const disable = (why) => {
+    if (input) { input.disabled = true; input.value = ''; }
+    if (apply) apply.disabled = true;
+    _standDownStatus(why);
+  };
+
+  if (!IS_SERVED) {
+    disable('Opened from a file rather than the GobboNet server, so there is nothing here to unload.');
+    return;
+  }
+
+  // WHICH SERVER IS THIS. Both answer here; only the Go server carries a
+  // version, which is the one field that tells the two apart.
+  let health = null;
+  try {
+    const hr = await fetch(window.location.origin + '/health-fileserver', { cache: 'no-store' });
+    if (hr.ok) health = await hr.json();
+  } catch (e) { /* handled below, together with an unreachable /standdown */ }
+
+  // Two ways to recognise the PowerShell file server, because there are two
+  // vintages of it in the wild. Since 1.7.5 it names itself; before that, the
+  // absence of a version is the tell, since the Go server has always sent one.
+  const isLegacyServer = !!health &&
+    (health.server === 'fileserver.ps1' || !health.version);
+
+  if (isLegacyServer) {
+    // The PowerShell file server. It can start and stop llama-server for a
+    // model swap, so this is a gap rather than an impossibility -- but it is a
+    // gap in a different program, and the fix is to run the other one.
+    disable('GobboNet is being served by the older PowerShell file server (fileserver.ps1), ' +
+            'which does not have idle stand-down. To get it, start GobboNet with the gobbonet ' +
+            'program file in your GobboNet folder instead of launch.bat. Everything else works ' +
+            'the same, and the chat page is built into that program file, so there is nothing ' +
+            'else to update.');
+    return;
+  }
+
+  try {
+    const resp = await fetch(window.location.origin + '/standdown', { cache: 'no-store' });
+    if (resp.status === 404) {
+      // A Go server too old to have the route. Now that the chat page ships
+      // inside the program file, this means one specific thing and the advice
+      // is one specific action.
+      const was = (health && health.version) ? ' This one is ' + _sdRelease(health.version) + '.' : '';
+      disable('This version of the GobboNet program file does not have the idle stand-down ' +
+              'setting; it arrived in 1.7.4.' + was + ' Replace the gobbonet program file in your ' +
+              'GobboNet folder with the one from the download \u2014 the chat page is built into it, ' +
+              'so that single file is the whole update. The timer runs in the server, not the ' +
+              'browser: nothing here can unload a model while the page is closed, which is the ' +
+              'case it exists for.');
+      return;
+    }
+    if (!resp.ok) {
+      disable('The server could not read this setting (error ' + resp.status + ').');
+      return;
+    }
+    const data = await resp.json();
+
+    if (!data || !data.supported) {
+      // Remote mode: llama.cpp belongs to someone else, and stopping it is not
+      // ours to do. Worth naming, because "why is this greyed out" has a real
+      // answer and it is one the user can act on if they want to.
+      disable('This GobboNet is pointed at a llama.cpp running somewhere else, so it cannot unload it \u2014 that process belongs to whoever started it. Idle stand-down only works when GobboNet runs the model itself.');
+      return;
+    }
+
+    if (input) input.disabled = false;
+    if (apply) apply.disabled = false;
+    if (input) input.value = (typeof data.minutes === 'number') ? data.minutes : 5;
+    if (data.stood_down) {
+      _standDownStatus('The model is unloaded right now. Your next message will reload it.');
+    } else if (!data.minutes) {
+      _standDownStatus('Off \u2014 the model stays loaded until GobboNet closes.');
+    } else {
+      _standDownStatus('');
+    }
+  } catch (e) {
+    disable('Could not reach the server to read this setting.');
+  }
+}
+
+async function applyStandDown() {
+  const input = document.getElementById('set-standdown-minutes');
+  if (!input) return;
+  const minutes = Math.max(0, Math.min(1440, parseInt(input.value, 10) || 0));
+  input.value = minutes;
+  try {
+    const resp = await fetch(window.location.origin + '/standdown', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ minutes })
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) {
+      _standDownStatus(data.error || 'Could not change the setting.', 'err');
+      return;
+    }
+    const where = minutes === 0
+      ? 'Off \u2014 the model stays loaded until GobboNet closes.'
+      : 'Saved. The model unloads after ' + minutes + ' minute' + (minutes === 1 ? '' : 's') + ' idle.';
+    // persisted comes back false when the config file could not be written —
+    // a read-only install, say. Claiming a save that did not happen would send
+    // the user away believing it survives a restart.
+    _standDownStatus(where + (data.persisted === false
+      ? ' (applied for now, but the config file could not be written, so it will revert on restart.)'
+      : ''), data.persisted === false ? 'err' : 'ok');
+  } catch (e) {
+    _standDownStatus('Could not reach the server.', 'err');
+  }
 }

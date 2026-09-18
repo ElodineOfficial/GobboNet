@@ -45,11 +45,41 @@ func terminateGroup(pgid int, force bool) error {
 	if pgid <= 0 {
 		return nil
 	}
-	args := []string{"/PID", strconv.Itoa(pgid), "/T"}
-	if force {
-		args = append(args, "/F")
+	// THE POLITE ATTEMPT CANNOT WORK HERE, so it is not allowed to cost time.
+	//
+	// `taskkill /PID n /T` without /F asks by posting WM_CLOSE, which needs a
+	// window and a message loop. llama-server is a console program started
+	// detached; it has neither, so the request is always refused with exit 255.
+	//
+	// The caller does not know that. It treated the refusal as "maybe it is
+	// shutting down", waited its five-second grace period, tried again, waited
+	// again, and only then forced -- so in a real session every model swap cost
+	// about eleven extra seconds and printed two lines that read like failures:
+	//
+	//   [swap] SIGTERM to process group failed: exit status 255
+	//   [swap] llama-server did not exit in 5s; forcing
+	//   [swap] SIGTERM to process group failed: exit status 255
+	//   [swap] process group 10104 outlived SIGTERM; forcing
+	//
+	// Nothing was wrong. So the polite form is still tried -- a future
+	// llama-server with a message loop would honour it -- but a refusal
+	// escalates here and now instead of being reported upwards as trouble.
+	polite := exec.Command("taskkill", "/PID", strconv.Itoa(pgid), "/T").Run()
+	if polite == nil || !groupAlive(pgid) {
+		return nil
 	}
-	err := exec.Command("taskkill", args...).Run()
+	if !force {
+		// Escalate immediately rather than handing back an error that buys a
+		// grace period the process was never going to use.
+		if err := exec.Command("taskkill", "/PID", strconv.Itoa(pgid), "/T", "/F").Run(); err != nil {
+			if !groupAlive(pgid) {
+				return nil
+			}
+			return err
+		}
+		return nil
+	}
+	err := exec.Command("taskkill", "/PID", strconv.Itoa(pgid), "/T", "/F").Run()
 	if err != nil && !groupAlive(pgid) {
 		return nil
 	}

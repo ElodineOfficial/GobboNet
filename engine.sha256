@@ -1,0 +1,28 @@
+# Pinned llama.cpp engine — the build BOTH installers bundle.
+#
+# Moved here from installer-linux/ in 1.7.4. It was only ever read by the deb
+# build, and the Windows installer had no pin at all: it bundled whatever
+# happened to be sitting in installer/vendor/, with a heuristic look for
+# ggml-vulkan.dll as the only check. That meant the .exe and the .deb carrying
+# the same version number could contain different engines, and nothing anywhere
+# recorded which. A shared pin at the repo root is the same rule VERSION
+# already follows — one literal, read by every builder.
+#
+# Bumping LLAMA_BUILD means updating every hash below in the same commit. That
+# is the point of pinning: a deliberate change, not a silent fetch of whatever
+# upstream published this morning.
+#
+# Verified against https://github.com/ggml-org/llama.cpp/releases/tag/b10456
+#
+# Asset naming differs per platform and is not guessable from one to the other:
+# Linux archives are .tar.gz and the CPU one is "-bin-ubuntu-x64" rather than
+# "-bin-ubuntu-cpu-x64"; the Windows archive is .zip and "-bin-win-vulkan-x64".
+LLAMA_BUILD=b10456
+
+# Linux (installer-linux/build-deb.sh)
+GPU_SHA256=856fcfe9b273e6e813c8d5745396693080ce1cca8134b1180f0e8e2f22b21772
+CPU_SHA256=d07b3f80f3a1ed1de46bfba5671b4af40a87417e1dbf35d0603ad2d623ddc577
+
+# Windows (installer/build-installer.sh)
+# llama-b10456-bin-win-vulkan-x64.zip
+WIN_GPU_SHA256=60f3d31cc7c2fe62de8f34f8d75ffd06655b4de83bcc5aa6f08df56be42ebb91

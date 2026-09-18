@@ -12,7 +12,40 @@
    pinned at the bottom. If the user scrolled up to read history,
    they stay put and chunks pass underneath until they scroll back
    down — no button, no opt-in, just respect the user's position.
+
+   ── AND IT IS NOW OPTIONAL ──────────────────────────────────────
+   "Smart" is a guess about intent, and a guess can be wrong in two
+   opposite directions. It can hold on too long, so a reply drags the
+   viewport around while you are trying to read something further up.
+   It can also let go too easily — the touch-to-unfollow below fires
+   on ANY touch during generation, which is deliberate and which also
+   means a tap to dismiss the keyboard stops the follow you wanted.
+
+   One setting, three values, because those are the two failure
+   directions plus the thing in the middle:
+
+     'smart'  (default) exactly what this file has always done.
+     'always' follow and never let go.
+     'off'    never move the viewport on its own.
+
+   Everything user-INITIATED still scrolls in every mode. Sending a
+   message and not being shown it is not a scrolling preference, it
+   is a broken app.
 ================================================================ */
+
+const AUTO_SCROLL_MODES = ['smart', 'always', 'off'];
+
+/** The active mode, defaulting to 'smart'.
+ *
+ *  Every read of the setting goes through here. An absent value (an install
+ *  that predates the option) and a nonsense one both have to land on 'smart',
+ *  and doing that in one place is the difference between one rule and four
+ *  chances to get it wrong. */
+function autoScrollMode() {
+  const v = (typeof state !== 'undefined' && state && state.settings)
+    ? state.settings.autoScroll : null;
+  return AUTO_SCROLL_MODES.indexOf(v) >= 0 ? v : 'smart';
+}
 
 /** Attach the page-level scroll listener that maintains scrollPinnedToBottom.
  *  Idempotent: the messages container survives across renders (we only
@@ -27,7 +60,10 @@ function attachScrollPinTracking() {
     // one message row of slack, enough to absorb sub-pixel rounding and
     // small layout shifts without flipping the pin spuriously.
     const dist = container.scrollHeight - container.scrollTop - container.clientHeight;
-    scrollPinnedToBottom = dist < 32;
+    // 'always' means the user has asked not to be let go of, so scrolling up
+    // does not unpin. The next streaming tick pulls the viewport back down,
+    // which IS the behaviour being asked for and not a bug to route around.
+    scrollPinnedToBottom = (autoScrollMode() === 'always') ? true : dist < 32;
     updateFollowButton();
   }, { passive: true });
 
@@ -43,6 +79,9 @@ function attachScrollPinTracking() {
   // normal scrolling is left untouched. The listener is passive (we never
   // preventDefault); native scrolling and text selection still work.
   container.addEventListener('touchstart', () => {
+    // Only 'smart' interprets a touch as intent. 'always' never lets go by
+    // design, and in 'off' there is no follow to stop.
+    if (autoScrollMode() !== 'smart') return;
     if (!isGenerating || !scrollPinnedToBottom) return;
     // One touch on the stream = stop following, deterministically. The part
     // that makes this stick is the pin re-check inside scrollToBottom()'s
@@ -66,6 +105,15 @@ function attachScrollPinTracking() {
  *  scrollToBottom() itself still does the work when we are pinned —
  *  this is just a guarded delegate. */
 function autoScrollToBottom() {
+  const mode = autoScrollMode();
+  if (mode === 'off') return;              // the viewport is the user's alone
+  if (mode === 'always') {
+    // Forced, with no respectPin: the whole point of this mode is that the
+    // pin cannot be lost, so re-checking it two frames later would reintroduce
+    // exactly the letting-go this mode exists to prevent.
+    scrollToBottom();
+    return;
+  }
   if (!scrollPinnedToBottom) return;       // cheap fast-path: skip scheduling entirely...
   scrollToBottom({ respectPin: true });    // ...and re-checked inside the rAF (see scrollToBottom)
 }
@@ -150,9 +198,25 @@ function updateFollowButton() {
 
   const dist =
     container.scrollHeight - container.scrollTop - container.clientHeight;
+
   // Show only when NOT following and real content sits below the fold.
   // While following (pinned) there's nothing to jump to.
-  const show = !!thread && !scrollPinnedToBottom && dist > FOLLOW_BTN_REVEAL_DIST;
+  //
+  // The pin does not mean the same thing in every mode, which matters more
+  // than it sounds. In 'off' the viewport never moves, so no scroll event ever
+  // fires and scrollPinnedToBottom stays stuck at whatever it was when the
+  // reply started -- usually true, because sending a message scrolls you to
+  // the bottom. Reading the raw pin there would hide the button for the whole
+  // reply: no auto-scroll AND no way down, which is not "optional", it is
+  // broken. In 'off', distance alone decides.
+  //
+  // In 'always' the viewport is glued to the bottom, so there is never
+  // anywhere to jump to and the button would only flicker during the frame
+  // between a growth and the chase that follows it.
+  const mode = autoScrollMode();
+  const following = (mode === 'off') ? false : scrollPinnedToBottom;
+  const show = !!thread && mode !== 'always' &&
+               !following && dist > FOLLOW_BTN_REVEAL_DIST;
   if (show) positionFollowButton(btn, container);
   btn.classList.toggle('visible', show);
 }
@@ -160,6 +224,9 @@ function updateFollowButton() {
 /** FAB tap: re-engage auto-follow and snap to the latest. A live stream
  *  resumes chasing the bottom from here; a finished one just lands there. */
 function followToBottom() {
+  // Tapping the button is a user-initiated action, so it lands at the bottom
+  // in every mode -- including 'off', where it is the only way down. It also
+  // re-pins, which resumes following in 'smart' and is harmless in 'off'.
   scrollPinnedToBottom = true;
   // Instant while a reply is still streaming — a smooth glide would only
   // fight the per-tick instant chase that resumes the moment we re-pin. A
@@ -187,12 +254,84 @@ function followToBottom() {
  *  bottom, and the scroll event that results re-confirms scrollPinnedToBottom
  *  = true. If the user had genuinely scrolled up mid-stream, wasFollowing is
  *  false and we leave them where they're reading, just keeping the FAB offered. */
-function settleScrollAfterGeneration(wasFollowing) {
-  if (wasFollowing) {
+/** The reading position, captured BEFORE a rebuild that will destroy it.
+ *
+ *  Anchored to the distance from the BOTTOM rather than to scrollTop. The
+ *  final render is not the same height as the streaming approximation -- the
+ *  markdown is reparsed, code blocks and math settle, tool envelopes unwrap --
+ *  and every one of those changes happens at the END of the thread. Measuring
+ *  from the bottom keeps the same text under the user's eye; measuring from
+ *  the top would slide it by however much the tail grew. */
+function captureScrollAnchor() {
+  const container = document.getElementById('messages');
+  if (!container) return { following: scrollPinnedToBottom, fromBottom: 0 };
+  return {
+    following: scrollPinnedToBottom,
+    fromBottom: container.scrollHeight - container.scrollTop - container.clientHeight
+  };
+}
+
+/** Settle the viewport after a generation-related full re-render.
+ *
+ *  Why this exists, and why it can't just call autoScrollToBottom():
+ *  renderMessages() rebuilds the thread via innerHTML, which resets the
+ *  container's scrollTop to 0. The browser then fires a scroll event for that
+ *  reset — and per the HTML spec the scroll steps run BEFORE requestAnimation-
+ *  Frame callbacks in the same frame. So the scroll listener sees scrollTop≈0,
+ *  concludes "miles from the bottom", and clears scrollPinnedToBottom a beat
+ *  BEFORE our deferred (pin-respecting) scroll would run. A pin-aware scroll
+ *  therefore reads false and bails, stranding the view a few messages up even
+ *  though the user never scrolled away. (This is exactly the end-of-stream
+ *  "hops up instead of sinking to the bottom" symptom.)
+ *
+ *  The cure is to decide using the state captured BEFORE the rebuild, then
+ *  issue a FORCED scrollToBottom() (no respectPin) so the transient flip can't
+ *  cancel it.
+ *
+ *  THE OTHER HALF, which only became visible once auto-scroll could be turned
+ *  off: when the user was NOT following, this used to do nothing at all — and
+ *  "nothing" is not "leave them where they were reading", because the rebuild
+ *  already moved them. scrollTop is 0, so they were dumped at the TOP of the
+ *  thread every time a reply finished while they were reading history. That
+ *  was survivable when it needed the user to have scrolled up mid-stream; with
+ *  'off' it would happen on every single generation. So the anchor is restored
+ *  rather than ignored.
+ *
+ *  Modes: 'always' settles at the bottom whatever the captured state says,
+ *  because it never stopped following. 'off' never lands at the bottom on its
+ *  own — it only puts back the position the rebuild took away. */
+function settleScrollAfterGeneration(anchor) {
+  // Tolerate the old boolean call shape; the only thing it could express is
+  // the follow flag.
+  const a = (anchor && typeof anchor === 'object')
+    ? anchor
+    : { following: !!anchor, fromBottom: 0 };
+
+  const mode = autoScrollMode();
+  const land = (mode === 'always') ? true : (mode === 'off' ? false : a.following);
+
+  if (land) {
     scrollPinnedToBottom = true;   // restore the pin the innerHTML rebuild clobbered
     scrollToBottom();              // forced jump to the settled final bottom
+  } else {
+    restoreScrollAnchor(a);
   }
   updateFollowButton();
+}
+
+/** Put the viewport back where the rebuild took it from.
+ *
+ *  Double rAF for the same reason scrollToBottom uses one: <details> blocks,
+ *  images and math don't have their final height until after layout, and a
+ *  restore computed against a stale scrollHeight lands in the wrong place. */
+function restoreScrollAnchor(anchor) {
+  const container = document.getElementById('messages');
+  if (!container || !anchor) return;
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    const target = container.scrollHeight - container.clientHeight - (anchor.fromBottom || 0);
+    container.scrollTop = Math.max(0, target);
+    updateFollowButton();
+  }));
 }
 
 function goHome() {

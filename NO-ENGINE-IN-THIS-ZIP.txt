@@ -1,0 +1,12 @@
+This archive is an UPDATE. It leaves out the bundled llama.cpp engine
+(linux-amd64/llama-cpp), which has not changed in this release.
+
+Updating an existing install:
+  Windows   replace gobbonet.exe. That is the whole update -- the chat
+            screen is inside it. Close GobboNet first.
+  Linux     replace the linux-amd64 folder. Your existing llama-cpp folder
+            stays where it is; this archive does not overwrite it.
+
+Installing for the first time: use the full archive instead
+(GobboNet-*.zip without "-update"), or let the first-run setup download an
+engine for you.
