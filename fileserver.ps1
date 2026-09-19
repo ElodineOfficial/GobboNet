@@ -1368,7 +1368,7 @@ function Build-LaunchScript {
     $auditPrelude = 'echo [' + $stamp + '] hot-swap launch >> "' + $auditLog + '"' + "`r`n" +
                      'echo [args] ' + $line + ' >> "' + $auditLog + '"'
 
-    return "@echo off`r`n" + $auditPrelude + "`r`n" + $line + "`r`n"
+    return "@echo off`r`n" + $auditPrelude + "`r`n" + $line + "`r`n" + "exit`r`n"
 }
 
 # Stop the currently-running llama-server process(es). We match by image
