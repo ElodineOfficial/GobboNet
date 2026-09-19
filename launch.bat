@@ -2483,6 +2483,16 @@ timeout /t 15 /nobreak >nul
 call :llm_state
 if "!LLM_STATE!"=="0" (
     set "LLM_MISSES=0"
+
+    :: Resurrect the embed server if it was killed as collateral damage
+    if "!EMBED_ENABLE!"=="1" (
+        call :http_alive "http://127.0.0.1:!EMBED_PORT!/health"
+        if errorlevel 1 (
+            echo  [..] %TIME% - Embed server is down. Restarting...
+            start /min "embed-server" "!EMBED_LAUNCH_SCRIPT!"
+        )
+    )
+
     goto :monitor_loop
 )
 
