@@ -1777,6 +1777,7 @@ if not "!MODEL_CHAT_TEMPLATE_FILE!"=="" (
 > "!LAUNCH_SCRIPT!" (
     echo @echo off
     echo "!SERVER_EXE!" --model "!GGUF_PATH!" --port !SERVER_PORT! --host 127.0.0.1 --ctx-size !CTX_SIZE! --n-gpu-layers !GPU_LAYERS! --cache-type-k !KV_CACHE_TYPE! --cache-type-v !KV_CACHE_TYPE! --parallel 1 -lv !LOG_VERBOSITY! !JINJA_FLAG! !CHAT_TEMPLATE_FLAG! --reasoning-format auto ^> "!LOG_FILE!" 2^>^&1
+    echo exit
 )
 
 start /min "llama-server" "!LAUNCH_SCRIPT!"
@@ -1981,6 +1982,7 @@ if errorlevel 1 (
 > "!EMBED_LAUNCH_SCRIPT!" (
     echo @echo off
     echo "!SERVER_EXE!" --model "!EMBED_PATH!" --port !EMBED_PORT! --host 127.0.0.1 --embeddings --pooling mean --ctx-size !EMBED_CTX! --batch-size !EMBED_CTX! --ubatch-size !EMBED_CTX! --n-gpu-layers !EMBED_GPU_LAYERS! ^> "!EMBED_LOG_FILE!" 2^>^&1
+    echo exit
 )
 echo  [..] Starting embedding server on :!EMBED_PORT! ^(CPU^)...
 start /min "embed-server" "!EMBED_LAUNCH_SCRIPT!"
