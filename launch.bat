@@ -1010,7 +1010,42 @@ for %%F in ("!MODEL_DIR!\*.gguf") do (
     set "GGUF_CHOICE_!GGUF_IDX!=%%F"
 )
 echo.
-set /p "_GCHOICE=  Select model [1-!GGUF_COUNT!]: "
+
+:: Begin code for selecting model from arguments
+set "_GCHOICE="
+
+:: Parse arguments for --model or -m
+call :parse_model_arg %*
+goto :after_arg_parse
+
+:parse_model_arg
+if "%~1"=="" exit /b
+if /i "%~1"=="--model" (
+    set "_GCHOICE=%~2"
+    exit /b
+)
+if /i "%~1"=="-m" (
+    set "_GCHOICE=%~2"
+    exit /b
+)
+shift
+goto :parse_model_arg
+
+:after_arg_parse
+
+if defined _GCHOICE (
+    if defined GGUF_CHOICE_!_GCHOICE! (
+        echo  [..] Auto-selecting model [!_GCHOICE!] from shortcut argument.
+    ) else (
+        echo  [*] Shortcut argument [!_GCHOICE!] is not a valid model number.
+        set "_GCHOICE="
+    )
+)
+:: End code for selecting model from arguments
+
+:: Previously was set /p "_GCHOICE=  Select model [1-!GGUF_COUNT!]: "
+if not defined _GCHOICE set /p "_GCHOICE=  Select model [1-!GGUF_COUNT!]: "
+
 if defined GGUF_CHOICE_!_GCHOICE! (
     set "GGUF_PATH=!GGUF_CHOICE_%_GCHOICE%!"
     for %%F in ("!GGUF_PATH!") do echo  [OK] Using: %%~nxF
