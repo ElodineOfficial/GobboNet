@@ -2462,7 +2462,15 @@ echo   or simply close it.
 echo  ====================================================
 echo.
 
-start "" "http://127.0.0.1:!WEB_PORT!"
+:: Check arguments specifically for --nopageload to keep this feature isolated
+set "NO_BROWSER=0"
+for %%A in (%*) do if /i "%%~A"=="--nopageload" set "NO_BROWSER=1"
+
+if "!NO_BROWSER!"=="0" (
+    start "" "http://127.0.0.1:!WEB_PORT!"
+) else (
+    echo   [*] --nopageload active: skipping automatic browser launch.
+)
 
 :: Pause longer on IP change so the user actually reads the warning
 if "!IP_CHANGED!"=="1" (
