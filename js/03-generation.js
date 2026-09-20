@@ -496,7 +496,12 @@ async function runGenerationStream(thread, assistantMsg, requestBody, opts = {})
     } else if (res.status === 'lost') {
       errored = true; errorMessage = 'generation record no longer on the server (restarted or cleaned up)';
     } else if (res.status === 'unauthorized') {
-      errored = true; errorMessage = 'file-server login session expired — reload the page and sign in to re-attach';
+      // Same cause as a 401 on the sync routes: the server restarted and took
+      // the session with it. Ask for the password here rather than telling
+      // somebody to reload, which would also throw away whatever else they
+      // had typed. See THE SERVER RESTARTED in 06-state-sync.js.
+      errored = true; errorMessage = 'signed out mid-generation — sign back in to re-attach';
+      try { noteLocked({ status: 401 }); } catch (_) {}
     } else if (res.status === 'unreachable') {
       errored = true; errorMessage = 'lost contact with the file server mid-generation — the reply may still be completing; reload to re-attach';
     }

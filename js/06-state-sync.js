@@ -43,6 +43,15 @@
    histories — the exact thing the user separated, undone by the act
    of restoring. The target lives in its own localStorage key, beside
    the sync metadata, for the same reason that metadata does.
+
+   ── WHAT A PUSH ACTUALLY SENDS ──────────────────────────────────
+   Not the whole document any more. Everything down to the sync-target
+   section below still describes the whole-file operations — boot
+   conflict check, restore, target switching — and those are unchanged.
+   The push itself now sends one conversation at a time, conditional on
+   the version it is replacing, so two devices can share one backup
+   without either flattening the other. See PER-CONVERSATION SYNC at
+   the bottom of this file; it is where the interesting part lives.
 ================================================================ */
 
 // /state lives on the file server (same origin as chat.html when served).
@@ -108,15 +117,156 @@ const stateSync = {
   // Last mtime we successfully read from or wrote to the server.
   // Used to detect "the server has data we haven't seen" on next boot.
   lastKnownMtime: 0,
-  // Status for UI: 'idle' | 'syncing' | 'ok' | 'error' | 'quota' | 'off' | 'disabled'
+  // Status for UI:
+  //   'idle' | 'syncing' | 'ok' | 'error' | 'quota' | 'conflict' | 'off' | 'disabled'
+  //   'conflict' one or more conversations moved on both sides; open one to
+  //              resolve it. Never blocks anything else from syncing.
+  //   'locked'   the server restarted and no longer accepts our session. Not
+  //              an error: nothing is lost and nothing is retried until
+  //              somebody signs in again. See THE SERVER RESTARTED below.
   //   'off'      this device opted out; there is a server, we just don't use it
   //   'disabled' there is no server to use (file://)
   status: !STATE_SYNC_AVAILABLE ? 'disabled' : (syncIsOff() ? 'off' : 'idle'),
   lastError: null,
   pushTimer: null,
-  pendingJson: null,
+  // "Something changed locally since the last push." A flag rather than a
+  // serialised snapshot: which conversations actually moved is worked out at
+  // push time, from the ledger, so building a multi-megabyte string on every
+  // save to feed a debounce would be pure waste. See PER-CONVERSATION SYNC.
+  pendingPush: false,
   inFlight: false
 };
+
+
+/* ---------------------------------------------------------------------------
+   THE SERVER RESTARTED
+
+   A 401 from the state routes means the session this tab was using is gone:
+   the server was restarted, updated, or rebooted underneath us. On an
+   encrypted install it also means the data key went with it, because the key
+   lives exactly as long as the session table does.
+
+   Nothing here is lost. Local history is in localStorage or IndexedDB either
+   way, and the push path already restores pendingPush on failure and retries,
+   so the queue survives. What did NOT exist was any notion that a 401 is
+   different from a network blip, so a restarted server produced a tiny "!" in
+   the sidebar and a retry every four seconds, forever, against a server that
+   would never accept any of them. The user's work quietly stopped backing up
+   and the only signal was a dot.
+
+   So: stop retrying, say what happened, and offer the one thing that fixes it.
+
+   Deliberately NOT a redirect to /login. Navigating the tab throws away
+   whatever is in the composer, any reply still streaming in, the scroll
+   position and the open chat -- real work, to save one form post. The modal
+   signs in over fetch and leaves the page where it was.
+--------------------------------------------------------------------------- */
+
+// noteLocked reports whether a response means "signed out", and if so puts the
+// app into the locked state. Returns true when the caller should stop.
+function noteLocked(resp) {
+  if (!resp || resp.status !== 401) return false;
+  if (stateSync.status === 'locked') return true;   // already asking
+
+  stateSync.status = 'locked';
+  stateSync.lastError = 'signed out';
+  // Cancel the retry. Re-armed by resumeAfterUnlock() once we are back in.
+  if (stateSync.pushTimer) { clearTimeout(stateSync.pushTimer); stateSync.pushTimer = null; }
+  updateSyncIndicator();
+  showUnlockModal();
+  return true;
+}
+
+// serverError turns a failed response into the right Error, raising the unlock
+// prompt when the reason is that we are signed out.
+function serverError(resp, message) {
+  noteLocked(resp);
+  return new Error(message || ('HTTP ' + resp.status));
+}
+
+function showUnlockModal() {
+  const modal = document.getElementById('unlock-modal');
+  if (!modal) return;
+  const err = document.getElementById('unlock-error');
+  if (err) { err.textContent = ''; err.style.display = 'none'; }
+  modal.classList.add('open');
+  const field = document.getElementById('unlock-password');
+  if (field) { field.value = ''; setTimeout(() => field.focus(), 50); }
+}
+
+function hideUnlockModal() {
+  const modal = document.getElementById('unlock-modal');
+  if (modal) modal.classList.remove('open');
+}
+
+/**
+ * Sign back in without leaving the page.
+ *
+ * On an encrypted install this is also what unlocks the history: the password
+ * keyslot is the verifier, so the server proves the password and unwraps the
+ * data key in one step. Which is why a wrong password here is the same answer
+ * as a wrong password anywhere else, and why there is nothing else to ask for.
+ */
+async function submitUnlock() {
+  const field = document.getElementById('unlock-password');
+  const err = document.getElementById('unlock-error');
+  const btn = document.getElementById('unlock-submit');
+  const password = field ? field.value : '';
+  if (!password) return;
+
+  const say = (msg) => {
+    if (!err) return;
+    err.textContent = msg;
+    err.style.display = msg ? 'block' : 'none';
+  };
+
+  if (btn) { btn.disabled = true; btn.textContent = 'Signing in…'; }
+  say('');
+  try {
+    const body = new URLSearchParams();
+    body.set('password', password);
+    const resp = await fetch('/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: body.toString(),
+      redirect: 'manual'
+    });
+    // A successful login answers with a redirect to "/", which fetch reports
+    // as an opaque redirect rather than a status we can read. Either shape
+    // means we are in; only an explicit 401 means we are not.
+    if (resp.status === 401) {
+      say('That password was not accepted.');
+      return;
+    }
+    if (resp.status === 429) {
+      say('Too many attempts. Wait a moment, then try again.');
+      return;
+    }
+    hideUnlockModal();
+    resumeAfterUnlock();
+  } catch (e) {
+    say('Could not reach the server: ' + (e.message || e));
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Unlock'; }
+    if (field) field.value = '';
+  }
+}
+
+/**
+ * Pick up where we left off.
+ *
+ * pendingPush is left exactly as it was, so anything queued while the server
+ * was away still goes out. The index check runs first because the server may
+ * have been restarted for an update that another device has already written
+ * through.
+ */
+function resumeAfterUnlock() {
+  stateSync.status = 'idle';
+  stateSync.lastError = null;
+  updateSyncIndicator();
+  reconcileWithServer({ silent: true }).catch(() => {});
+  if (stateSync.pendingPush) scheduleStateSync();
+}
 
 // Persist lastKnownMtime in localStorage so we remember it across
 // reloads at the same origin. Keyed separately so a state restore
@@ -188,12 +338,16 @@ function stateSyncWouldBeTransient() {
 }
 
 /**
- * Debounced push to /state. Called from saveState(). Coalesces rapid
+ * Debounced push to the server. Called from saveState(). Coalesces rapid
  * saves (typing, streaming tokens) into one network write every ~2s.
+ *
+ * Takes no argument. It accepted a pre-built JSON snapshot for as long as the
+ * push was "replace the whole document"; now the push works out what moved,
+ * so a snapshot built here would be discarded unread.
  */
-function scheduleStateSync(json) {
+function scheduleStateSync() {
   if (!syncEnabled()) return;
-  stateSync.pendingJson = json;
+  stateSync.pendingPush = true;
   if (stateSync.pushTimer) clearTimeout(stateSync.pushTimer);
   stateSync.pushTimer = setTimeout(flushStateSync, 2000);
 }
@@ -209,43 +363,41 @@ async function flushStateSync() {
   // While a generation is streaming -- or a fresh/rerolled assistant slot is
   // still empty -- the latest state contains a blank reply. Defer and keep
   // re-checking; the settled saveState() that runs when generation finishes
-  // leaves a complete snapshot in pendingJson for us to send safely. This is
-  // the fix for replies that "went blank" after a refresh: the server was
-  // being handed an in-progress snapshot that other devices then restored.
+  // re-arms this and the state is whole by then. This is the fix for replies
+  // that "went blank" after a refresh: the server was being handed an
+  // in-progress snapshot that other devices then restored.
   if (stateSyncWouldBeTransient()) {
     stateSync.pushTimer = setTimeout(flushStateSync, 2000);
     return;
   }
-  const json = stateSync.pendingJson;
-  if (!json) return;
-  stateSync.pendingJson = null;
+  if (!stateSync.pendingPush) return;
+  stateSync.pendingPush = false;
   stateSync.pushTimer = null;
   stateSync.inFlight = true;
   stateSync.status = 'syncing';
   updateSyncIndicator();
   try {
-    const resp = await fetch(stateSyncUrl(''), {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: json
-    });
-    if (!resp.ok) throw new Error('HTTP ' + resp.status);
-    const data = await resp.json().catch(() => ({}));
-    if (data && typeof data.mtime === 'number') {
-      stateSync.lastKnownMtime = data.mtime;
-      persistSyncMeta();
-    }
-    stateSync.status = 'ok';
+    await pushChangedConversations();
     stateSync.lastError = null;
   } catch (e) {
+    // Don't drop the update. Re-arm with a short backoff, so a transient
+    // network blip can't leave the server holding a stale copy that a later
+    // boot might restore over good local data. The ledger still holds the
+    // versions we last confirmed, so the retry sends exactly what did not
+    // land -- nothing is re-sent that already arrived.
+    stateSync.pendingPush = true;
+
+    // Unless we are signed out, in which case retrying is not a backoff, it is
+    // a loop: every attempt gets the same 401 until a person types a password.
+    // Keep the queue, drop the timer, and let resumeAfterUnlock() restart it.
+    if (stateSync.status === 'locked') {
+      console.warn('[sync] Push deferred: the server restarted and this tab is signed out. Nothing was lost.');
+      return;
+    }
+
     stateSync.status = 'error';
     stateSync.lastError = e.message || String(e);
     console.warn('[sync] Push failed:', stateSync.lastError);
-    // Don't drop the update. Requeue this snapshot (unless a newer one was
-    // queued while we were in flight) and retry with a short backoff, so a
-    // transient network blip can't leave the server holding a stale copy that
-    // a later boot might restore over good local data.
-    if (stateSync.pendingJson == null) stateSync.pendingJson = json;
     if (stateSync.pushTimer) clearTimeout(stateSync.pushTimer);
     stateSync.pushTimer = setTimeout(flushStateSync, 4000);
   } finally {
@@ -276,30 +428,42 @@ function forceServerFlush() {
  *   1. A synchronous localStorage write (saveState) — this is what lets THIS
  *      origin recover the in-progress reply on reload. localStorage.setItem
  *      completes inline even inside pagehide.
- *   2. A navigator.sendBeacon to /state, but ONLY when the state is settled.
- *      A mid-stream / empty-placeholder snapshot must never become the
- *      cross-device source of truth (that's the original blanking bug), so we
- *      gate the beacon behind stateSyncWouldBeTransient() exactly like the
- *      debounced path does.
+ *   2. A keepalive push of whatever conversations actually moved, but ONLY
+ *      when the state is settled. A mid-stream / empty-placeholder snapshot
+ *      must never become the cross-device source of truth (that's the original
+ *      blanking bug), so this is gated behind stateSyncWouldBeTransient()
+ *      exactly like the debounced path is.
  *
- * beacon=false skips the network beacon entirely — used on visibilitychange,
+ * beacon=false skips the network push entirely — used on visibilitychange,
  * which fires on every tab switch and would otherwise spam the server.
+ *
+ * WHY THIS IS NO LONGER A sendBeacon
+ * It used to be navigator.sendBeacon with the entire history as the body: a
+ * blind, unconditional PUT /state, which is precisely the overwrite the
+ * per-conversation routes exist to remove. Keeping it would have left one
+ * writer in the system that could still flatten another device's chats, and
+ * it would have fired on every single tab close. sendBeacon cannot carry an
+ * If-Match header at all, so there was no way to make it safe.
+ *
+ * fetch(..., { keepalive: true }) is the same "survives teardown" guarantee
+ * with headers, so the exit push carries its preconditions like every other
+ * write. The keepalive body cap is 64 KB, so a large conversation can be
+ * refused here — that fails visibly rather than silently: the ledger is only
+ * advanced on a response we actually received, so the change stays queued and
+ * the next boot sends it.
  */
 function flushBeforeExit(opts) {
   const beacon = !!(opts && opts.beacon);
   try {
     // Local save always. Skip arming the debounced push — the page is going
-    // away, so the timer would never fire; the beacon below is the real push.
+    // away, so the timer would never fire; the keepalive push below is the
+    // real one.
     saveState({ skipServerSchedule: true });
     // If a debounced full IDB save is still pending, issue it now (best-effort)
     // so a just-settled action isn't stranded by the teardown.
     flushPendingIdbSave();
-    if (beacon && syncEnabled() && !stateSyncWouldBeTransient() &&
-        typeof navigator !== 'undefined' && navigator.sendBeacon) {
-      const json = redactedSyncJson();
-      if (json && json !== '{}') {
-        navigator.sendBeacon(stateSyncUrl(''), new Blob([json], { type: 'application/json' }));
-      }
+    if (beacon && syncEnabled() && !stateSyncWouldBeTransient()) {
+      pushChangedConversations({ keepalive: true }).catch(() => {});
     }
   } catch (_) {}
 }
@@ -341,11 +505,11 @@ async function checkServerStateOnBoot() {
     if (resp.status === 404) {
       // No backup yet — nothing to restore. Push current state to seed.
       if (state.threads && state.threads.length > 0) {
-        scheduleStateSync(redactedSyncJson());
+        scheduleStateSync();
       }
       return;
     }
-    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    if (!resp.ok) throw serverError(resp);
     info = await resp.json();
   } catch (e) {
     console.warn('[sync] Boot check failed:', e.message);
@@ -420,11 +584,15 @@ async function checkServerStateOnBoot() {
                    ' vs local ' + localSize + ') — keeping local, re-publishing.');
       stateSync.lastKnownMtime = serverMtime;
       persistSyncMeta();
-      scheduleStateSync(redactedSyncJson());
+      scheduleStateSync();
       stateSync.status = 'ok';
       updateSyncIndicator();
     } else {
-      showRestorePrompt(info);
+      // Awaited. Boot chains ensureSyncLedger() onto this call, and that
+      // seeds the server from local state -- so letting the restore run
+      // unwatched would race a whole-document upload of the very data the
+      // user just asked to replace.
+      await showRestorePrompt(info);
     }
   } else {
     // Local matches or is ahead. Mark as ok.
@@ -460,7 +628,7 @@ async function restoreFromServer(opts) {
       if (!opts.silent) alert('No backup found on the server yet.');
       return false;
     }
-    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    if (!resp.ok) throw serverError(resp);
     // let, not const: the neutralize step below rewrites this before the
     // localStorage path consumes it.
     let text = await resp.text();
@@ -516,6 +684,23 @@ async function restoreFromServer(opts) {
       stateSync.lastKnownMtime = parseInt(mtimeHeader, 10) || stateSync.lastKnownMtime;
       persistSyncMeta();
     }
+    // A whole-document restore replaces every conversation at once, so every
+    // per-conversation version this device was holding is now meaningless.
+    // Drop the ledger and let the next boot re-seed it.
+    //
+    // Deliberately NOT "adopt the server's index, we just downloaded it": the
+    // load path runs migrations that can rewrite a thread on the way in (the
+    // interrupted-reroll rollback above is one), so the copy that lands in
+    // memory is not always the copy that came off the wire. Claiming agreement
+    // we have not verified would make the next push skip a thread that really
+    // did differ. Re-seeding costs one upload on a path that runs rarely.
+    invalidateLedger();
+    // Between here and the reload actually happening, a queued push could
+    // fire, find no ledger, and seed the server with the state we are in the
+    // middle of replacing -- undoing the restore. Close that window.
+    stateSyncReloading = true;
+    if (stateSync.pushTimer) { clearTimeout(stateSync.pushTimer); stateSync.pushTimer = null; }
+    stateSync.pendingPush = false;
     // Repopulate the active storage backend from the restored blob, then
     // reload so the async boot re-reads it cleanly.
     if (STORAGE_BACKEND === 'idb') {
@@ -543,6 +728,10 @@ async function restoreFromServer(opts) {
                    'applying in memory (local cache stays partial, server backup ' +
                    'is complete).');
       storageQuotaHit = true;
+      // This branch applies in memory instead of reloading, so the reload
+      // guard has to come back off or sync would stay frozen for the rest of
+      // the session.
+      stateSyncReloading = false;
       await loadState(text);        // parse + migrate the full blob into state
       state.activeThreadId = null;  // land on the dashboard like a normal boot
       if (syncEnabled()) stateSync.status = 'quota';
@@ -552,6 +741,9 @@ async function restoreFromServer(opts) {
     }
   } catch (e) {
     console.error('[sync] Restore failed:', e);
+    // No reload is coming, so releasing the guard is what lets the ordinary
+    // sync loop carry on with the state that is still here.
+    stateSyncReloading = false;
     if (!opts.silent) alert('Could not restore from server: ' + e.message);
     stateSync.status = 'error';
     stateSync.lastError = e.message;
@@ -560,7 +752,7 @@ async function restoreFromServer(opts) {
   }
 }
 
-function showRestorePrompt(info) {
+async function showRestorePrompt(info) {
   // Lightweight modal — uses the existing modal pattern
   const mtime = info && info.mtime ? new Date(info.mtime) : null;
   const when = mtime ? mtime.toLocaleString() : 'unknown';
@@ -573,12 +765,12 @@ function showRestorePrompt(info) {
     'browser is now seeing a fresh empty chat at the new address.\n\n' +
     'Restore it? (Your current local chat will be replaced.)';
   if (confirm(msg)) {
-    restoreFromServer();
+    await restoreFromServer();
   } else {
     // User declined — accept local as authoritative and push to overwrite
     stateSync.lastKnownMtime = info.mtime || 0;
     persistSyncMeta();
-    scheduleStateSync(redactedSyncJson());
+    scheduleStateSync();
   }
 }
 
@@ -595,6 +787,12 @@ function updateSyncIndicator() {
     el.className = 'sync-indicator';
     el.title = 'Click to manually restore from the server backup';
     el.addEventListener('click', () => {
+      if (stateSync.status === 'locked') {
+        // Offering a restore here would be answering the wrong question: the
+        // server is not refusing our data, it is refusing our session.
+        showUnlockModal();
+        return;
+      }
       if (syncIsOff()) {
         // Offering a restore here would only produce the "sync is off" alert.
         // Send the user where the switch actually is.
@@ -610,7 +808,7 @@ function updateSyncIndicator() {
     const footer = document.querySelector('.sidebar-footer') || document.querySelector('.sidebar') || document.body;
     footer.appendChild(el);
   }
-  const icons = { idle: '○', syncing: '⟳', ok: '✓', error: '!', quota: '⚠', off: '⦸', disabled: '' };
+  const icons = { idle: '○', syncing: '⟳', ok: '✓', error: '!', quota: '⚠', conflict: '⇅', locked: '🔒', off: '⦸', disabled: '' };
   // The target is named on every label that involves the server. With more
   // than one backup on disk, "synced" on its own no longer says which.
   const where = syncTargetLabel();
@@ -621,11 +819,27 @@ function updateSyncIndicator() {
     ok: 'synced' + suffix,
     error: 'sync error: ' + (stateSync.lastError || 'unknown'),
     quota: 'local storage full — backed up to server (click to restore full history)',
+    // Not counted: the number would be stale the moment another device wrote,
+    // and the resolution happens one chat at a time anyway. Short enough to
+    // stay on one line, so the status changing does not shove the sidebar
+    // buttons around; the explanation is on the tooltip below.
+    conflict: 'chat conflict' + suffix,
+    locked: 'signed out — click to sign back in',
     off: 'sync off — this device only',
     disabled: ''
   };
   el.textContent = (icons[stateSync.status] || '') + ' ' + (labels[stateSync.status] || '');
   el.dataset.status = stateSync.status;
+  // The label has one line of a narrow sidebar to work with, so anything that
+  // needs a sentence says it here instead of wrapping and shoving the footer
+  // buttons up the page.
+  el.title = (stateSync.status === 'conflict')
+    ? 'A chat changed here and on another device. Open it and GobboNet will ask ' +
+      'which version to keep — only that chat is affected.'
+    : (stateSync.status === 'locked')
+      ? 'The server restarted, so this tab is signed out. Nothing has been lost — ' +
+        'your chats are saved on this device and will back up again once you sign in.'
+      : 'Click to manually restore from the server backup';
 }
 
 /**
@@ -1103,6 +1317,7 @@ async function fetchSyncTargetInfo(mode, profile) {
   try {
     const resp = await fetch(url, { cache: 'no-store' });
     if (resp.status === 404) return { mtime: 0, size: 0 };
+    if (noteLocked(resp)) return null;
     if (!resp.ok) return null;
     return await resp.json();
   } catch (e) {
@@ -1128,6 +1343,9 @@ async function deleteSyncProfile(name) {
       stateSync.lastKnownMtime = 0;
     }
     persistSyncMeta();
+    // Same reasoning one layer down: the per-conversation versions we were
+    // holding described a file that no longer exists.
+    invalidateLedger(norm || 'shared');
     return true;
   } catch (e) {
     console.warn('[sync] Delete failed:', e.message);
@@ -1154,7 +1372,7 @@ async function applySyncTarget(mode, profileName) {
   // against the new URL on the old schedule, which is a write the user did not
   // ask for at a moment they are still deciding.
   if (stateSync.pushTimer) { clearTimeout(stateSync.pushTimer); stateSync.pushTimer = null; }
-  stateSync.pendingJson = null;
+  stateSync.pendingPush = false;
 
   syncTarget = { mode: mode, profile: profile };
   persistSyncTarget();
@@ -1176,7 +1394,9 @@ async function applySyncTarget(mode, profileName) {
     // Nothing there yet. Seeding is the only sensible reading of "use this
     // slot", and there is nothing to overwrite, so it needs no confirmation.
     stateSync.status = 'idle';
-    scheduleStateSync(redactedSyncJson());
+    // Whatever we last knew about this slot describes a file that is not there.
+    invalidateLedger();
+    scheduleStateSync();
     forceServerFlush();
     updateSyncIndicator();
     return 'seeded';
@@ -1200,8 +1420,966 @@ async function applySyncTarget(mode, profileName) {
     return 'restoring';
   }
   stateSync.status = 'idle';
-  scheduleStateSync(redactedSyncJson());
+  // The user just said "keep this device's data and overwrite the backup".
+  // Clearing the ledger makes the next push a whole-document replace, which is
+  // what they asked for -- an incremental push would merge into a history this
+  // device has never seen and leave the other device's chats behind.
+  invalidateLedger();
+  scheduleStateSync();
   forceServerFlush();
   updateSyncIndicator();
   return 'pushed';
+}
+
+
+/* ================================================================
+   PER-CONVERSATION SYNC
+
+   Everything above this line pushes one thing: the whole document. That was
+   never subtle -- build the entire history, PUT it over whatever is there,
+   last writer wins -- and it is why two devices cannot both use one backup.
+   The one that saves second replaces the other's chats, and neither side has
+   anything to notice that with. Not because the check is hard, but because a
+   request that carries everything has no way to say "only this part".
+
+   The server now addresses one conversation at a time
+   (internal/state/threads.go). This is the client half of it:
+
+     GET     /state/index                  what the server holds: ids,
+                                           versions and message counts, and
+                                           no message text at all
+     GET     /state/threads/<id>           one conversation
+     PUT     /state/threads/<id>           replace or create it
+     POST    /state/threads/<id>/append    add messages to the end
+     DELETE  /state/threads/<id>           remove it
+     GET/PUT /state/meta                   everything that is not a
+                                           conversation
+
+   Every mutating request carries the version it believes it is changing, and
+   the server refuses it otherwise (412, or 428 for no precondition at all).
+   So "do not overwrite the other device's chats" stops being a rule this file
+   has to remember to apply, and becomes something the protocol cannot express.
+
+   -- THE LEDGER --------------------------------------------------
+   Per target, per conversation, three facts recorded at the moment of a
+   successful exchange:
+
+     etag  the server's version token. Opaque -- we only ever echo back what
+           we were handed, so the two sides never have to agree on how JSON is
+           serialised, only on a token.
+     n     how many messages it had then, which is where an append's tail
+           starts.
+     hash  a fingerprint of the copy the SERVER holds at that etag, which is
+           the only way to tell "I have not touched this" from "I have".
+           Recorded as what the server has rather than as what we had makes
+           "dirty" mean "we differ from the backup" -- so a difference of any
+           kind, including one that arrived by our own choice not to take
+           theirs, is something the next push settles rather than something
+           both sides sit on. At the moment of agreement the two readings are
+           the same value; they part company only where we keep something.
+
+   etag and hash together answer the only question that matters, per chat:
+
+                          server etag unchanged   server etag moved
+     local hash unchanged  nothing to do           pull it
+     local hash moved      push it                 they both moved
+
+   Three of those four resolve silently. The fourth is the only case where no
+   default is honest, and it is the case the whole-document design could not
+   even detect.
+
+   The ledger lives in its own localStorage key for the same reason the sync
+   target does: it describes THIS browser's relationship with the server, and
+   a restore overwrites state.settings. A device that inherited another
+   device's ledger would believe it had already sent chats it has never seen.
+
+   -- WHAT THIS DELIBERATELY DOES NOT DO --------------------------
+   No background polling. Every check is caused by something the user just did
+   -- opening a conversation, or coming back to the tab. No device id, no
+   writer log, no fingerprint of the machine: the comparison is between file
+   versions, and the server never learns who asked. Only the index is fetched
+   speculatively; a conversation's body is pulled on demand.
+================================================================ */
+
+// Set while a restore is about to reload the page. Between invalidateLedger()
+// and the reload actually happening there is a window in which a queued push
+// could fire, find no ledger, and seed the server with the pre-restore local
+// state -- undoing the restore the user just asked for. Everything that writes
+// checks this first.
+let stateSyncReloading = false;
+
+const SYNC_LEDGER_KEY = 'gobbonet_sync_ledger';
+// { "<target label>": { seeded, meta, metaHash, threads: { id: {etag,n,hash} } } }
+let syncLedger = {};
+try {
+  const savedLedger = JSON.parse(localStorage.getItem(SYNC_LEDGER_KEY) || 'null');
+  if (savedLedger && typeof savedLedger === 'object' &&
+      savedLedger.version === 1 && savedLedger.byTarget &&
+      typeof savedLedger.byTarget === 'object') {
+    syncLedger = savedLedger.byTarget;
+  }
+} catch (_) {}
+
+/** The ledger for one target, created empty if this device has never used it.
+ *  An empty ledger is not a problem to route around -- it is exactly the
+ *  "seed me" state, and seeding is a real, explicit step. */
+function ledgerFor(label) {
+  let L = syncLedger[label];
+  if (!L || typeof L !== 'object') {
+    L = { seeded: false, meta: '', metaHash: '', threads: {} };
+    syncLedger[label] = L;
+  }
+  if (!L.threads || typeof L.threads !== 'object') L.threads = {};
+  return L;
+}
+
+function currentLedger() { return ledgerFor(syncTargetLabel()); }
+
+function persistSyncLedger() {
+  try {
+    localStorage.setItem(SYNC_LEDGER_KEY,
+      JSON.stringify({ version: 1, byTarget: syncLedger }));
+  } catch (_) {
+    // A ledger we cannot persist still works for this page's lifetime; the
+    // next boot simply re-seeds. Nothing is lost, so this is not worth a
+    // dialog -- but it is worth saying once.
+    console.warn('[sync] Could not persist the sync ledger; the next boot will re-seed.');
+  }
+}
+
+/** Forget everything we believed about a target. The next push re-seeds it
+ *  with a whole-document write, which is the only honest baseline when we no
+ *  longer know what the server holds. */
+function invalidateLedger(label) {
+  const key = label || syncTargetLabel();
+  syncLedger[key] = { seeded: false, meta: '', metaHash: '', threads: {} };
+  persistSyncLedger();
+}
+
+/* -- Fingerprints ------------------------------------------------
+   A fingerprint answers one question: is this conversation still exactly what
+   I last sent? It is compared only against fingerprints this same code
+   produced, so it needs no cryptographic strength -- but it does need two
+   properties the obvious JSON.stringify() comparison lacks.
+
+   It must be key-order independent, because a conversation that comes back
+   from the server has been through Go's encoder, which sorts object keys. Two
+   identical conversations would otherwise fingerprint differently and every
+   comparison with the server's copy would report a conflict.
+
+   And it must not build the string. A conversation carrying image attachments
+   is megabytes -- js/18-utils.js stores them as full base64 data URLs on the
+   message -- so the value is walked and fed to the accumulator directly rather
+   than serialised first.
+
+   cyrb53, 53 bits, one pass. */
+function syncFingerprint() {
+  let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
+  return {
+    add(str) {
+      for (let i = 0; i < str.length; i++) {
+        const ch = str.charCodeAt(i);
+        h1 = Math.imul(h1 ^ ch, 2654435761);
+        h2 = Math.imul(h2 ^ ch, 1597334677);
+      }
+    },
+    done() {
+      const a = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+      const b = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+      return (4294967296 * (2097151 & b) + (a >>> 0)).toString(36);
+    }
+  };
+}
+
+// Walk a value into a fingerprint. Types are tagged so 1, "1" and true can
+// never collide, and object keys are sorted so encoder differences do not
+// register as content differences.
+//
+// undefined and functions are skipped exactly where JSON.stringify drops
+// them, because the thing on the other side of the comparison has been
+// through JSON and no longer has them either.
+const FP_NULL = 'n', FP_NUM = 'd', FP_BOOL = 'b';
+const FP_STR = 's', FP_OTHER = 'u', FP_ARR = '[';
+const FP_OBJ = '{', FP_KEY = '', FP_MSG = '';
+
+function fingerprintValue(fp, v) {
+  if (v === null) { fp.add(FP_NULL); return; }
+  const t = typeof v;
+  if (t === 'number')  { fp.add(FP_NUM + v); return; }
+  if (t === 'boolean') { fp.add(FP_BOOL + v); return; }
+  if (t === 'string')  { fp.add(FP_STR + v.length + ':'); fp.add(v); return; }
+  if (t !== 'object')  { fp.add(FP_OTHER); return; }
+  if (Array.isArray(v)) {
+    fp.add(FP_ARR + v.length + ':');
+    for (const item of v) {
+      // JSON.stringify writes null for a hole or an undefined element.
+      if (item === undefined || typeof item === 'function') fp.add(FP_NULL);
+      else fingerprintValue(fp, item);
+    }
+    return;
+  }
+  const keys = Object.keys(v)
+    .filter(k => v[k] !== undefined && typeof v[k] !== 'function')
+    .sort();
+  fp.add(FP_OBJ + keys.length + ':');
+  for (const k of keys) {
+    fp.add(FP_KEY + k + '=');
+    fingerprintValue(fp, v[k]);
+  }
+}
+
+/**
+ * Fingerprint one conversation, optionally only its first `upTo` messages.
+ *
+ * The truncated form is what makes append possible: if the local copy's first
+ * n messages still fingerprint to what we recorded when the server was at n,
+ * then everything after n is new and the tail is all we have to upload.
+ *
+ * The returned string carries the count as a prefix, so a fingerprint can
+ * never be compared against one taken at a different length by accident.
+ *
+ * Runtime-only message fields are excluded, matching cleanThread() exactly --
+ * they are stripped on the way out, so counting them here would leave any
+ * thread with live parser state looking permanently dirty.
+ */
+function threadFingerprint(thread, upTo) {
+  const msgs = (thread && Array.isArray(thread.messages)) ? thread.messages : [];
+  const n = (upTo === undefined || upTo === null) ? msgs.length : Math.min(upTo, msgs.length);
+  const head = { ...(thread || {}) };
+  delete head.messages;
+  const fp = syncFingerprint();
+  fingerprintValue(fp, head);
+  for (let i = 0; i < n; i++) {
+    const m = msgs[i];
+    let value = m;
+    if (m && typeof m === 'object') {
+      let runtime = false;
+      for (const f of RUNTIME_MESSAGE_FIELDS) if (m[f] !== undefined) { runtime = true; break; }
+      if (runtime) {
+        value = { ...m };
+        for (const f of RUNTIME_MESSAGE_FIELDS) delete value[f];
+      }
+    }
+    fp.add(FP_MSG);
+    fingerprintValue(fp, value);
+  }
+  return n + '-' + fp.done();
+}
+
+function metaFingerprint(meta) {
+  const fp = syncFingerprint();
+  fingerprintValue(fp, meta);
+  return fp.done();
+}
+
+/** Strip the runtime-only fields from one message, for the wire. cleanThread
+ *  does this for a whole conversation; an append sends a tail. */
+function cleanMessage(m) {
+  if (!m || typeof m !== 'object') return m;
+  const clean = { ...m };
+  for (const f of RUNTIME_MESSAGE_FIELDS) delete clean[f];
+  return clean;
+}
+
+/** The meta half of the blob with the API key removed, which is what actually
+ *  goes to the server. Same redaction rule as redactedSyncJson(): the key
+ *  stays in this browser, because the state file is readable by anything on
+ *  the LAN. */
+function redactedStateMeta() {
+  const meta = buildStateMeta();
+  if (meta && meta.settings) {
+    meta.settings = { ...meta.settings };
+    delete meta.settings.apiKey;
+  }
+  return meta;
+}
+
+/* -- Addressability ----------------------------------------------
+   A thread id becomes a URL path segment, so the client half of the server's
+   rule (internal/state/threads.go, validThreadID) has to hold here too, with
+   one extra constraint the server cannot express: a '/' in an id would be
+   decoded back into a path separator and route the request somewhere else.
+
+   generateId() never produces one. importData() takes ids straight out of
+   whatever file the user picked, so one can arrive. When it does we do NOT
+   quietly skip that conversation -- a chat that silently stops syncing is the
+   worst possible failure here -- we fall the whole target back to the
+   whole-document write, which is exactly as correct as it was before these
+   routes existed, and say so. */
+function isAddressableThreadId(id) {
+  if (typeof id !== 'string' || id === '' || id.indexOf('/') >= 0) return false;
+  // The server's cap is 256 BYTES; count them rather than UTF-16 units.
+  try {
+    if (new TextEncoder().encode(id).length > 256) return false;
+  } catch (_) {
+    if (id.length > 256) return false;
+  }
+  for (const ch of id) {
+    const c = ch.codePointAt(0);
+    if (c < 0x20 || c === 0x7f) return false;
+  }
+  return true;
+}
+
+/** The ids that cannot be addressed one at a time, or [] when all can. */
+function unaddressableThreadIds() {
+  const bad = [];
+  for (const t of state.threads) if (!isAddressableThreadId(t && t.id)) bad.push(t && t.id);
+  return bad;
+}
+
+/** A per-conversation URL for the current target. */
+function threadSyncUrl(id, sub) {
+  return stateSyncUrl('/threads/' + encodeURIComponent(id) + (sub ? '/' + sub : ''));
+}
+
+/* -- Talking to the server ---------------------------------------*/
+
+/**
+ * GET /state/index. Returns the parsed body, or null when there is nothing to
+ * compare against (no file yet, sync off, or the request failed).
+ *
+ * Never throws: every caller is a user action that should degrade to "carry
+ * on with what is on screen" rather than an error dialog. A genuine failure
+ * still shows up on the indicator via the status it leaves behind.
+ */
+async function fetchStateIndex() {
+  if (!syncEnabled()) return null;
+  try {
+    const resp = await fetch(stateSyncUrl('/index'), { cache: 'no-store' });
+    if (resp.status === 404) return null;          // no backup on this target yet
+    if (!resp.ok) throw serverError(resp);
+    const data = await resp.json();
+    if (!data || !Array.isArray(data.threads)) throw new Error('malformed index');
+    if (typeof data.mtime === 'number') {
+      stateSync.lastKnownMtime = Math.max(stateSync.lastKnownMtime, data.mtime);
+      persistSyncMeta();
+    }
+    if (data.unaddressable > 0) {
+      // The server found conversations with no usable id. They round-trip
+      // fine but can never be the target of a per-conversation request, so
+      // say so rather than letting them look like they are syncing.
+      console.warn('[sync] The server holds ' + data.unaddressable + ' conversation(s) ' +
+                   'with no usable id. They are preserved but cannot be synced individually.');
+    }
+    return data;
+  } catch (e) {
+    console.warn('[sync] Index check failed:', e.message);
+    stateSync.status = 'error';
+    stateSync.lastError = e.message;
+    updateSyncIndicator();
+    return null;
+  }
+}
+
+/**
+ * Interpret the answer to a conditional write.
+ *
+ * Returns { ok, etag, messages } on success and { conflict: true, etag,
+ * messages } on a refused precondition, and throws for everything else --
+ * because a 500 or a dropped connection is not a conflict and must not be
+ * treated as one. The caller advances the ledger ONLY on ok, which is what
+ * makes a replayed append safe: the server moved the version on, so the
+ * replay's stale If-Match is refused rather than duplicating the messages.
+ */
+async function readWriteResult(resp) {
+  const body = await resp.json().catch(() => ({}));
+  if (resp.status === 412 || resp.status === 428) {
+    return {
+      conflict: true,
+      etag: (body && body.etag) || resp.headers.get('ETag') || '',
+      messages: (body && typeof body.messages === 'number') ? body.messages : -1,
+      reason: (body && body.error) || ('HTTP ' + resp.status)
+    };
+  }
+  if (!resp.ok) {
+    throw serverError(resp, (body && body.error) ? (body.error + ' (HTTP ' + resp.status + ')')
+                                                 : ('HTTP ' + resp.status));
+  }
+  if (typeof body.mtime === 'number') {
+    stateSync.lastKnownMtime = body.mtime;
+    persistSyncMeta();
+  }
+  return {
+    ok: true,
+    etag: body.etag || resp.headers.get('ETag') || '',
+    messages: (typeof body.messages === 'number') ? body.messages : -1
+  };
+}
+
+/* -- Seeding -----------------------------------------------------*/
+
+/**
+ * Establish a baseline for the current target by publishing the whole
+ * document once, then adopting the index it produces.
+ *
+ * This is the one remaining whole-document write, and it is deliberate. It
+ * runs when this device has never synced with this target, after a restore,
+ * and after the user explicitly chooses "overwrite the backup" -- all moments
+ * where the user has either just said which copy wins or there is nothing to
+ * lose. Every ordinary save after it is incremental.
+ *
+ * An entry is adopted only when the server's message count agrees with ours.
+ * Another device could have written between the PUT and the index fetch; a
+ * count that disagrees proves it did, and claiming agreement we have not
+ * verified is the one thing a ledger must never do. Unadopted conversations
+ * are simply absent from the ledger, which the next reconcile treats as
+ * "compare properly" rather than as an error.
+ */
+async function seedWholeDocument() {
+  const label = syncTargetLabel();
+  const json = redactedSyncJson();
+  if (!json || json === '{}') throw new Error('nothing to seed with');
+  const resp = await fetch(stateSyncUrl(''), {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: json
+  });
+  if (!resp.ok) throw serverError(resp, 'seed failed: HTTP ' + resp.status);
+  const data = await resp.json().catch(() => ({}));
+  if (data && typeof data.mtime === 'number') {
+    stateSync.lastKnownMtime = data.mtime;
+    persistSyncMeta();
+  }
+
+  const idx = await fetchStateIndex();
+  if (!idx) throw new Error('seeded, but could not read the index back');
+
+  const L = ledgerFor(label);
+  L.threads = {};
+  let skipped = 0;
+  for (const entry of idx.threads) {
+    const local = state.threads.find(t => t.id === entry.id);
+    if (!local) continue;
+    const n = Array.isArray(local.messages) ? local.messages.length : 0;
+    if (entry.messages !== n) { skipped++; continue; }
+    L.threads[entry.id] = { etag: entry.etag, n: n, hash: threadFingerprint(local) };
+  }
+  L.meta = idx.meta || '';
+  L.metaHash = metaFingerprint(redactedStateMeta());
+  L.seeded = true;
+  persistSyncLedger();
+  console.log('[sync] Baseline established for "' + label + '": ' +
+              Object.keys(L.threads).length + ' conversation(s)' +
+              (skipped ? ', ' + skipped + ' left to reconcile' : ''));
+  return true;
+}
+
+/** Make sure there is a baseline before anything incremental is attempted.
+ *  Idempotent, and the only path that ever writes the whole document. */
+async function ensureSyncLedger() {
+  if (!syncEnabled() || stateSyncReloading) return false;
+  const L = currentLedger();
+  if (L.seeded) return true;
+  // Seeding is a whole-document overwrite, so the two cases where it would
+  // destroy something have to be ruled out before it runs.
+  const localCount = state.threads ? state.threads.length : 0;
+  const idx = await fetchStateIndex();
+  if (!idx) {
+    // Nothing here and nothing there: seeding would create a state file for
+    // someone who has not typed anything yet, which is a write nobody asked
+    // for. The first real save seeds instead.
+    if (localCount === 0) return false;
+  } else if (localCount === 0 && idx.threads.length > 0) {
+    // The server holds conversations and this device holds none. Publishing
+    // the emptiness over them is exactly the failure this whole design exists
+    // to remove. Which copy wins when the two disagree is checkServerStateOnBoot's
+    // decision -- it restores -- and never this function's.
+    console.warn('[sync] Not seeding: this device has no conversations and the server has ' +
+                 idx.threads.length + '. Waiting for the boot check to resolve that.');
+    return false;
+  }
+  const bad = unaddressableThreadIds();
+  if (bad.length) {
+    // Seeding is the whole-document write, so it is the correct thing to do
+    // here anyway -- but the ledger must not end up marked seeded, or the
+    // next save would try to address a conversation that has no address.
+    console.warn('[sync] ' + bad.length + ' conversation(s) have ids that cannot be ' +
+                 'used in a URL; this device will keep using whole-document sync.');
+  }
+  await seedWholeDocument();
+  if (bad.length) { currentLedger().seeded = false; persistSyncLedger(); }
+  return currentLedger().seeded;
+}
+
+/* -- Pushing -----------------------------------------------------*/
+
+/**
+ * Send one conversation, if it has moved.
+ *
+ * Append when the shared prefix is untouched and only the tail grew -- which
+ * is what a sent turn looks like, and the reason that route exists: with
+ * image attachments stored as base64 on the message, re-uploading a whole
+ * conversation to add two lines is the antipattern the append route removes.
+ *
+ * Anything else -- an edit, a reroll, a rename, a message deleted from the
+ * middle -- replaces the conversation, still conditional on the version we
+ * last saw.
+ */
+async function pushOneThread(thread, opts) {
+  const L = currentLedger();
+  const entry = L.threads[thread.id];
+  const msgs = Array.isArray(thread.messages) ? thread.messages : [];
+  const full = threadFingerprint(thread);
+  if (entry && entry.hash === full) return 'unchanged';
+
+  const keepalive = !!(opts && opts.keepalive);
+  let result;
+  if (entry && entry.hash && msgs.length > entry.n &&
+      threadFingerprint(thread, entry.n) === entry.hash) {
+    const tail = msgs.slice(entry.n).map(cleanMessage);
+    const resp = await fetch(threadSyncUrl(thread.id, 'append'), {
+      method: 'POST',
+      keepalive: keepalive,
+      headers: { 'Content-Type': 'application/json', 'If-Match': entry.etag },
+      body: JSON.stringify(tail)
+    });
+    result = await readWriteResult(resp);
+  } else {
+    const headers = { 'Content-Type': 'application/json' };
+    // No entry means we have never seen this conversation on the server, so
+    // the honest precondition is "only if it is not there". If it IS there,
+    // that is a conflict to reconcile, not a write to force.
+    if (entry) headers['If-Match'] = entry.etag;
+    else headers['If-None-Match'] = '*';
+    const resp = await fetch(threadSyncUrl(thread.id), {
+      method: 'PUT',
+      keepalive: keepalive,
+      headers: headers,
+      body: JSON.stringify(cleanThread(thread))
+    });
+    result = await readWriteResult(resp);
+  }
+
+  if (result.conflict) return 'conflict';
+  L.threads[thread.id] = { etag: result.etag, n: msgs.length, hash: full };
+  persistSyncLedger();
+  return 'sent';
+}
+
+/** Remove a conversation the user deleted here, if the server still holds the
+ *  version we last saw. If it has moved on, another device added to it after
+ *  we last looked -- that is a conflict, and deleting anyway would discard
+ *  messages this device has never seen. */
+async function deleteOneThread(id, opts) {
+  const L = currentLedger();
+  const entry = L.threads[id];
+  if (!entry) return 'unchanged';
+  const resp = await fetch(threadSyncUrl(id), {
+    method: 'DELETE',
+    keepalive: !!(opts && opts.keepalive),
+    headers: { 'If-Match': entry.etag }
+  });
+  if (resp.status === 404) {
+    // Already gone. Nothing to reconcile: the outcome is the one we wanted.
+    delete L.threads[id];
+    persistSyncLedger();
+    return 'sent';
+  }
+  const result = await readWriteResult(resp);
+  if (result.conflict) return 'conflict';
+  delete L.threads[id];
+  persistSyncLedger();
+  return 'sent';
+}
+
+/**
+ * Send the non-conversation half: settings, cards, personas, folders, macros.
+ *
+ * Last writer wins here, on purpose and with its limits stated. meta is small
+ * and has no append shape, and stopping to ask about a settings change would
+ * be worse than the thing it prevents. A refused precondition is therefore
+ * resolved by taking the server's current version and writing over it, which
+ * is exactly what the whole-document push did for every key in the file --
+ * so it is not a regression, it is the old behaviour confined to the part
+ * that cannot do better yet. Conversations, which is where the data is, no
+ * longer work this way.
+ *
+ * What is left here is preference, and it is preference all the way down --
+ * every field is one value the user chose, so the last device they chose it
+ * on is the right answer. `threadOrder` was the exception, because a list of
+ * every conversation id is not a preference and overwriting it discarded
+ * other devices' conversations from the ordering. It is gone: a conversation
+ * carries its own place in the list (js/04-state.js, CONVERSATION ORDER).
+ */
+async function pushMeta(opts) {
+  const L = currentLedger();
+  const meta = redactedStateMeta();
+  const hash = metaFingerprint(meta);
+  if (L.meta && L.metaHash === hash) return 'unchanged';
+
+  const send = async (etag) => {
+    const headers = { 'Content-Type': 'application/json' };
+    if (etag) headers['If-Match'] = etag;
+    else headers['If-None-Match'] = '*';
+    const resp = await fetch(stateSyncUrl('/meta'), {
+      method: 'PUT',
+      keepalive: !!(opts && opts.keepalive),
+      headers: headers,
+      body: JSON.stringify(meta)
+    });
+    return readWriteResult(resp);
+  };
+
+  let result = await send(L.meta);
+  if (result.conflict) {
+    if (!result.etag) throw new Error('meta precondition failed with no version to retry against');
+    console.warn('[sync] Settings changed on another device; this device takes precedence.');
+    result = await send(result.etag);
+    if (result.conflict) return 'conflict';
+  }
+  L.meta = result.etag;
+  L.metaHash = hash;
+  persistSyncLedger();
+  return 'sent';
+}
+
+/**
+ * The push half of a sync: send every conversation that moved here, remove
+ * every one that was deleted here, and update meta.
+ *
+ * Deliberately silent about conflicts. A push is caused by a save -- the user
+ * is typing, or a reply just landed -- and a dialog in the middle of that is
+ * the wrong moment for a question they have been given no reason to expect.
+ * Conflicts are recorded on the indicator and resolved by the next reconcile,
+ * which runs on a conversation switch or on coming back to the tab, where a
+ * question is expected.
+ */
+async function pushChangedConversations(opts) {
+  if (!syncEnabled() || stateSyncReloading) return;
+  if (!(await ensureSyncLedger())) return;
+
+  const L = currentLedger();
+  const live = new Set(state.threads.map(t => t.id));
+  let sent = 0, conflicts = 0;
+
+  for (const thread of state.threads) {
+    if (!isAddressableThreadId(thread.id)) continue;   // see ensureSyncLedger
+    const outcome = await pushOneThread(thread, opts);
+    if (outcome === 'sent') sent++;
+    else if (outcome === 'conflict') conflicts++;
+  }
+  for (const id of Object.keys(L.threads)) {
+    if (live.has(id)) continue;
+    const outcome = await deleteOneThread(id, opts);
+    if (outcome === 'sent') sent++;
+    else if (outcome === 'conflict') conflicts++;
+  }
+  if ((await pushMeta(opts)) === 'conflict') conflicts++;
+
+  if (conflicts > 0) {
+    stateSync.status = 'conflict';
+    console.warn('[sync] ' + conflicts + ' conversation(s) changed here and on another ' +
+                 'device. Open one to resolve it.');
+  } else if (stateSync.status !== 'quota') {
+    stateSync.status = 'ok';
+  }
+  if (sent) console.log('[sync] Pushed ' + sent + ' change(s).');
+}
+
+/* -- Comparing ---------------------------------------------------*/
+
+/** One conversation without its place in the list, for a comparison that is
+ *  about the messages. Returns the thread itself when there is nothing to
+ *  strip, so the common case copies nothing. */
+function orderlessThread(t) {
+  if (!t || t.order === undefined) return t;
+  const copy = { ...t };
+  delete copy.order;
+  return copy;
+}
+
+/**
+ * How two copies of one conversation are related.
+ *
+ *   'same'         identical, whatever the versions say
+ *   'local-ahead'  the server's copy is a prefix of ours: we appended
+ *   'server-ahead' our copy is a prefix of the server's: they appended
+ *   'diverged'     neither contains the other
+ *
+ * This is what keeps the prompt rare and honest. A refused precondition only
+ * means the version moved; it does not say the content disagrees. The common
+ * causes -- an append whose response we never received, or two devices that
+ * each added to the same chat in turn -- all resolve here without asking
+ * anyone anything. Only a genuine fork reaches the user.
+ *
+ * `order` is deliberately left out of the comparison. Where a conversation
+ * sits in the list is one number, a drag is the lightest gesture in the app,
+ * and none of that may turn "they replied while I rearranged" into a question
+ * about which copy of the messages to keep -- it would not even be a prompt
+ * the user could answer, since both sides show the same messages. It is
+ * settled by whoever writes last, the way the preferences in meta are: the
+ * ledger records what the server holds, so a device that keeps its own number
+ * is left dirty and its next push carries it. The messages are what this
+ * function is for.
+ */
+function relateThreads(local, server) {
+  local = orderlessThread(local);
+  server = orderlessThread(server);
+  const fpLocal = threadFingerprint(local);
+  const fpServer = threadFingerprint(server);
+  if (fpLocal === fpServer) return 'same';
+  const nLocal = Array.isArray(local.messages) ? local.messages.length : 0;
+  const nServer = Array.isArray(server.messages) ? server.messages.length : 0;
+  if (nServer < nLocal && threadFingerprint(local, nServer) === fpServer) return 'local-ahead';
+  if (nLocal < nServer && threadFingerprint(server, nLocal) === fpLocal) return 'server-ahead';
+  return 'diverged';
+}
+
+/** Fetch one conversation and its version. Returns null on any failure --
+ *  every caller has a sane "leave it alone for now" path. */
+async function fetchOneThread(id) {
+  try {
+    const resp = await fetch(threadSyncUrl(id), { cache: 'no-store' });
+    if (!resp.ok) return null;
+    const thread = await resp.json();
+    if (!thread || typeof thread !== 'object') return null;
+    return { thread: thread, etag: resp.headers.get('ETag') || '' };
+  } catch (e) {
+    console.warn('[sync] Could not fetch conversation ' + id + ':', e.message);
+    return null;
+  }
+}
+
+/* -- Applying what the server has --------------------------------*/
+
+/** Replace (or add) one conversation locally. Returns true when the visible
+ *  view needs repainting; the sidebar sorts itself, since where a conversation
+ *  sits is a number on the conversation (js/04-state.js).
+ *
+ *  serverHash is what the server holds, which is normally the thread we are
+ *  adopting -- pass it explicitly when we kept something of ours, so the
+ *  ledger records the backup rather than the merge and the difference shows
+ *  up as ours to push. */
+function applyPulledThread(thread, etag, serverHash) {
+  const L = currentLedger();
+  const i = state.threads.findIndex(t => t.id === thread.id);
+  if (i >= 0) state.threads[i] = thread;
+  else state.threads.push(thread);
+  const n = Array.isArray(thread.messages) ? thread.messages.length : 0;
+  L.threads[thread.id] = {
+    etag: etag, n: n,
+    hash: (serverHash === undefined) ? threadFingerprint(thread) : serverHash
+  };
+  persistSyncLedger();
+  return state.activeThreadId === thread.id;
+}
+
+/** Remove one conversation locally because it was deleted elsewhere. */
+function applyRemoteDelete(id) {
+  const L = currentLedger();
+  state.threads = state.threads.filter(t => t.id !== id);
+  delete L.threads[id];
+  persistSyncLedger();
+  // The record has to go from IndexedDB too. The 'threads' store is keyed by
+  // id and a full save only ever puts, so a record left behind would be read
+  // straight back into state on the next boot and the conversation would
+  // reappear.
+  if (STORAGE_BACKEND === 'idb') {
+    idbDelete('threads', id).catch(e =>
+      console.warn('[sync] Could not remove thread record ' + id + ':', e && e.message));
+  }
+  if (state.activeThreadId === id) {
+    state.activeThreadId = null;   // land on the dashboard rather than a blank chat
+    return true;
+  }
+  return false;
+}
+
+/* -- Resolving a real fork ---------------------------------------*/
+
+/**
+ * Ask about ONE conversation. The scope is the point: the old prompt offered
+ * to replace an entire history because that was the only unit it had, so
+ * "yes" and "no" both meant discarding something the user had not been shown.
+ * This names the chat, says what is on each side, and affects nothing else.
+ */
+function resolveThreadConflict(local, server, serverEtag) {
+  const name = (local && local.name) || (server && server.name) || 'this chat';
+  const nLocal = Array.isArray(local.messages) ? local.messages.length : 0;
+  const nServer = Array.isArray(server.messages) ? server.messages.length : 0;
+  const answer = confirm(
+    '“' + name + '” changed here and on another device, in ways that ' +
+    'cannot be combined automatically.\n\n' +
+    'On this device: ' + nLocal + ' message(s)\n' +
+    'On the server:  ' + nServer + ' message(s)\n\n' +
+    'OK\t\tTake the server’s version of this chat.\n' +
+    'Cancel\tKeep this device’s version and overwrite the server’s.\n\n' +
+    'Only this chat is affected either way.'
+  );
+  if (answer) return applyPulledThread(server, serverEtag);
+  // Keep local. Adopt the server's version token so the next push replaces it
+  // rather than failing the precondition again, and clear the hash so that
+  // push is a replace rather than an append onto a history we are discarding.
+  const L = currentLedger();
+  L.threads[local.id] = { etag: serverEtag, n: nServer, hash: '' };
+  persistSyncLedger();
+  stateSync.pendingPush = true;
+  return false;
+}
+
+/* -- The check itself --------------------------------------------*/
+
+let reconcileInFlight = false;
+
+/**
+ * Ask the server what it holds and fold in anything new.
+ *
+ * Called on a conversation switch and on coming back to the tab -- never on a
+ * timer. A poll would generate traffic nobody asked for and would have to run
+ * while the user is reading; a switch is already a moment where a beat of
+ * latency is expected and where the user has just said which conversation
+ * they care about.
+ *
+ * opts.focus  a conversation id to settle first, so switching into a chat
+ *             resolves that chat before anything else moves on screen.
+ */
+async function reconcileWithServer(opts) {
+  opts = opts || {};
+  if (!syncEnabled() || stateSyncReloading) return;
+  if (reconcileInFlight) return;
+  // A reconcile can replace the active conversation's messages array. Doing
+  // that under a running generation would write tokens into an object that is
+  // no longer the one on screen.
+  if (typeof isGenerating !== 'undefined' && isGenerating) return;
+  const L = currentLedger();
+  if (!L.seeded) return;             // no baseline yet; the push path seeds
+
+  reconcileInFlight = true;
+  try {
+    const idx = await fetchStateIndex();
+    if (!idx) return;
+
+    const serverById = new Map(idx.threads.map(e => [e.id, e]));
+    let repaint = false, pulled = 0, removed = 0, conflicts = 0;
+
+    // Order matters only for the conversation the user just opened: settle
+    // that one first so the view stops changing under them.
+    const entries = idx.threads.slice().sort((a, b) =>
+      (b.id === opts.focus ? 1 : 0) - (a.id === opts.focus ? 1 : 0));
+
+    for (const entry of entries) {
+      const local = state.threads.find(t => t.id === entry.id);
+      const known = L.threads[entry.id];
+
+      if (!local) {
+        // Not here. Either it is new to this device, or we deleted it.
+        if (!known) {
+          const got = await fetchOneThread(entry.id);
+          if (got) { applyPulledThread(got.thread, got.etag); pulled++; repaint = true; }
+        } else if (known.etag === entry.etag) {
+          // We deleted it and the server still holds exactly what we saw.
+          // The push path owns that; leave it alone here.
+          stateSync.pendingPush = true;
+        } else {
+          // We deleted it, someone else extended it. Bring it back rather
+          // than discard messages this device has never seen, and let the
+          // user delete it again if that is still what they want.
+          const got = await fetchOneThread(entry.id);
+          if (got) {
+            applyPulledThread(got.thread, got.etag);
+            pulled++; repaint = true;
+            console.warn('[sync] "' + (got.thread.name || entry.id) + '" was deleted here but ' +
+                         'extended on another device -- restored rather than dropped.');
+          }
+        }
+        continue;
+      }
+
+      const moved = !known || known.etag !== entry.etag;
+      const dirty = !known || known.hash !== threadFingerprint(local);
+      if (!moved) {
+        if (dirty) stateSync.pendingPush = true;   // ours to push
+        continue;
+      }
+      if (!dirty && known) {
+        // Server moved, we have not touched it: take theirs, no questions.
+        const got = await fetchOneThread(entry.id);
+        if (!got) continue;
+        if (applyPulledThread(got.thread, got.etag)) repaint = true;
+        pulled++;
+        continue;
+      }
+
+      // Both sides moved -- or we have no record of this one at all. A moved
+      // version is not by itself a disagreement about content, so find out
+      // what it actually is before asking anyone anything.
+      const got = await fetchOneThread(entry.id);
+      if (!got) continue;
+      const relation = relateThreads(local, got.thread);
+      const nServer = Array.isArray(got.thread.messages) ? got.thread.messages.length : 0;
+      if (relation === 'same') {
+        // Identical after all: an append whose response we never received, or
+        // a re-encoding. Adopt the version and say nothing. The hash is the
+        // server's own copy, so if the one thing still differing is where the
+        // conversation sits in the list, this device reads as dirty and the
+        // next push settles it -- silently, because there is nothing about
+        // the messages for anyone to decide.
+        L.threads[entry.id] = { etag: got.etag, n: nServer, hash: threadFingerprint(got.thread) };
+        persistSyncLedger();
+        if (L.threads[entry.id].hash !== threadFingerprint(local)) stateSync.pendingPush = true;
+      } else if (relation === 'server-ahead') {
+        // Their messages, our place in the list. Taking their copy wholesale
+        // would undo a drag made on this device, and the ordering is the one
+        // field on a conversation that can be merged without guessing -- so
+        // keep ours, and record the server's fingerprint so the push carries
+        // it back.
+        const serverHash = threadFingerprint(got.thread);
+        if (local.order !== undefined && local.order !== got.thread.order) {
+          got.thread.order = local.order;
+          stateSync.pendingPush = true;
+        }
+        if (applyPulledThread(got.thread, got.etag, serverHash)) repaint = true;
+        pulled++;
+      } else if (relation === 'local-ahead') {
+        // We hold everything the server has, plus more. Record its version and
+        // its fingerprint so the push appends onto it -- and so that if our
+        // copy also sits somewhere else in the list, the fingerprints differ
+        // at the head and the push replaces instead, because the append route
+        // only ever adds messages and could never carry that.
+        L.threads[entry.id] = { etag: got.etag, n: nServer, hash: threadFingerprint(got.thread) };
+        persistSyncLedger();
+        stateSync.pendingPush = true;
+      } else {
+        conflicts++;
+        if (resolveThreadConflict(local, got.thread, got.etag)) repaint = true;
+      }
+    }
+
+    // A conversation we hold that the server no longer has.
+    for (const thread of state.threads.slice()) {
+      if (serverById.has(thread.id)) continue;
+      const known = L.threads[thread.id];
+      if (!known) { stateSync.pendingPush = true; continue; }   // never sent; push creates it
+      if (known.hash && known.hash === threadFingerprint(thread)) {
+        // Unchanged since the version we and the server agreed on, and now
+        // gone from the server: it was deleted on another device, and there
+        // is nothing here that removing it would lose.
+        if (applyRemoteDelete(thread.id)) repaint = true;
+        removed++;
+      } else {
+        // Deleted there, changed here. Keep it and re-create it; the local
+        // changes are real, and the delete can simply be repeated.
+        delete L.threads[thread.id];
+        persistSyncLedger();
+        stateSync.pendingPush = true;
+        console.warn('[sync] "' + (thread.name || thread.id) + '" was deleted on another ' +
+                     'device but has unsent changes here -- keeping it.');
+      }
+    }
+
+    if (pulled || removed) {
+      console.log('[sync] Folded in ' + pulled + ' updated conversation(s)' +
+                  (removed ? ', removed ' + removed : '') + ' from ' + syncTargetLabel() + '.');
+      saveState();
+      if (typeof render === 'function' && repaint) render();
+      else if (typeof renderSidebar === 'function') renderSidebar();
+    }
+    if (conflicts > 0) stateSync.status = 'conflict';
+    else if (stateSync.status !== 'quota') stateSync.status = 'ok';
+    updateSyncIndicator();
+    if (stateSync.pendingPush) forceServerFlush();
+  } finally {
+    reconcileInFlight = false;
+  }
 }

@@ -972,6 +972,14 @@ func dirWritable(dir string) (bool, error) {
 func (c *Config) StatePath() string { return filepath.Join(c.DataDir, "state.json") }
 func (c *Config) LogFile() string   { return filepath.Join(c.DataDir, "llama-server.log") }
 
+// KeyringPath is the sidecar holding the wrapped data key. Its presence is what
+// "this install is encrypted" means: there is no flag in the config saying so,
+// because a flag can disagree with the files and the files are the truth.
+//
+// One keyring covers every profile in the data directory. Which history is
+// whose is what profiles decide; who may read them is decided at the door.
+func (c *Config) KeyringPath() string { return filepath.Join(c.DataDir, "state.keyring") }
+
 // ModelDirUsable reports whether there is a directory to enumerate GGUFs from.
 // Independent of Mode: a remote-mode install may still list local files, and a
 // local-mode install may have an empty models directory at first boot.

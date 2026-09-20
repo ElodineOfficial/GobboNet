@@ -32,7 +32,13 @@
   // replies get folded in silently, a still-running one re-attaches live.
   // Only after that first pass settles do wake-driven resumes arm
   // (_appBooted gates handleAppWake — see the page-lifecycle block).
+  // ensureSyncLedger() runs between the two: the whole-document conflict check
+  // above decides which copy of the history wins, and only once that has
+  // settled is it meaningful to record per-conversation versions against it.
+  // Seeding here rather than lazily on the first save means the first thing
+  // the user does is not also the thing that uploads their whole history.
   checkServerStateOnBoot().catch(() => {})
+    .then(() => ensureSyncLedger()).catch(() => {})
     .then(() => resumePendingJobs()).catch(() => {})
     .then(() => { _appBooted = true; });
   loadActiveModel().then(loadModelsList); // fetch model info + populate header dropdown
@@ -154,10 +160,14 @@
    multi-MB blob on every routine tab toggle.
 
    pagehide: fires on real navigation, tab close, and bfcache entry. Local
-   save AND a sendBeacon to /state when the state is settled, so a completed
-   turn reaches the server backup even if the user navigates inside the
-   debounce window. (beforeunload/unload are deliberately not used — they're
-   unreliable on mobile and disqualify the page from bfcache.)
+   save AND a keepalive push of whatever conversations actually moved, when
+   the state is settled, so a completed turn reaches the server backup even if
+   the user navigates inside the debounce window. (beforeunload/unload are
+   deliberately not used — they're unreliable on mobile and disqualify the
+   page from bfcache.) This was a sendBeacon of the entire history until the
+   per-conversation routes landed; sendBeacon cannot carry an If-Match header,
+   which made it the last writer in the system that could still flatten
+   another device's chats. See flushBeforeExit in js/06-state-sync.js.
 
    ---- The return trip (handleAppWake) ----
    The handlers above cover leaving; these cover coming BACK — the half
@@ -198,6 +208,15 @@ function handleAppWake(reason) {
   if (!isGenerating) {
     console.log(`[wake] app returned (${reason}) — re-checking pending generations`);
     resumePendingJobs();
+    // The other half of the return trip. switchThread() covers "I opened a
+    // different chat"; this covers the gap it cannot — the conversation you
+    // are already looking at, while the other device adds to it. Picking your
+    // phone back up is exactly that moment, and this handler is already
+    // gated, cooled down and idle-only, which is precisely what the check
+    // needs. See PER-CONVERSATION SYNC in js/06-state-sync.js.
+    if (typeof reconcileWithServer === 'function') {
+      reconcileWithServer({ reason: reason, focus: state.activeThreadId }).catch(() => {});
+    }
   }
 }
 

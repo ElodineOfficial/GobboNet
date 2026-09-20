@@ -277,6 +277,12 @@ function renderThreadItem(t) {
 }
 
 function renderSidebar() {
+  // The list's order is `thread.order` (js/04-state.js); the array is a sorted
+  // cache of it. Restoring the invariant here rather than at every site that
+  // can move a key means a reply that lands in another chat, a scheduled
+  // message, or a conversation pulled from another device all rise to their
+  // place on the next paint, with nothing to remember at the call site.
+  sortThreadsByOrder();
   const list = document.getElementById('thread-list');
   const searchInput = document.getElementById('thread-search');
   const query = searchInput ? searchInput.value.trim().toLowerCase() : '';
@@ -403,20 +409,19 @@ function onThreadDrop(threadId, event) {
   const rect = el.getBoundingClientRect();
   const pos = event.clientY < rect.top + rect.height / 2 ? 'before' : 'after';
 
-  const fromIdx = state.threads.findIndex(t => t.id === _dragThreadId);
-  const toIdx   = state.threads.findIndex(t => t.id === threadId);
-  if (fromIdx === -1 || toIdx === -1) return;
+  const moved  = state.threads.find(t => t.id === _dragThreadId);
+  const target = state.threads.find(t => t.id === threadId);
+  if (!moved || !target) return;
 
-  const [moved] = state.threads.splice(fromIdx, 1);
-  // After removal, adjust target index if it was after the removed item
-  let insertIdx = fromIdx < toIdx ? toIdx - 1 : toIdx;
-  if (pos === 'after') insertIdx++;
-  insertIdx = Math.max(0, Math.min(insertIdx, state.threads.length));
-  state.threads.splice(insertIdx, 0, moved);
+  // A reorder used to rewrite the whole list; it now writes one number on one
+  // conversation, which is also the only thing it has to sync. If the place
+  // could not be worked out, nothing moves and placeThreadBeside() has said
+  // why — dropping the conversation somewhere the user did not point at would
+  // be worse than the drag appearing not to take.
+  if (!placeThreadBeside(moved, target, pos)) return;
 
   // Inherit the dropped-onto thread's folder so the move feels natural
-  const targetThread = state.threads.find(t => t.id === threadId);
-  if (targetThread) moved.folderId = targetThread.folderId;
+  moved.folderId = target.folderId;
 
   saveState(); renderSidebar();
   _dragThreadId = null;

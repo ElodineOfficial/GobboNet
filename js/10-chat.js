@@ -92,9 +92,10 @@ async function sendMessage(overrideContent) {
   thread.messages.push(userMessage);
   // Fresh activity floats this thread to the top of the list, alongside the
   // new threads and forks that already land there — so the threads you're
-  // actively working in stay reachable without pinning. No-op if it's already
-  // first (e.g. a brand-new thread, or one you just messaged).
-  bumpThreadToTop(thread.id);
+  // actively working in stay reachable without pinning. The timestamp on the
+  // message just pushed is what does it (js/04-state.js, CONVERSATION ORDER);
+  // all that is left is to restore the array the sidebar reads.
+  sortThreadsByOrder();
   saveState();
   if (!isProgrammatic) {
     input.value = '';

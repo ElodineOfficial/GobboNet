@@ -13,6 +13,9 @@
 //	gobbonet doctor                   report paths, ports and who owns them
 //	gobbonet config get KEY           read one setting (for launcher scripts)
 //	gobbonet config set KEY VALUE     write one setting, comments preserved
+//	gobbonet keyring init             encrypt the stored history
+//	gobbonet keyring recover          forgot the password: phrase in, new one out
+//	gobbonet decrypt                  go back to storing history in plaintext
 package main
 
 import (
@@ -30,6 +33,7 @@ import (
 	"github.com/ElodineOfficial/GobboNet/internal/auth"
 	"github.com/ElodineOfficial/GobboNet/internal/config"
 	"github.com/ElodineOfficial/GobboNet/internal/engine"
+	"github.com/ElodineOfficial/GobboNet/internal/keyring"
 	"github.com/ElodineOfficial/GobboNet/internal/models"
 	"github.com/ElodineOfficial/GobboNet/internal/server"
 	"github.com/ElodineOfficial/GobboNet/internal/setup"
@@ -158,6 +162,10 @@ func run(argv []string) error {
 		return cmdEngine(argv)
 	case "config":
 		return cmdConfig(argv)
+	case "keyring":
+		return cmdKeyring(argv)
+	case "decrypt":
+		return cmdDecrypt(argv)
 	case "version", "-v", "--version":
 		fmt.Println(version.Full())
 		return nil
@@ -186,6 +194,8 @@ func usage() {
   gobbonet config get [--config PATH] <key>
   gobbonet config set [--config PATH] <key> <value>
   gobbonet config keys
+  gobbonet keyring init|list|set-recovery|recover [--config PATH]
+  gobbonet decrypt [--config PATH] [--yes]
   gobbonet version
 `)
 }
@@ -278,6 +288,17 @@ func cmdServe(argv []string) error {
 		cfg.LLMURL = *llmURL
 	}
 	cfg.RequireAuth = !*noAuth
+
+	// --no-auth cannot be honoured on an encrypted install. The password is the
+	// only thing that unwraps the data key, so the flag would not produce a
+	// server with no password -- it would produce one whose history nobody can
+	// read, with every other route wide open. Say which of the two the user
+	// meant rather than starting something that is neither.
+	if *noAuth && keyring.Exists(cfg.KeyringPath()) {
+		return fmt.Errorf("--no-auth cannot be used on an encrypted install: the password is what unwraps the data key.\n"+
+			"      Either start without --no-auth, or run `gobbonet decrypt` first to go back to plaintext storage.\n"+
+			"      Keyring: %s", cfg.KeyringPath())
+	}
 
 	// A server_exe that names a file which is gone is fatal below -- correctly,
 	// because silently demoting to remote mode proxies into a void. But it is
@@ -707,10 +728,77 @@ func cmdSetPassword(argv []string) error {
 	if err != nil {
 		return err
 	}
+	// On an encrypted install the password is not a hash to overwrite, it is a
+	// keyslot to reseal -- and a data key you cannot unwrap is one you cannot
+	// reseal, so this is the day changing the password starts needing the old
+	// one. That is the feature working, not a restriction we chose.
+	if keyring.Exists(cfg.KeyringPath()) {
+		return resealPassword(&cfg, *fromStdin)
+	}
 	if *fromStdin {
 		return storePasswordFromStdin(&cfg)
 	}
 	return promptAndStorePassword(&cfg)
+}
+
+// resealPassword rewrites the password keyslot on an encrypted install.
+//
+// Nothing but the keyring file is touched: the history is encrypted under a
+// data key that does not change, so this costs a kilobyte of writing whether
+// there are ten conversations or ten thousand.
+func resealPassword(cfg *config.Config, fromStdin bool) error {
+	var current, next string
+
+	if fromStdin {
+		// Two lines: the current password, then the new one. The alternative is
+		// taking one on the command line, where any process on the machine can
+		// read it out of /proc for as long as the call runs.
+		raw, err := io.ReadAll(io.LimitReader(os.Stdin, 8192))
+		if err != nil {
+			return fmt.Errorf("could not read passwords from standard input: %w", err)
+		}
+		lines := strings.SplitN(strings.ReplaceAll(string(raw), "\r\n", "\n"), "\n", 3)
+		if len(lines) < 2 {
+			return errors.New("this install is encrypted, so --stdin expects two lines: the current password, then the new one")
+		}
+		current, next = lines[0], lines[1]
+	} else {
+		var err error
+		if current, err = readPassword("  Current password: "); err != nil {
+			return err
+		}
+		fmt.Println()
+		if next, err = confirmedPassword(cfg); err != nil {
+			return err
+		}
+	}
+
+	if len(next) < minPasswordLength {
+		return fmt.Errorf("the password must be at least %d characters", minPasswordLength)
+	}
+
+	k, err := keyring.UnlockPassword(cfg.KeyringPath(), current)
+	if err != nil {
+		return err
+	}
+	if err := k.SetPassword(next); err != nil {
+		return err
+	}
+
+	// An install encrypted before this marker existed still carries an Argon2id
+	// hash of the old password in the config. Leaving it there would be a
+	// cheaper verifier for a password that no longer opens anything -- and a
+	// standing invitation to grind it. Clear it on the way past.
+	if cfg.AccessSecret != keyringMarker {
+		if err := config.Set(cfg.Path, "access_secret", keyringMarker); err != nil {
+			return fmt.Errorf("the password was changed, but %s could not be updated: %w", cfg.Path, err)
+		}
+		cfg.AccessSecret = keyringMarker
+	}
+
+	fmt.Println("  [OK] Password changed. The old one no longer works.")
+	fmt.Println("       Your recovery phrase is unaffected.")
+	return nil
 }
 
 // storePasswordFromStdin is the headless door onto the same hashing the
@@ -747,6 +835,14 @@ func storePasswordFromStdin(cfg *config.Config) error {
 
 // ensurePassword makes sure a usable password exists before the server starts.
 func ensurePassword(cfg *config.Config) error {
+	// On an encrypted install the keyslot is the verifier and access_secret
+	// holds a marker instead of a hash, so there is nothing here to check. That
+	// the marker fails SecretConfigured is the point: a build that predates the
+	// keyring reads it, calls it malformed, and refuses to start rather than
+	// serving a history it cannot read.
+	if keyring.Exists(cfg.KeyringPath()) {
+		return nil
+	}
 	if auth.SecretConfigured(cfg.AccessSecret) {
 		return nil
 	}

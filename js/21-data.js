@@ -181,8 +181,13 @@ function downloadJSON(data, filename) {
 
 function exportData(type) {
   const ts = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+  // `version` is the envelope: what shape THIS file is. `schemaVersion` is
+  // what shape the state inside it is (js/04-state.js), and the two move
+  // independently -- an export file whose wrapper never changes can still
+  // carry conversations from any era of the app.
   if (type === 'threads') {
-    downloadJSON({ gobbonet_export: 'threads', version: 1, exported: Date.now(), threads: state.threads },
+    downloadJSON({ gobbonet_export: 'threads', version: 1, schemaVersion: STATE_SCHEMA_VERSION,
+      exported: Date.now(), threads: state.threads },
       `gobbonet-threads-${ts}.json`);
   } else if (type === 'cards') {
     downloadJSON({ gobbonet_export: 'cards', version: 1, exported: Date.now(), characterCards: state.characterCards },
@@ -195,6 +200,7 @@ function exportData(type) {
     downloadJSON({
       gobbonet_export: 'full',
       version: 1,
+      schemaVersion: STATE_SCHEMA_VERSION,
       exported: Date.now(),
       threads: state.threads,
       activeThreadId: state.activeThreadId,
@@ -273,6 +279,7 @@ function exportThread(id, event) {
   downloadJSON({
     gobbonet_export: 'threads',
     version: 1,
+    schemaVersion: STATE_SCHEMA_VERSION,
     exported: Date.now(),
     threads: [thread],
     characterCards: cards,
@@ -512,20 +519,22 @@ async function purgeData(type) {
     state.extensions     = { ...DEFAULT_EXTENSIONS };
     state.searchEnabled  = false;
 
-    // These four are persisted by buildStateBlob but were not being reset, so
+    // These three are persisted by buildStateBlob but were not being reset, so
     // they survived a "factory reset":
     //
     //   macros              user-authored text expansions -- content, not
     //                       preference, and the one that actually matters
     //   seededDefaultMacros bookkeeping for the above; left stale it stops the
     //                       built-in macros from re-seeding on next boot
-    //   threadOrder         ordering by thread id, every one of which was just
-    //                       deleted -- dangling references to purged data
     //   sidebarOpen         a UI preference, reset for consistency with the
     //                       rest of a full reset
+    //
+    // There was a fourth, threadOrder: a list of thread ids, every one of them
+    // just deleted. It needs no resetting now because it no longer exists --
+    // the order is a number on each conversation, and emptying state.threads
+    // takes it with them.
     state.macros              = DEFAULT_MACROS.map(m => ({ ...m }));
     state.seededDefaultMacros = DEFAULT_MACROS.map(m => m.trigger);
-    state.threadOrder         = [];
     state.sidebarOpen         = true;
 
     // Not persisted, but it is per-card scratch space written by card code and
