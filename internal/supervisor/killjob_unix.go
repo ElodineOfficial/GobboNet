@@ -28,3 +28,5 @@ import "os/exec"
 // Unix that is a deliberate act rather than the routine "close the window"
 // gesture it is on Windows.
 func superviseTree(cmd *exec.Cmd) error { return nil }
+
+func releaseTree(pgid int) {}

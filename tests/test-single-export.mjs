@@ -126,7 +126,9 @@ function build(stateObj) {
   };
   ctx.globalThis = ctx;
   vm.createContext(ctx);
-  vm.runInContext(BLOCK, ctx);
+  const stateSource = fs.readFileSync(ROOT + '/js/04-state.js', 'utf8');
+  const schema = stateSource.match(/const STATE_SCHEMA_VERSION\s*=\s*\d+;/)[0];
+  vm.runInContext(schema + '\n' + BLOCK, ctx);
   return { ctx, downloads, status, state: ctx.state };
 }
 

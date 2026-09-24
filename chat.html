@@ -217,12 +217,12 @@
         <div class="form-group">
           <label for="perf-ctx">Context size (tokens)</label>
           <input type="number" id="perf-ctx" min="512" max="1048576" step="512">
-          <div class="form-hint">How much the model can hold at once. Bigger costs VRAM, quadratically at the top end.</div>
+          <div class="form-hint">How much the model can hold at once. A larger window needs more memory.</div>
         </div>
         <div class="form-group">
           <label for="perf-gpu">GPU layers</label>
-          <input type="number" id="perf-gpu" min="0" max="999" step="1">
-          <div class="form-hint">99 means all of them. Lower pushes work onto the CPU: slower, but frees VRAM. 0 is CPU only.</div>
+          <input type="number" id="perf-gpu" min="-1" max="999" step="1">
+          <div class="form-hint">-1 fits GPU layers automatically while leaving headroom. 0 is CPU only; a positive number fixes the layer count. Auto keeps your model and context, but CPU offload can be slower and needs system RAM.</div>
         </div>
       </div>
 

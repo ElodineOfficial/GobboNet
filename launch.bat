@@ -286,7 +286,7 @@ if !WEB_PORT! gtr 32767 (
     set "WEB_PORT=9066"
 )
 set "CTX_SIZE=16384"
-set "GPU_LAYERS=99"
+set "GPU_LAYERS=-1"
 set "KV_CACHE_TYPE=q8_0"
 
 :: Log verbosity handed to llama-server as -lv. Not cosmetic: STEP 3b confirms
@@ -1620,6 +1620,15 @@ echo.
 goto :start_embed
 
 :start_server_legacy
+:: The managed path hands -1 (automatic placement) to gobbonet.exe, which
+:: capability-checks the engine and fits layers itself. llama-server started
+:: from here gets no such check, so this path keeps the 99-layer default
+:: it has always had -- including for fileserver.ps1 hot-swaps, which
+:: inherit GEMMA_GPU_LAYERS from this value.
+if "!GPU_LAYERS!"=="-1" (
+    echo  [*] Legacy launcher uses 99 GPU layers; automatic fitting needs gobbonet.exe.
+    set "GPU_LAYERS=99"
+)
 echo  [..] Checking for running llama-server...
 
 call :http_alive "http://127.0.0.1:!SERVER_PORT!/health"
@@ -2061,7 +2070,9 @@ echo.
 
 :: --model, because STEP 2 just asked which one. Letting the server
 :: pick the first file it scans would make that menu decorative.
+set "GOBBONET_BANNER_SHOWN=1"
 "!GN!" --open --model "!GGUF_BASENAME!"
+set "GOBBONET_BANNER_SHOWN="
 
 :: gobbonet runs until Ctrl+C. Reaching here means it stopped; the
 :: keep-open guard holds the window so its last words stay readable.

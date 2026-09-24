@@ -1933,7 +1933,40 @@ function mdInline(text, store, dialogColor) {
   return s;
 }
 
+// Bound retained markup, rather than caching every conversation indefinitely.
+// Exact text + validated colour keys also cover edits and persona/card changes.
+const markdownCache = new Map();
+const MARKDOWN_CACHE_BYTES = 1024 * 1024;
+let markdownCacheBytes = 0;
 function parseMarkdown(text, dialogColor) {
+  if (!text) return '';
+  text = String(text);
+  dialogColor = safeCssColor(dialogColor, '');
+  const key = dialogColor + '\0' + text;
+  const hit = markdownCache.get(key);
+  if (hit) {
+    markdownCache.delete(key);
+    markdownCache.set(key, hit);
+    return hit.html;
+  }
+  const html = parseMarkdownUncached(text, dialogColor);
+  // Approximate UTF-16 string payload; Map/object overhead is bounded by 128
+  // entries as well. Oversized messages render normally without being cached.
+  const bytes = 2 * (key.length + html.length);
+  // File blocks generate unique DOM IDs; do not reuse their markup.
+  if (bytes <= MARKDOWN_CACHE_BYTES && !html.includes(' id="')) {
+    while (markdownCache.size && (markdownCacheBytes + bytes > MARKDOWN_CACHE_BYTES || markdownCache.size >= 128)) {
+      const oldest = markdownCache.keys().next().value;
+      markdownCacheBytes -= markdownCache.get(oldest).bytes;
+      markdownCache.delete(oldest);
+    }
+    markdownCache.set(key, { html, bytes });
+    markdownCacheBytes += bytes;
+  }
+  return html;
+}
+
+function parseMarkdownUncached(text, dialogColor) {
   if (!text) return '';
   // dialogColor rides in from a character card, which can arrive from an
   // imported file or a synced peer, and lands in a style="color:..."

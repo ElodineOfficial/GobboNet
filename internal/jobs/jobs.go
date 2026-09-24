@@ -223,6 +223,9 @@ func (j *Job) write(p []byte) (int, error) {
 
 // Manager owns the live jobs.
 type Manager struct {
+	// Acquire is set before serving. Release runs after the upstream closes.
+	Acquire func() (func(), error)
+
 	llmURL string
 	apiKey string
 
@@ -239,8 +242,10 @@ type Manager struct {
 
 	nextSeq atomic.Uint64
 
-	mu   sync.Mutex
-	jobs map[string]*Job
+	mu          sync.Mutex
+	jobs        map[string]*Job
+	closed      bool
+	cleanupStop chan struct{}
 }
 
 // newJobClient builds the streaming client with its dial and first-byte bounds.
@@ -266,7 +271,7 @@ func newJobClient(dial, header time.Duration) *http.Client {
 }
 
 func NewManager(llmURL, apiKey string, maxConcurrent, maxAgeHours int) *Manager {
-	return &Manager{
+	m := &Manager{
 		llmURL:        llmURL,
 		apiKey:        apiKey,
 		maxConcurrent: maxConcurrent,
@@ -281,8 +286,26 @@ func NewManager(llmURL, apiKey string, maxConcurrent, maxAgeHours int) *Manager 
 		// The bounds are staged instead, matching internal/proxy: a short dial,
 		// a generous wait for the first byte, and a watchdog on the gap between
 		// chunks (see run). maxRuntime remains the outermost cap.
-		client: newJobClient(dialTimeout, responseHeaderTimeout),
-		jobs:   make(map[string]*Job),
+		client:      newJobClient(dialTimeout, responseHeaderTimeout),
+		jobs:        make(map[string]*Job),
+		cleanupStop: make(chan struct{}),
+	}
+	go m.cleanupLoop(time.Minute)
+	return m
+}
+
+// Expired results must be reclaimed even if nobody starts another reply.
+// Running work and results still inside the recovery window are untouched.
+func (m *Manager) cleanupLoop(interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			m.sweep()
+		case <-m.cleanupStop:
+			return
+		}
 	}
 }
 
@@ -290,6 +313,10 @@ func NewManager(llmURL, apiKey string, maxConcurrent, maxAgeHours int) *Manager 
 // as interrupted anyway; cancelling explicitly frees the upstream slots.
 func (m *Manager) Shutdown() {
 	m.mu.Lock()
+	if !m.closed && m.cleanupStop != nil {
+		close(m.cleanupStop)
+	}
+	m.closed = true
 	defer m.mu.Unlock()
 	for _, j := range m.jobs {
 		j.mu.Lock()
@@ -663,13 +690,34 @@ func (m *Manager) handleCreate(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeoutCause(context.Background(), m.maxRuntime, errJobExpired)
 	job.cancel = cancel
 
-	// Register before starting the worker: a poll landing one millisecond after
-	// the 202 must find the job.
+	var release func()
+	if m.Acquire != nil {
+		release, err = m.Acquire()
+		if err != nil {
+			cancel()
+			httpx.ErrorDetail(w, r, http.StatusServiceUnavailable, "model is not ready", err.Error())
+			return
+		}
+	}
+	// Publish only after wake succeeds, and never after manager shutdown.
 	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		cancel()
+		if release != nil {
+			release()
+		}
+		httpx.Error(w, r, http.StatusServiceUnavailable, "server is shutting down")
+		return
+	}
 	m.jobs[id] = job
 	m.mu.Unlock()
-
-	go m.run(ctx, job, body)
+	go func() {
+		if release != nil {
+			defer release()
+		}
+		m.run(ctx, job, body)
+	}()
 
 	log.Printf("[jobs] started %s (thread=%q, %d bytes of request)", id, job.Thread, len(body))
 	httpx.WriteJSON(w, r, http.StatusAccepted, map[string]string{

@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
+	"sort"
 )
 
 // document is a state file decoded exactly far enough to address one
@@ -102,24 +104,88 @@ func marshalJSON(v any) ([]byte, error) {
 // the visible cost of patching: the file is no longer byte-identical to the
 // last upload, though every value in it is unchanged and untouched threads are
 // re-emitted exactly as they were stored.
-func (d *document) marshal() ([]byte, error) {
-	out := make(map[string]json.RawMessage, len(d.keys)+1)
-	for k, v := range d.keys {
-		out[k] = v
+// writeJSON preserves the existing canonical bytes but writes one raw value
+// at a time. Index hashing need not allocate an encoded copy of the library;
+// saves need only the final document buffer, not an intermediate thread array.
+func (d *document) writeJSON(w io.Writer) error {
+	keys := make([]string, 0, len(d.keys)+1)
+	for key := range d.keys {
+		keys = append(keys, key)
 	}
-	if d.hadThreads || len(d.threads) > 0 {
-		encoded, err := marshalJSON(d.threads)
+	hasThreads := d.hadThreads || len(d.threads) > 0
+	if hasThreads {
+		keys = append(keys, "threads")
+	}
+	sort.Strings(keys)
+	write := func(s string) error { _, err := io.WriteString(w, s); return err }
+	var scratch bytes.Buffer
+	raw := func(value []byte) error {
+		scratch.Reset()
+		if err := json.Compact(&scratch, value); err != nil {
+			return err
+		}
+		_, err := w.Write(scratch.Bytes())
+		return err
+	}
+	if err := write("{"); err != nil {
+		return err
+	}
+	for i, key := range keys {
+		if i > 0 {
+			if err := write(","); err != nil {
+				return err
+			}
+		}
+		encoded, err := marshalJSON(key)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		if d.threads == nil {
-			// Marshalling a nil slice gives "null"; an empty conversation list
-			// is [], and the client's loader distinguishes the two.
-			encoded = []byte("[]")
+		if _, err = w.Write(encoded); err != nil {
+			return err
 		}
-		out["threads"] = encoded
+		if err = write(":"); err != nil {
+			return err
+		}
+		if key == "threads" && hasThreads {
+			if err = write("["); err != nil {
+				return err
+			}
+			for j, thread := range d.threads {
+				if j > 0 {
+					if err = write(","); err != nil {
+						return err
+					}
+				}
+				if err = raw(thread); err != nil {
+					return err
+				}
+			}
+			if err = write("]"); err != nil {
+				return err
+			}
+		} else {
+			if err = raw(d.keys[key]); err != nil {
+				return err
+			}
+		}
 	}
-	return marshalJSON(out)
+	return write("}")
+}
+
+func (d *document) marshal() ([]byte, error) {
+	var buf bytes.Buffer
+	if err := d.writeJSON(&buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (d *document) etag() (string, error) {
+	h := sha256.New()
+	if err := d.writeJSON(h); err != nil {
+		return "", err
+	}
+	return `"` + hex.EncodeToString(h.Sum(nil)[:16]) + `"`, nil
 }
 
 // find returns the index of the thread with this id, or -1.

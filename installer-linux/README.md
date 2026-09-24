@@ -156,9 +156,10 @@ visible; a script that delegates it cannot detect it.
 
 ## Deferred
 
-`.rpm`, arm64 packages, autostart-at-login, and the hardware probe. Linux v1
+arm64 packages, autostart-at-login, and the hardware probe. Linux v1
 offers the catalogue unfiltered and lets the user pick, which is exactly what
-the Windows wizard already does when its probe fails.
+the Windows wizard already does when its probe fails. (The `.rpm` was on this
+list once; it is built by `installer-fedora/` now.)
 
 **arm64 note:** the original plan held arm64 back because upstream published no
 arm64 Linux engine. That is no longer true — `llama-<build>-bin-ubuntu-arm64.tar.gz`

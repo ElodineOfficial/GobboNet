@@ -119,20 +119,11 @@ func (s *Server) serveLLMProxy(w http.ResponseWriter, r *http.Request) {
 	if s.sup != nil {
 		use := countsAsUse(r.URL.Path)
 		if use {
-			s.sup.MarkActivity()
-			if s.sup.IsStoodDown() {
-				if err := s.sup.EnsureAwake(); err != nil {
-					// 503 rather than 502: the upstream is not broken, it is not
-					// up yet, and the distinction is what tells the user to try
-					// again rather than go looking at llama.cpp.
-					httpx.ErrorDetail(w, r, http.StatusServiceUnavailable,
-						"the model could not be reloaded after standing down", err.Error())
-					return
-				}
+			done, err := s.sup.AcquireRequest()
+			if err != nil {
+				httpx.ErrorDetail(w, r, http.StatusServiceUnavailable, "model is not ready", err.Error())
+				return
 			}
-			// Counted for the whole life of the request, including the streaming
-			// body. A six-minute generation must not look idle at minute five.
-			done := s.sup.BeginRequest()
 			defer done()
 		} else if s.sup.IsStoodDown() {
 			// An inspection request while the model is unloaded. Answered
@@ -158,21 +149,6 @@ func (s *Server) serveLLMProxy(w http.ResponseWriter, r *http.Request) {
 // needs it. With the fix above and not this one, stand-down would have started
 // firing in the middle of conversations.
 func (s *Server) serveLLMJobs(w http.ResponseWriter, r *http.Request) {
-	// Only starting a generation is use. Polling a job's progress is the same
-	// kind of question as /health and must not hold the model awake.
-	starting := r.Method == http.MethodPost
-	if s.sup != nil && starting {
-		s.sup.MarkActivity()
-		if s.sup.IsStoodDown() {
-			if err := s.sup.EnsureAwake(); err != nil {
-				httpx.ErrorDetail(w, r, http.StatusServiceUnavailable,
-					"the model could not be reloaded after standing down", err.Error())
-				return
-			}
-		}
-		done := s.sup.BeginRequest()
-		defer done()
-	}
 	s.jobs.Handle(w, r)
 }
 

@@ -30,7 +30,7 @@ Unicode true
 !endif
 
 !define APPNAME     "GobboNet"
-!define APPVER      "1.7.3"
+!define APPVER      "1.7.6"
 ; 1.3 shipped launch.exe / launchLAN.exe: small C shims whose only job was to
 ; locate the install folder and ShellExecute a .bat. They are gone. The
 ; shortcuts and the finish-page checkboxes point at the batch files directly,
@@ -42,7 +42,7 @@ Unicode true
 !define REGKEY      "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}"
 
 Name              "${APPNAME}"
-OutFile           "GobboNetSetup-1_7_3.exe"
+OutFile           "GobboNetSetup-1_7_6.exe"
 InstallDir        "$LOCALAPPDATA\${APPNAME}"
 InstallDirRegKey  HKCU "Software\${APPNAME}" "InstallDir"
 RequestExecutionLevel user
@@ -50,10 +50,10 @@ SetCompressor /SOLID lzma
 ShowInstDetails   show
 ShowUninstDetails show
 
-VIProductVersion "1.7.3.0"
+VIProductVersion "1.7.6.0"
 VIAddVersionKey  "ProductName"     "${APPNAME}"
 VIAddVersionKey  "FileDescription" "${APPNAME} Installer"
-VIAddVersionKey  "FileVersion"     "1.7.0.0"
+VIAddVersionKey  "FileVersion"     "${APPVER}.0"
 VIAddVersionKey  "ProductVersion"  "${APPVER}"
 VIAddVersionKey  "CompanyName"     "${PUBLISHER}"
 VIAddVersionKey  "LegalCopyright"  "Elodine / GoblinCorps -- free to use, copy and modify"
@@ -484,6 +484,27 @@ Section "GobboNet" SecMain
   SectionIn RO
   SetOutPath "$INSTDIR"
 
+  ; --- stop a running GobboNet first (1.7.6) -------------------------------
+  ; This installer now ships gobbonet.exe, and a running copy holds its own
+  ; file open: overwriting it fails with "could not write to file", which
+  ; names the symptom and not the cause. stop-gobbonet.bat was written to be
+  ; run here. It is taken from this installer rather than $INSTDIR because a
+  ; first install has no copy yet.
+  InitPluginsDir
+  File /oname=$PLUGINSDIR\stop-gobbonet.bat "${APPSRC}\stop-gobbonet.bat"
+  DetailPrint "Stopping any running GobboNet..."
+  stop_retry:
+  nsExec::ExecToLog '"$SYSDIR\cmd.exe" /c ""$PLUGINSDIR\stop-gobbonet.bat" /quiet"'
+  Pop $0
+  ${If} $0 != 0
+    MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION \
+      "GobboNet is still running and could not be stopped automatically.$\r$\n$\r$\n\
+Close the GobboNet window (and any llama-server window), then choose Retry.$\r$\n$\r$\n\
+If it will not close, a reboot always clears it." \
+      IDRETRY stop_retry
+    Abort "Setup stopped: GobboNet is still running."
+  ${EndIf}
+
   ; --- launcher shims -----------------------------------------------------
   ; Gone as of 1.7. launch.exe / launchLAN.exe were C shims that located the
   ; folder and ShellExecute'd a .bat; the shortcuts and finish-page checkboxes
@@ -494,6 +515,12 @@ Section "GobboNet" SecMain
   ; Explicit file list rather than a wildcard: a wildcard would sweep up
   ; whatever generated state happens to be sitting in the build folder.
   File "${APPSRC}\launch.bat"
+  ; gobbonet.exe (new in this installer for 1.7.6): launch.bat hands the
+  ; server role to it when it is present. The PowerShell file server alone
+  ; cannot serve 1.7.6's chat sync -- it has no per-conversation routes -- so
+  ; without this, backup and device sync would fail on every installed copy.
+  ; launch.bat still does the first-run work exactly as before.
+  File "${APPSRC}\gobbonet.exe"
   File "${APPSRC}\setup-lan.bat"
   ; Both new in 1.7 and both required: launch.bat hands off to stop-gobbonet.bat
   ; to bring the servers down, and teardown-lan.bat is the documented undo for
@@ -676,6 +703,34 @@ SectionEnd
 
 ; ---------------------------------------------------------------- uninstall
 Section "Uninstall"
+
+  ; --- stop GobboNet, and let it remove its own user data (1.7.6) ---------
+  ; A running gobbonet.exe keeps its file and this folder open, so it is
+  ; stopped first. The Go server keeps conversations and settings in the
+  ; user profile rather than here, so "gobbonet uninstall" removes them --
+  ; it resolves those paths itself. Models stay: that is asked about below.
+  DetailPrint "Stopping GobboNet..."
+  ${If} ${FileExists} "$INSTDIR\stop-gobbonet.bat"
+    un_stop_retry:
+    nsExec::ExecToLog '"$SYSDIR\cmd.exe" /c ""$INSTDIR\stop-gobbonet.bat" /quiet"'
+    Pop $0
+    ${If} $0 != 0
+      MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION \
+        "GobboNet is still running and could not be stopped automatically.$\r$\n$\r$\n\
+Close it, then choose Retry. Continuing now would leave files behind and \
+report that the folder is still open in another program." \
+        IDRETRY un_stop_retry
+      Abort "Uninstall stopped: GobboNet is still running."
+    ${EndIf}
+  ${EndIf}
+  ${If} ${FileExists} "$INSTDIR\gobbonet.exe"
+    DetailPrint "Removing GobboNet's conversations and settings..."
+    nsExec::ExecToLog '"$INSTDIR\gobbonet.exe" uninstall --yes --keep-models'
+    Pop $0
+  ${EndIf}
+  Delete "$INSTDIR\gobbonet.exe"
+  ; The interface gobbonet.exe writes out beside itself.
+  RMDir /r "$INSTDIR\web"
 
   ; Remove only what we installed. Never RMDir /r $INSTDIR -- that would
   ; take models\ with it, and nobody wants to redownload 40 GB because

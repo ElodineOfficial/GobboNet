@@ -161,6 +161,9 @@ func New(cfg config.Config, mode config.Mode, sup *supervisor.Supervisor) (*Serv
 	}
 
 	s.jobs = jobs.NewManager(cfg.LLMURL, cfg.LLMAPIKey, cfg.JobMaxConcurrent, cfg.JobMaxAgeHours)
+	if sup != nil {
+		s.jobs.Acquire = sup.AcquireRequest
+	}
 
 	// Only the LLM upstream gets the API key: it is the one we authenticate to.
 	if s.llmProxy, err = proxy.New("/llm", cfg.LLMURL, cfg.LLMAPIKey); err != nil {

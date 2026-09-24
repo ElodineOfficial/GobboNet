@@ -206,13 +206,16 @@ done
 #
 # Pruned by NAME anywhere under the staged tree rather than by a list of known
 # paths, so a builder that invents a new scratch directory does not quietly put
-# it back.
+# it back. rpmbuild/ is installer-fedora's: the payload tarball, the unpacked
+# build tree and the built package, the engine in each of them.
 rm -rf "$TOP/dist" "$TOP/linux-amd64/web" "$TOP/web"
-for scratch in dist stage vendor payload; do
+for scratch in dist stage vendor payload rpmbuild; do
     find "$TOP" -mindepth 2 -type d -name "$scratch" -prune -exec rm -rf {} + 2>/dev/null || true
 done
 find "$TOP" -name 'GobboNetSetup-*.exe' -delete 2>/dev/null || true
-find "$TOP" -name '*.deb' -o -name '*.rpm' -delete 2>/dev/null || true
+# Parenthesised: without the brackets find reads `-name '*.deb' -o
+# \( -name '*.rpm' -delete \)`, and every .deb stayed in the archive.
+find "$TOP" \( -name '*.deb' -o -name '*.rpm' \) -delete 2>/dev/null || true
 
 if [ "$WITH_ENGINE" -eq 0 ]; then
     rm -rf "$TOP/linux-amd64/llama-cpp" "$TOP/linux-amd64/llama-cpp-cpu"

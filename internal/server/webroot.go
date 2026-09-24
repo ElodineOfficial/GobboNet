@@ -211,7 +211,12 @@ func workDir() string {
 // cannot be written -- a root-owned /usr/lib/gobbonet or Program Files, which is
 // normal and must not stop the server.
 func builtInSource(exe string) webSource {
-	version := versionpkg.Release()
+	// The tree records the BUILD that wrote it, as Export's doc says, not only
+	// the release number: a release has several builds, and one that finds a
+	// tree written by another build must replace it or an update never reaches
+	// the page. Release() here let every 1.7.5 build keep serving whichever
+	// 1.7.5 interface was written first.
+	version := versionpkg.Version
 	if exe == "" {
 		return webSource{FS: webui.Built(), Label: "built into this program"}
 	}

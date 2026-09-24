@@ -105,6 +105,9 @@ func (k *Keyring) Unseal(sealed []byte) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("envelope nonce is not valid base64: %w", err)
 	}
+	if len(nonce) != chacha20poly1305.NonceSizeX {
+		return nil, errors.New("envelope nonce has an invalid length")
+	}
 	ct, err := unb64(e.CT)
 	if err != nil {
 		return nil, fmt.Errorf("envelope ciphertext is not valid base64: %w", err)

@@ -294,7 +294,7 @@ function makeStreamFeeder(assistantMsg, thread) {
   const decoder = new TextDecoder();
   let lineBuf = '';
   let lastRender = 0, lastSave = 0, chunkCount = 0, firstLogged = false;
-  const threadIsVisible = () => thread && thread.id === state.activeThreadId;
+  const threadIsVisible = () => document.visibilityState !== 'hidden' && thread && thread.id === state.activeThreadId;
   // Resolved once per generation, not per chunk: flipping the toggle
   // mid-reply would otherwise reveal a half-written message, which is the
   // exact thing the setting exists to prevent. Whatever it was when the
@@ -344,7 +344,7 @@ function makeStreamFeeder(assistantMsg, thread) {
       // recovery), but it keeps the thread preview fresh and covers the
       // legacy direct path.
       if (now - lastSave > 2500) {
-        saveState({ skipServerSchedule: true });
+        saveState({ skipServerSchedule: true, thread });
         lastSave = now;
       }
     },
@@ -481,7 +481,7 @@ async function runGenerationStream(thread, assistantMsg, requestBody, opts = {})
     // user navigates one second from now, these are what boot follows back.
     assistantMsg.jobId = jobId;
     thread.pendingJob = { id: jobId, startedAt: Date.now() };
-    saveState({ skipServerSchedule: true });
+    saveState({ skipServerSchedule: true, thread });
     renderSidebar();   // surface the generating dot right away
 
     const res = await pollJobToCompletion(jobId, feeder, opts.fromOffset || 0);

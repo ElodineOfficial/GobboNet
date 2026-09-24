@@ -480,23 +480,6 @@ function flushBeforeExit(opts) {
  *   local has data + server older    -> noop, push will catch up
  *   local empty + server empty       -> noop (fresh install)
  */
-// Loop guard for the silent auto-restore paths below. A silent restore ends in
-// location.reload(), so any backup that never satisfies the boot check after
-// being applied (e.g. a thread-less or otherwise non-converging blob) would
-// reload-loop forever. sessionStorage survives reloads but is cleared when the
-// tab closes, so this caps boot-time silent auto-restores at one per tab
-// session: if the first attempt didn't make the page converge, we stop trying
-// and leave local as-is rather than thrash. A real restore (server actually has
-// chats) converges on its first reload — localEmpty becomes false and we never
-// consult the guard again — so legitimate cross-device restore is unaffected.
-function bootRestoreAlreadyTried() {
-  try { return !!sessionStorage.getItem('gobbonet_boot_restore_attempted'); }
-  catch (_) { return false; }
-}
-function markBootRestoreTried() {
-  try { sessionStorage.setItem('gobbonet_boot_restore_attempted', '1'); }
-  catch (_) {}
-}
 async function checkServerStateOnBoot() {
   if (!syncEnabled()) return;
   let info;
@@ -539,34 +522,11 @@ async function checkServerStateOnBoot() {
   const serverHasMore = localSize > 0 && serverSize > localSize * 1.2;
 
   if (localEmpty && serverSize > 0) {
-    // Auto-restore — nothing to lose
-    if (bootRestoreAlreadyTried()) {
-      console.warn('[sync] Skipping boot auto-restore: already attempted this ' +
-                   'session (loop guard). Server backup may have no threads.');
-      stateSync.status = 'ok';
-      updateSyncIndicator();
-    } else {
-      console.log('[sync] Local empty, restoring from server backup');
-      markBootRestoreTried();
-      await restoreFromServer({ silent: true });
-    }
+    // Apply in memory: empty history can still contain characters/personas,
+    // and an embedded browser may have no persistent storage at all.
+    await restoreFromServer({ silent: true, inPlace: true, boot: true });
   } else if (!localEmpty && !serverIsNewer && serverHasMore) {
-    // Quota-truncation recovery (the bug this fix targets). The server copy
-    // is complete and is not a competing newer edit, so pull it back and the
-    // replies that never fit into localStorage reappear. restoreFromServer
-    // applies in memory if it still cannot fit locally.
-    if (bootRestoreAlreadyTried()) {
-      console.warn('[sync] Skipping quota-recovery restore: already attempted ' +
-                   'this session (loop guard).');
-      stateSync.status = 'ok';
-      updateSyncIndicator();
-    } else {
-      console.warn('[sync] Local copy (' + localSize + ') smaller than server backup (' +
-                   serverSize + ') with no newer remote edit — recovering full history ' +
-                   'from server (local was truncated by the storage quota).');
-      markBootRestoreTried();
-      await restoreFromServer({ silent: true });
-    }
+    await restoreFromServer({ silent: true, inPlace: true, boot: true });
   } else if (!localEmpty && serverIsNewer) {
     // Conflict: server has newer data than we know about. Don't auto-clobber.
     //
@@ -592,7 +552,7 @@ async function checkServerStateOnBoot() {
       // seeds the server from local state -- so letting the restore run
       // unwatched would race a whole-document upload of the very data the
       // user just asked to replace.
-      await showRestorePrompt(info);
+      await showRestorePrompt(info, { inPlace: true, boot: true });
     }
   } else {
     // Local matches or is ahead. Mark as ok.
@@ -625,6 +585,7 @@ async function restoreFromServer(opts) {
   try {
     const resp = await fetch(stateSyncUrl(''), { cache: 'no-store' });
     if (resp.status === 404) {
+      if (opts.boot) throw new Error('Server backup disappeared during startup; retry loading state.');
       if (!opts.silent) alert('No backup found on the server yet.');
       return false;
     }
@@ -635,7 +596,7 @@ async function restoreFromServer(opts) {
     const mtimeHeader = resp.headers.get('X-State-Mtime');
     // Sanity-check: must parse and have at least the threads array
     const parsed = JSON.parse(text);
-    if (!parsed || typeof parsed !== 'object') throw new Error('malformed backup');
+    validateServerSnapshot(parsed);
 
     // /state is a single shared document every paired device can overwrite, so
     // this blob is not necessarily something this user wrote. Clear the flags
@@ -659,25 +620,56 @@ async function restoreFromServer(opts) {
       }
     }
 
-    // Loop stopper: a backup with no threads must NEVER trigger a reload. The
-    // boot check treats "local has no threads" as a reason to restore, so
-    // reloading into a thread-less restore lands right back in that branch ->
-    // check/reload thrash. There is nothing to recover from an empty backup, so
-    // sync the mtime, mark the backend in good standing, and return without
-    // reloading. (Settings-only backups are non-zero bytes, which is exactly
-    // why the size-based boot check can't catch this and we must catch it here.)
-    const restoredThreads = Array.isArray(parsed.threads) ? parsed.threads : [];
-    if (restoredThreads.length === 0) {
-      if (mtimeHeader) {
-        stateSync.lastKnownMtime = parseInt(mtimeHeader, 10) || stateSync.lastKnownMtime;
-        persistSyncMeta();
+    // No chats does not mean no state. Preserve any local chats when the
+    // server supplies metadata only; a restore must not erase them by accident.
+    if (opts.inPlace || parsed.threads.length === 0) {
+      if (isGenerating) throw new Error('Stop the active reply before restoring state.');
+      if (parsed.threads.length === 0 && state.threads && state.threads.length) {
+        parsed.threads = JSON.parse(JSON.stringify(state.threads));
       }
-      stateSync.status = 'ok';
+      const previous = { ...state };
+      if (!applyLoadedState(parsed)) {
+        Object.assign(state, previous);
+        throw new Error('Could not apply server state');
+      }
+      invalidateLedger();
+      if (stateSync.pushTimer) { clearTimeout(stateSync.pushTimer); stateSync.pushTimer = null; }
+      stateSync.pendingPush = false;
+      // Cancel a queued save of the old local snapshot. Storage is only a
+      // cache: failure must not discard the server state now held in memory.
+      if (_idbFullSaveTimer) clearTimeout(_idbFullSaveTimer);
+      _idbFullSaveTimer = null;
+      _idbPendingBlob = null;
+      let cacheFailed = false;
+      try {
+        const blob = buildStateBlob();
+        if (STORAGE_BACKEND === 'idb') {
+          await idbPut('meta', metaPartOf(blob), 'app');
+          await idbClearThreads();
+          await idbBulkPutThreads(blob.threads);
+        } else {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(blob));
+        }
+      } catch (e) {
+        cacheFailed = true;
+        console.warn('[sync] Server state loaded in memory; local cache unavailable:', e.message);
+        if (isQuotaError(e)) storageQuotaHit = true;
+      }
+      if (mtimeHeader) stateSync.lastKnownMtime = parseInt(mtimeHeader, 10) || stateSync.lastKnownMtime;
+      persistSyncMeta();
+      stateSync.status = cacheFailed && storageQuotaHit ? 'quota' : 'ok';
+      stateSync.lastError = null;
       updateSyncIndicator();
-      console.warn('[sync] Server backup has no threads — nothing to restore; ' +
-                   'not reloading (loop stopper).');
-      if (!opts.silent) alert('The server backup contains no chats — nothing to restore.');
-      return false;
+      state.activeThreadId = null;
+      if (!opts.boot) {
+        searchEnabled = state.searchEnabled || false;
+        applyExtensions();
+        applyCardCode();
+        applyAvatarScale();
+        render();
+        applyActiveCardBackground();
+      }
+      return true;
     }
 
     if (mtimeHeader) {
@@ -752,7 +744,44 @@ async function restoreFromServer(opts) {
   }
 }
 
-async function showRestorePrompt(info) {
+// Shared validation for restore and the read-only integration API. Legacy
+// snapshots may omit threads; that is metadata-only, never a deletion request.
+function validateServerSnapshot(snapshot) {
+  if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) throw new Error('Malformed server state');
+  if (!['threads', 'characterCards', 'personaCards', 'settings'].some(key => Object.prototype.hasOwnProperty.call(snapshot, key))) throw new Error('Malformed server state: missing state fields');
+  if (snapshot.threads === undefined) snapshot.threads = [];
+  for (const key of ['threads', 'characterCards', 'personaCards', 'folders', 'macros', 'schedules']) {
+    if (snapshot[key] !== undefined && (!Array.isArray(snapshot[key]) || snapshot[key].some(x => !x || typeof x !== 'object' || Array.isArray(x)))) {
+      throw new Error('Malformed server state: ' + key);
+    }
+  }
+  if (snapshot.settings !== undefined && (!snapshot.settings || typeof snapshot.settings !== 'object' || Array.isArray(snapshot.settings))) throw new Error('Malformed server state: settings');
+  for (const thread of snapshot.threads) {
+    if (typeof thread.id !== 'string' || !Array.isArray(thread.messages)) throw new Error('Malformed server state: thread');
+  }
+}
+
+// GET only. Does not apply, execute, cache or sync the returned snapshot.
+// The normal GobboNet UI remains bidirectional; this helper grants no new
+// server permissions. It can be retried independently of UI startup.
+window.GobboNet = window.GobboNet || {};
+window.GobboNet.fetchServerState = async function fetchServerState(options = {}) {
+  if (!syncEnabled()) throw new Error('Server sync is unavailable or switched off');
+  let url = stateSyncUrl('');
+  if (options.profile !== undefined) {
+    const profile = normalizeSyncProfile(options.profile);
+    if (!profile) throw new Error('Invalid server profile');
+    url = STATE_SYNC_BASE + '?profile=' + encodeURIComponent(profile);
+  }
+  const response = await fetch(url, { method: 'GET', cache: 'no-store', signal: options.signal });
+  if (response.status === 404) return null;
+  if (!response.ok) throw serverError(response);
+  const snapshot = await response.json();
+  validateServerSnapshot(snapshot);
+  return snapshot;
+};
+
+async function showRestorePrompt(info, opts) {
   // Lightweight modal — uses the existing modal pattern
   const mtime = info && info.mtime ? new Date(info.mtime) : null;
   const when = mtime ? mtime.toLocaleString() : 'unknown';
@@ -765,8 +794,9 @@ async function showRestorePrompt(info) {
     'browser is now seeing a fresh empty chat at the new address.\n\n' +
     'Restore it? (Your current local chat will be replaced.)';
   if (confirm(msg)) {
-    await restoreFromServer();
+    await restoreFromServer(opts);
   } else {
+    invalidateLedger(undefined, true);
     // User declined — accept local as authoritative and push to overwrite
     stateSync.lastKnownMtime = info.mtime || 0;
     persistSyncMeta();
@@ -1424,7 +1454,7 @@ async function applySyncTarget(mode, profileName) {
   // Clearing the ledger makes the next push a whole-document replace, which is
   // what they asked for -- an incremental push would merge into a history this
   // device has never seen and leave the other device's chats behind.
-  invalidateLedger();
+  invalidateLedger(undefined, true);
   scheduleStateSync();
   forceServerFlush();
   updateSyncIndicator();
@@ -1547,11 +1577,14 @@ function persistSyncLedger() {
   }
 }
 
-/** Forget everything we believed about a target. The next push re-seeds it
- *  with a whole-document write, which is the only honest baseline when we no
- *  longer know what the server holds. */
-function invalidateLedger(label) {
+/** Forget the baseline for this target. Replacing an existing backup requires
+ * an explicit user choice; losing a ledger alone never authorizes it. */
+const overwriteSyncTargets = new Set();
+
+function invalidateLedger(label, overwrite = false) {
   const key = label || syncTargetLabel();
+  if (overwrite) overwriteSyncTargets.add(key);
+  else overwriteSyncTargets.delete(key);
   syncLedger[key] = { seeded: false, meta: '', metaHash: '', threads: {} };
   persistSyncLedger();
 }
@@ -1702,10 +1735,9 @@ function redactedStateMeta() {
 
    generateId() never produces one. importData() takes ids straight out of
    whatever file the user picked, so one can arrive. When it does we do NOT
-   quietly skip that conversation -- a chat that silently stops syncing is the
-   worst possible failure here -- we fall the whole target back to the
-   whole-document write, which is exactly as correct as it was before these
-   routes existed, and say so. */
+   quietly skip that conversation. Report it as an error and preserve both
+   copies, rather than using an unconditional whole-document write that could
+   erase another device's chats. */
 function isAddressableThreadId(id) {
   if (typeof id !== 'string' || id === '' || id.indexOf('/') >= 0) return false;
   // The server's cap is 256 BYTES; count them rather than UTF-16 units.
@@ -1747,7 +1779,12 @@ async function fetchStateIndex() {
   if (!syncEnabled()) return null;
   try {
     const resp = await fetch(stateSyncUrl('/index'), { cache: 'no-store' });
-    if (resp.status === 404) return null;          // no backup on this target yet
+    if (resp.status === 404) {
+      if (resp.headers.get('X-State-Protocol') !== '2') {
+        throw new Error('Update the GobboNet server before using per-conversation sync.');
+      }
+      return null; // Confirmed absent on a server that enforces conditional writes.
+    }
     if (!resp.ok) throw serverError(resp);
     const data = await resp.json();
     if (!data || !Array.isArray(data.threads)) throw new Error('malformed index');
@@ -1765,10 +1802,10 @@ async function fetchStateIndex() {
     return data;
   } catch (e) {
     console.warn('[sync] Index check failed:', e.message);
-    stateSync.status = 'error';
+    if (stateSync.status !== 'locked') stateSync.status = 'error';
     stateSync.lastError = e.message;
     updateSyncIndicator();
-    return null;
+    throw e;
   }
 }
 
@@ -1819,49 +1856,93 @@ async function readWriteResult(resp) {
  * where the user has either just said which copy wins or there is nothing to
  * lose. Every ordinary save after it is incremental.
  *
- * An entry is adopted only when the server's message count agrees with ours.
- * Another device could have written between the PUT and the index fetch; a
- * count that disagrees proves it did, and claiming agreement we have not
- * verified is the one thing a ledger must never do. Unadopted conversations
- * are simply absent from the ledger, which the next reconcile treats as
- * "compare properly" rather than as an error.
+ * The write is conditional on the document version just read (or absence).
+ * Thread baselines are established by content reconciliation, never by message
+ * counts: an edited message can keep the same count with different content.
  */
-async function seedWholeDocument() {
+async function seedWholeDocument(idx) {
   const label = syncTargetLabel();
   const json = redactedSyncJson();
   if (!json || json === '{}') throw new Error('nothing to seed with');
+  // What this upload holds, taken in the same synchronous step as the body and
+  // in the ledger's own terms: pushOneThread records the live copy's
+  // fingerprint after a write, and so does this.
+  const sent = new Map();
+  for (const t of state.threads) {
+    if (t && typeof t.id === 'string') {
+      sent.set(t.id, { n: Array.isArray(t.messages) ? t.messages.length : 0, hash: threadFingerprint(t) });
+    }
+  }
+  const sentMetaHash = metaFingerprint(redactedStateMeta());
+  const headers = { 'Content-Type': 'application/json' };
+  if (idx) {
+    if (!idx.documentEtag) throw new Error('Server cannot safely replace this backup; update the server.');
+    headers['If-Match'] = idx.documentEtag;
+  } else headers['If-None-Match'] = '*';
   const resp = await fetch(stateSyncUrl(''), {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     body: json
   });
-  if (!resp.ok) throw serverError(resp, 'seed failed: HTTP ' + resp.status);
+  if (!resp.ok) {
+    // A failed replacement is not permission to retry against a newer version.
+    // Leave the changed backup intact and return to content reconciliation.
+    if (resp.status === 412) overwriteSyncTargets.delete(label);
+    throw serverError(resp, 'seed failed: HTTP ' + resp.status);
+  }
   const data = await resp.json().catch(() => ({}));
   if (data && typeof data.mtime === 'number') {
     stateSync.lastKnownMtime = data.mtime;
     persistSyncMeta();
   }
 
-  const idx = await fetchStateIndex();
-  if (!idx) throw new Error('seeded, but could not read the index back');
+  // Do not adopt versions fetched after the write: another device may have
+  // changed the content without changing its message count. Reconcile instead.
+  overwriteSyncTargets.delete(label);
 
   const L = ledgerFor(label);
   L.threads = {};
-  let skipped = 0;
-  for (const entry of idx.threads) {
-    const local = state.threads.find(t => t.id === entry.id);
-    if (!local) continue;
-    const n = Array.isArray(local.messages) ? local.messages.length : 0;
-    if (entry.messages !== n) { skipped++; continue; }
-    L.threads[entry.id] = { etag: entry.etag, n: n, hash: threadFingerprint(local) };
+  L.meta = '';
+  L.metaHash = sentMetaHash;
+  // Record what was just written. Left empty, the pushes that follow in this
+  // same pass tried to CREATE every conversation the upload had just created;
+  // each was refused (412) and counted as a conflict, so switching into a new
+  // profile, keeping this device's data over a backup, or turning sync back on
+  // all ended in "chat conflict" -- 1.7.5 settled each of those silently.
+  // Adopted only when the index describes exactly this upload: the same write
+  // (mtime) and the same conversations with the same message counts. Anything
+  // else means another write landed in between, and the ledger stays empty so
+  // the ordinary conflict handling decides, as before.
+  if (data && typeof data.mtime === 'number') {
+    try {
+      const after = await fetchStateIndex();
+      if (syncTargetLabel() === label && after && after.mtime === data.mtime &&
+          seededIndexMatches(after, sent)) {
+        for (const e of after.threads) {
+          const s = sent.get(e.id);
+          L.threads[e.id] = { etag: e.etag, n: s.n, hash: s.hash };
+        }
+        L.meta = after.meta || '';
+      }
+    } catch (_) { /* unreadable index: keep the empty ledger */ }
   }
-  L.meta = idx.meta || '';
-  L.metaHash = metaFingerprint(redactedStateMeta());
   L.seeded = true;
   persistSyncLedger();
-  console.log('[sync] Baseline established for "' + label + '": ' +
-              Object.keys(L.threads).length + ' conversation(s)' +
-              (skipped ? ', ' + skipped + ' left to reconcile' : ''));
+  return true;
+}
+
+/** Does this index describe exactly the upload summarised in `sent`? Every
+ *  addressable conversation present with the message count we sent, and
+ *  nothing else. */
+function seededIndexMatches(idx, sent) {
+  if (!idx || !Array.isArray(idx.threads)) return false;
+  let addressable = 0;
+  for (const id of sent.keys()) if (isAddressableThreadId(id)) addressable++;
+  if (idx.threads.length !== addressable) return false;
+  for (const e of idx.threads) {
+    const s = e && sent.get(e.id);
+    if (!s || typeof e.etag !== 'string' || e.etag === '' || e.messages !== s.n) return false;
+  }
   return true;
 }
 
@@ -1871,35 +1952,25 @@ async function ensureSyncLedger() {
   if (!syncEnabled() || stateSyncReloading) return false;
   const L = currentLedger();
   if (L.seeded) return true;
-  // Seeding is a whole-document overwrite, so the two cases where it would
-  // destroy something have to be ruled out before it runs.
-  const localCount = state.threads ? state.threads.length : 0;
-  const idx = await fetchStateIndex();
+  const idx = await fetchStateIndex(); // Errors are not evidence of an empty server.
+  if (overwriteSyncTargets.has(syncTargetLabel())) {
+    await seedWholeDocument(idx);
+    return true;
+  }
   if (!idx) {
-    // Nothing here and nothing there: seeding would create a state file for
-    // someone who has not typed anything yet, which is a write nobody asked
-    // for. The first real save seeds instead.
-    if (localCount === 0) return false;
-  } else if (localCount === 0 && idx.threads.length > 0) {
-    // The server holds conversations and this device holds none. Publishing
-    // the emptiness over them is exactly the failure this whole design exists
-    // to remove. Which copy wins when the two disagree is checkServerStateOnBoot's
-    // decision -- it restores -- and never this function's.
-    console.warn('[sync] Not seeding: this device has no conversations and the server has ' +
-                 idx.threads.length + '. Waiting for the boot check to resolve that.');
-    return false;
+    if (!state.threads || state.threads.length === 0) return false;
+    await seedWholeDocument(null);
+    return true;
   }
-  const bad = unaddressableThreadIds();
-  if (bad.length) {
-    // Seeding is the whole-document write, so it is the correct thing to do
-    // here anyway -- but the ledger must not end up marked seeded, or the
-    // next save would try to address a conversation that has no address.
-    console.warn('[sync] ' + bad.length + ' conversation(s) have ids that cannot be ' +
-                 'used in a URL; this device will keep using whole-document sync.');
-  }
-  await seedWholeDocument();
-  if (bad.length) { currentLedger().seeded = false; persistSyncLedger(); }
-  return currentLedger().seeded;
+  // A missing ledger is not permission to replace an existing backup. Start
+  // with no claims about individual threads: their conditional writes and
+  // reconcile path will compare actual contents, preserving unseen chats.
+  L.threads = {};
+  L.meta = idx.meta || '';
+  L.metaHash = metaFingerprint(redactedStateMeta());
+  L.seeded = true;
+  persistSyncLedger();
+  return true;
 }
 
 /* -- Pushing -----------------------------------------------------*/
@@ -2050,17 +2121,31 @@ async function pushChangedConversations(opts) {
   if (!(await ensureSyncLedger())) return;
 
   const L = currentLedger();
-  const live = new Set(state.threads.map(t => t.id));
   let sent = 0, conflicts = 0;
 
+  let scanYieldAt = Date.now();
   for (const thread of state.threads) {
-    if (!isAddressableThreadId(thread.id)) continue;   // see ensureSyncLedger
+    // A large unchanged library can otherwise monopolize the UI thread.
+    // Exit/keepalive sync must not wait on a timer during page teardown.
+    if (!(opts && opts.keepalive) && Date.now() - scanYieldAt >= 8) {
+      await new Promise(resolve => setTimeout(resolve, 0));
+      // Input can change during the yield: never continue under another
+      // target/restore ledger or publish a newly-started partial reply.
+      if (!syncEnabled() || stateSyncReloading || currentLedger() !== L) return;
+      if (stateSyncWouldBeTransient()) { scheduleStateSync(); return; }
+      scanYieldAt = Date.now();
+    }
+    if (!state.threads.includes(thread)) continue;
+    if (!isAddressableThreadId(thread.id)) {
+      throw new Error('A chat has an imported ID that cannot be synced individually. Export it before changing its ID; no server history was replaced.');
+    }
     const outcome = await pushOneThread(thread, opts);
     if (outcome === 'sent') sent++;
     else if (outcome === 'conflict') conflicts++;
   }
+  const live = new Set(state.threads.map(t => t.id));
   for (const id of Object.keys(L.threads)) {
-    if (live.has(id)) continue;
+    if (live.has(id) || state.threads.some(t => t.id === id)) continue;
     const outcome = await deleteOneThread(id, opts);
     if (outcome === 'sent') sent++;
     else if (outcome === 'conflict') conflicts++;
@@ -2083,9 +2168,12 @@ async function pushChangedConversations(opts) {
  *  about the messages. Returns the thread itself when there is nothing to
  *  strip, so the common case copies nothing. */
 function orderlessThread(t) {
-  if (!t || t.order === undefined) return t;
+  if (!t || (t.order === undefined && t.orderActivity === undefined)) return t;
   const copy = { ...t };
+  // Both halves of a placement (js/04-state.js, CONVERSATION ORDER): where it
+  // sits, and the activity it was placed against. Neither is about messages.
   delete copy.order;
+  delete copy.orderActivity;
   return copy;
 }
 
@@ -2113,9 +2201,35 @@ function orderlessThread(t) {
  * is left dirty and its next push carries it. The messages are what this
  * function is for.
  */
+/* The fields applyLoadedState() gives every conversation that lacks them
+   ("Migrate threads: add folder/pin/tag/branch fields if missing"), with the
+   values it gives. A copy that has been through a load and one that has not
+   differ only in these, which is not a difference in the conversation: a
+   chat created by an integration (docs/state-integration.md needs only an id
+   and messages), an import, or an older client arrives without them, and the
+   first device to load it would otherwise report it as changed in ways that
+   cannot be combined. Kept equal to the loader by tests/test-device-sync.mjs. */
+const THREAD_LOAD_DEFAULTS = { pinned: false, folderId: null, tags: [], forkSource: null };
+
+/** A conversation as it compares: without its place in the list, and with
+ *  any missing load-time default filled in exactly as a load would fill it.
+ *  A value that differs from the default is still a difference. */
+function comparableThread(t) {
+  t = orderlessThread(t);
+  if (!t) return t;
+  let copy = null;
+  for (const k of Object.keys(THREAD_LOAD_DEFAULTS)) {
+    if (!Object.prototype.hasOwnProperty.call(t, k)) {
+      if (!copy) copy = { ...t };
+      copy[k] = THREAD_LOAD_DEFAULTS[k];
+    }
+  }
+  return copy || t;
+}
+
 function relateThreads(local, server) {
-  local = orderlessThread(local);
-  server = orderlessThread(server);
+  local = comparableThread(local);
+  server = comparableThread(server);
   const fpLocal = threadFingerprint(local);
   const fpServer = threadFingerprint(server);
   if (fpLocal === fpServer) return 'same';
@@ -2325,8 +2439,14 @@ async function reconcileWithServer(opts) {
         // keep ours, and record the server's fingerprint so the push carries
         // it back.
         const serverHash = threadFingerprint(got.thread);
-        if (local.order !== undefined && local.order !== got.thread.order) {
+        // The placement travels as a pair: an order kept from this device with
+        // the other device's activity mark would float, or pin, on the wrong
+        // evidence.
+        if (local.order !== undefined &&
+            (local.order !== got.thread.order || local.orderActivity !== got.thread.orderActivity)) {
           got.thread.order = local.order;
+          if (local.orderActivity !== undefined) got.thread.orderActivity = local.orderActivity;
+          else delete got.thread.orderActivity;
           stateSync.pendingPush = true;
         }
         if (applyPulledThread(got.thread, got.etag, serverHash)) repaint = true;

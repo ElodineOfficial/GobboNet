@@ -11,7 +11,7 @@
 // `state` is populated. The whole boot tail therefore lives inside this awaited
 // IIFE. The landing markup stays on screen until render() runs — the IDB open
 // + read is fast but not zero.
-(async function boot() {
+window.GobboNet.ready = (async function boot() {
   await loadState();
 
   // The [ui] presets from gobbonet.toml. Awaited rather than fired and
@@ -23,24 +23,26 @@
   await loadServerPresets();
   seedSettingsFromServerPresets(hadOwnSettings);
 
-  // Check if the server has newer state than our local copy (handles the
-  // LAN-IP-rotated case where each origin has its own localStorage / IDB).
-  // Fire-and-forget; on conflict it'll prompt the user.
-  // Sequenced: if the conflict check decides to restore, it reloads the page
-  // and this boot (including the resume pass) reruns against the restored
-  // state. Otherwise resume follows any pendingJob breadcrumbs — finished
-  // replies get folded in silently, a still-running one re-attaches live.
-  // Only after that first pass settles do wake-driven resumes arm
-  // (_appBooted gates handleAppWake — see the page-lifecycle block).
-  // ensureSyncLedger() runs between the two: the whole-document conflict check
-  // above decides which copy of the history wins, and only once that has
-  // settled is it meaningful to record per-conversation versions against it.
-  // Seeding here rather than lazily on the first save means the first thing
-  // the user does is not also the thing that uploads their whole history.
-  checkServerStateOnBoot().catch(() => {})
-    .then(() => ensureSyncLedger()).catch(() => {})
-    .then(() => resumePendingJobs()).catch(() => {})
-    .then(() => { _appBooted = true; });
+  // Resolve server state before extensions, first paint or startup saves can
+  // observe the temporary default Assistant. No reload/storage handshake.
+  await checkServerStateOnBoot();
+  const initialStateError = stateSync.status === 'error' ? stateSync.lastError : null;
+  // Pending replies still resume in the background; readiness concerns the
+  // initial state and UI, not completion of a possibly long generation.
+  if (!initialStateError) {
+    ensureSyncLedger().then(() => reconcileWithServer({ reason: 'boot' })).catch(() => {})
+      .then(() => resumePendingJobs()).catch(() => {})
+      .then(() => { _appBooted = true; });
+  } else {
+    // A failed state check pauses SYNC -- no ledger seeding or reconcile, which
+    // could upload on the strength of a request that did not succeed. It must
+    // not also drop reply recovery: pending replies live on /llm/jobs, not
+    // /state, and 1.7.5 resumed them after this check whatever its outcome. A
+    // reply that finished while the page was closed is otherwise not collected
+    // until a later wake event, and one still running is not re-attached.
+    Promise.resolve().then(() => resumePendingJobs()).catch(() => {})
+      .then(() => { _appBooted = true; });
+  }
   loadActiveModel().then(loadModelsList); // fetch model info + populate header dropdown
 
   // Always open on the landing page — threads are accessible from the sidebar.
@@ -97,7 +99,11 @@
         );
       }
       state.settings.remoteImageNoticeSeen = true;
-      saveState();
+      // After a failed state check nothing may be pushed, but the flag must
+      // still reach this device's storage: a thread-only checkpoint (what
+      // skipServerSchedule alone means on IndexedDB) does not write settings,
+      // so the one-time alert above would come back on every boot.
+      saveState(initialStateError ? { localOnly: true } : {});
     }
   } catch (e) { console.error('[remote-images] notice:', e); }
   updateSchedCount();
@@ -136,7 +142,11 @@
   }, 5000);
   // Scheduler timer — checks every 30 seconds
   setInterval(checkSchedules, 30000);
-})();
+  return { ok: !initialStateError, error: initialStateError, sync: syncTargetLabel() };
+})().catch(error => {
+  console.error('[boot] Startup failed:', error);
+  return { ok: false, error: error.message, sync: syncTargetLabel() };
+});
 
 /* ================================================================
    PAGE-LIFECYCLE PERSISTENCE

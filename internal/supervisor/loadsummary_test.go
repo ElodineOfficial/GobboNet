@@ -39,7 +39,7 @@ func TestTheLoadSentenceCarriesEveryFactWorthHaving(t *testing.T) {
 		"AMD Radeon RX 9070 XT", // which device, by the name on the box
 		"all 43 layers",         // how much of the model got there
 		"GPU",
-		"2.9 GB of VRAM", // and what it cost
+		"2.9 GB model buffers on GPU", // and what it cost
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("the sentence is missing %q.\ngot: %s", want, got)
@@ -85,7 +85,7 @@ func TestACPUOnlyLoadNamesTheProcessor(t *testing.T) {
 	if !strings.Contains(got, "no GPU offload") {
 		t.Errorf("a CPU-only load did not say the GPU was unused.\ngot: %s", got)
 	}
-	if !strings.Contains(got, "of RAM") {
+	if !strings.Contains(got, "host RAM") {
 		t.Errorf("the memory figure should be RAM, not VRAM.\ngot: %s", got)
 	}
 	if strings.Contains(got, "VRAM") {

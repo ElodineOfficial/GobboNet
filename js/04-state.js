@@ -32,6 +32,9 @@ const STATE_SCHEMA_VERSION = 1;
 
 // What the blob we actually loaded declared. Set by applyLoadedState().
 let loadedSchemaVersion = null;
+// Conversations applyLoadedState() pinned while carrying a legacy threadOrder
+// list into numeric keys; loadState() persists them so the carry runs once.
+let legacyThreadOrderAdopted = [];
 /* Fallback colours used when a card or persona has no colour set.
  *
  * These MUST match the values the colour pickers show (15-cards.js:183-184,
@@ -382,7 +385,16 @@ let state = {
    whole conversation: a field written here would change the conversation's
    head, and a changed head cannot go out as an append. So `order` is written
    by exactly one gesture: a drag, which moves a conversation against the
-   grain of its own activity.
+   grain of its own activity. (Two maintenance paths write it too: the respace
+   when a gap runs out, and adoptLegacyThreadOrder() carrying an arrangement
+   saved before this field existed.)
+
+   A placement is not permanent. Each one records the conversation's activity
+   at that moment in `orderActivity`, and a conversation whose activity has
+   since moved past it sorts by activity again -- so, as in 1.7.5, the next
+   message floats a dragged chat back to the top. That costs nothing on send:
+   the new message's own timestamp is what does it, and the two fields are
+   only ever written together, by the placement.
 ================================================================ */
 
 // One second, in the same units as the keys. The spacing a drop leaves at
@@ -409,10 +421,35 @@ function threadActivityAt(t) {
   return at;
 }
 
-/** The sort key: an explicit order where one was set, activity otherwise. */
+/** The sort key: an explicit order where one was set, activity otherwise --
+ *  until the conversation sees activity newer than it had when it was placed.
+ *
+ *  That exception is the 1.7.5 rule, restored: "a drag sets an order, and the
+ *  next message in a thread floats it back to the top." A placement records
+ *  the conversation's own activity at that moment (`orderActivity`); anything
+ *  later wins over the placement. Nothing is written when a message is sent,
+ *  so a sent turn stays an append (see CONVERSATION ORDER above), and the
+ *  comparison is between message timestamps only -- every device holding the
+ *  same conversation computes the same key, whatever its clock says.
+ *
+ *  A conversation with `order` but no `orderActivity` was placed by a build
+ *  that did not record one: its place holds, and sendMessage() retires it the
+ *  first time the conversation is used again. */
 function threadOrderKey(t) {
   const o = t && t.order;
-  return (typeof o === 'number' && isFinite(o)) ? o : threadActivityAt(t);
+  if (typeof o !== 'number' || !isFinite(o)) return threadActivityAt(t);
+  const since = t.orderActivity;
+  if (typeof since === 'number' && isFinite(since)) {
+    const at = threadActivityAt(t);
+    if (at > since) return at;
+  }
+  return o;
+}
+
+/** Give `t` an explicit place in the list, recorded against its activity now. */
+function setThreadOrder(t, key) {
+  t.order = key;
+  t.orderActivity = threadActivityAt(t);
 }
 
 /** Restore the invariant. Stable, so equal keys keep the order they had. */
@@ -446,7 +483,7 @@ function orderKeyBetween(above, below) {
 function respaceThreadOrder() {
   sortThreadsByOrder();
   let key = Math.max(Date.now(), threadOrderKey(state.threads[0]) || 0);
-  for (const t of state.threads) { t.order = key; key -= ORDER_KEY_STEP; }
+  for (const t of state.threads) { setThreadOrder(t, key); key -= ORDER_KEY_STEP; }
   console.warn('[order] Respaced ' + state.threads.length + ' conversation(s): the ' +
                'numbers between two of them had run out.');
 }
@@ -470,7 +507,7 @@ function placeThreadBeside(moved, target, pos) {
     const key = orderKeyBetween(above && threadOrderKey(above),
                                 below && threadOrderKey(below));
     if (key !== null) {
-      moved.order = key;
+      setThreadOrder(moved, key);
       sortThreadsByOrder();
       return true;
     }
@@ -479,6 +516,78 @@ function placeThreadBeside(moved, target, pos) {
   console.error('[order] Could not place "' + moved.name + '" next to "' + target.name +
                 '" even after respacing — the list was left as it was.');
   return false;
+}
+
+/** Carry a saved sidebar arrangement from before per-conversation order -- the
+ *  legacy `threadOrder` list of ids, top first -- into the numeric keys, so an
+ *  upgrade keeps the arrangement the user made instead of reshuffling it.
+ *
+ *  Only what activity alone would put somewhere else is pinned. That list was
+ *  activity order (sending floated a chat to the top) except where a drag had
+ *  moved a chat that was not used again afterwards -- which an explicit order
+ *  plus the float-on-activity rule in threadOrderKey() reproduces exactly. So
+ *  the longest stretch of the list already in activity order keeps its
+ *  natural keys and is not written at all, and each remaining conversation is
+ *  given a key between its kept neighbours.
+ *
+ *  Deterministic: the result depends only on the list and the conversations'
+ *  own contents, so devices that synced the same list mint the same numbers.
+ *  Where two devices' lists did differ, reconcile compares conversations
+ *  without their place in the list (orderlessThread in js/06-state-sync.js),
+ *  so the difference is settled silently by the last writer rather than
+ *  raised as a conflict. Conversations already carrying an order are left
+ *  alone. Returns the conversations it pinned. */
+function adoptLegacyThreadOrder(legacyIds) {
+  if (!Array.isArray(legacyIds)) return [];
+  const byId = new Map();
+  for (const t of state.threads) if (t && typeof t.id === 'string') byId.set(t.id, t);
+  const seq = [], seen = new Set();
+  for (const id of legacyIds) {
+    const t = byId.get(id);
+    if (!t || seen.has(id)) continue;
+    seen.add(id);
+    if (typeof t.order === 'number' && isFinite(t.order)) continue;
+    seq.push(t);
+  }
+  if (seq.length < 2) return [];
+  const keys = seq.map(threadOrderKey);
+
+  // Longest strictly decreasing run of keys, by patience sorting: tails[l] is
+  // the index ending the best run of length l+1 found so far.
+  const tails = [], prev = new Array(seq.length).fill(-1);
+  for (let i = 0; i < seq.length; i++) {
+    let lo = 0, hi = tails.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (keys[tails[mid]] > keys[i]) lo = mid + 1; else hi = mid;
+    }
+    if (lo > 0) prev[i] = tails[lo - 1];
+    tails[lo] = i;
+  }
+  const keep = new Array(seq.length).fill(false);
+  for (let i = tails[tails.length - 1]; i >= 0; i = prev[i]) keep[i] = true;
+
+  const pinned = [];
+  for (let i = 0; i < seq.length; ) {
+    if (keep[i]) { i++; continue; }
+    let j = i;
+    while (j < seq.length && !keep[j]) j++;
+    // The run seq[i..j) is maximal, so its neighbours (where they exist) are
+    // kept, and at least one of them exists because something is always kept.
+    const above = i > 0 ? keys[i - 1] : undefined;
+    const below = j < seq.length ? keys[j] : undefined;
+    const m = j - i;
+    for (let k = 0; k < m; k++) {
+      const key = (above !== undefined && below !== undefined)
+        ? above - (above - below) * (k + 1) / (m + 1)
+        : (above !== undefined) ? above - ORDER_KEY_STEP * (k + 1)
+        : below + ORDER_KEY_STEP * (m - k);
+      setThreadOrder(seq[i + k], key);
+      pinned.push(seq[i + k]);
+    }
+    i = j;
+  }
+  return pinned;
 }
 
 let isGenerating = false;

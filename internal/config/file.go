@@ -136,8 +136,16 @@ listen_port = 9066
 # not a silent fall back to remote mode.
 server_exe = ""
 
-# Maximum layers to offload to GPU (0 = CPU only, 99 = all layers).
-gpu_layers = 99
+# GPU placement: -1 = automatic fitting with headroom, 0 = CPU only.
+# A positive number is an explicit layer count (99 requests up to 99).
+# Auto preserves your model, context and KV precision; CPU work may be slower.
+# Requires an engine supporting --fit and --fit-target (pinned b10456 does).
+gpu_layers = -1
+
+# Free GPU memory targeted by automatic fitting, per device, in MiB.
+# A target, not a hard allocation cap; other applications can allocate later.
+# CPU offload uses system RAM. No model or context reduction is performed.
+gpu_reserve_mib = 1024
 
 # Context window in tokens. Must not exceed the model's maximum.
 ctx_size = 16384

@@ -835,7 +835,7 @@ func TestPerfRejectsOutOfRange(t *testing.T) {
 	for _, tc := range []struct{ name, body string }{
 		{"ctxSize below the floor", `{"ctxSize":16}`},
 		{"ctxSize past any model", `{"ctxSize":99999999}`},
-		{"negative gpuLayers", `{"gpuLayers":-1}`},
+		{"below automatic gpuLayers", `{"gpuLayers":-2}`},
 		{"gpuLayers past the cap", `{"gpuLayers":1000}`},
 		{"unknown kvCacheType", `{"kvCacheType":"q2_k"}`},
 		{"not JSON at all", `ctxSize=8192`},

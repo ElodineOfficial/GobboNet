@@ -102,6 +102,9 @@ function build({ served = true, storage = {}, server = {}, confirmWith = true,
     confirm: (msg) => { confirms.push(msg); return confirmWith; },
     alert: () => {},
     state,
+    buildStateMeta: () => ({ settings: {} }),
+    RUNTIME_MESSAGE_FIELDS: [],
+    cleanThread: t => t,
     isGenerating: false,
     getActiveThread: () => state.threads[0],
     redactedSyncJson: () => JSON.stringify(state),
@@ -122,6 +125,12 @@ function build({ served = true, storage = {}, server = {}, confirmWith = true,
       }
       const key = path.replace('/info', '');
       const rec = server[key];
+      if (path.includes('/index')) {
+        const exists = server[path.replace('/index', '')];
+        return { ok: !!exists, status: exists ? 200 : 404,
+          headers: { get: () => '2' },
+          json: async () => ({ threads: [], meta: 'meta', documentEtag: 'document' }) };
+      }
       if (path.endsWith('/info') || path.includes('/info?')) {
         if (!rec) return { ok: false, status: 404, json: async () => ({ error: 'no state on server' }) };
         return { ok: true, status: 200, json: async () => rec };
@@ -246,6 +255,7 @@ console.log('\n=== D. switching target ===');
   // Into an empty slot: nothing to overwrite, so no question is asked.
   let h = build();
   let res = await h.ctx.applySyncTarget('profile', 'phone');
+  await new Promise(resolve => setImmediate(resolve));
   eq(res, 'seeded', 'switching into an unused profile seeds it');
   eq(h.confirms.length, 0, 'without asking anything, because nothing could be lost');
   ok(h.calls.some(c => c.method === 'PUT' && c.path === '/state?profile=phone'),
@@ -254,6 +264,7 @@ console.log('\n=== D. switching target ===');
   // Into an occupied slot: the user is asked, and both answers are honoured.
   h = build({ server: { '/state?profile=phone': { mtime: 1700000000000, size: 9000 } }, confirmWith: true });
   res = await h.ctx.applySyncTarget('profile', 'phone');
+  await new Promise(resolve => setImmediate(resolve));
   eq(res, 'restoring', 'switching into an occupied profile can load it');
   eq(h.confirms.length, 1, 'after exactly one question');
   ok(/already holds a backup/.test(h.confirms[0]), 'which says the slot is occupied', h.confirms[0]);
@@ -261,6 +272,7 @@ console.log('\n=== D. switching target ===');
 
   h = build({ server: { '/state?profile=phone': { mtime: 1700000000000, size: 9000 } }, confirmWith: false });
   res = await h.ctx.applySyncTarget('profile', 'phone');
+  await new Promise(resolve => setImmediate(resolve));
   eq(res, 'pushed', 'or overwrite it with this device');
   ok(h.calls.some(c => c.method === 'PUT' && c.path === '/state?profile=phone'),
      'which pushes rather than restoring', JSON.stringify(h.calls));

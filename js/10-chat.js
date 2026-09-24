@@ -95,6 +95,14 @@ async function sendMessage(overrideContent) {
   // actively working in stay reachable without pinning. The timestamp on the
   // message just pushed is what does it (js/04-state.js, CONVERSATION ORDER);
   // all that is left is to restore the array the sidebar reads.
+  //
+  // One exception: a chat dragged under a build that stored `order` without
+  // the activity it was placed against has nothing to compare this message
+  // with, so its placement is retired here, once. Placements made since carry
+  // that mark and float without any write.
+  if (typeof thread.order === 'number' && typeof thread.orderActivity !== 'number') {
+    delete thread.order;
+  }
   sortThreadsByOrder();
   saveState();
   if (!isProgrammatic) {

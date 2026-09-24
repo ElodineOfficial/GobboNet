@@ -213,7 +213,11 @@ func (w *engineWatch) LoadLine() string {
 func (w *engineWatch) LoadNotes() []string {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return w.sum.Notes()
+	notes := w.sum.Notes()
+	if line := w.sum.MemoryLine(); line != "" {
+		notes = append(notes, line)
+	}
+	return notes
 }
 
 // GPUConfirmed reports that the engine said layers reached the GPU.

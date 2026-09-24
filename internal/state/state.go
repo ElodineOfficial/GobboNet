@@ -149,6 +149,7 @@ func resolve(w http.ResponseWriter, r *http.Request, def target) (target, bool) 
 //
 // key is the unlocked keyring, or nil on an install that stores plaintext.
 func Handle(w http.ResponseWriter, r *http.Request, statePath string, key *keyring.Keyring) {
+	w.Header().Set("X-State-Protocol", "2")
 	def := target{path: statePath, key: key}
 	switch r.URL.Path {
 	case "/state":
@@ -292,6 +293,9 @@ func serveProfiles(w http.ResponseWriter, r *http.Request, defaultPath string) {
 // remove deletes a stored snapshot. Deleting one that is not there is a
 // success, not a 404: the caller asked for it to be gone, and it is.
 func remove(w http.ResponseWriter, r *http.Request, t target) {
+	mu := lockFor(t.path)
+	mu.Lock()
+	defer mu.Unlock()
 	if err := os.Remove(t.path); err != nil && !os.IsNotExist(err) {
 		httpx.ErrorDetail(w, r, http.StatusInternalServerError, "delete failed", err.Error())
 		return
@@ -331,6 +335,29 @@ func serveBody(w http.ResponseWriter, r *http.Request, t target) {
 }
 
 func store(w http.ResponseWriter, r *http.Request, t target) {
+	mu := lockFor(t.path)
+	mu.Lock()
+	defer mu.Unlock()
+	if r.Header.Get("If-Match") != "" || r.Header.Get("If-None-Match") != "" {
+		d, _, exists, err := loadDocument(t)
+		if err != nil {
+			httpx.ErrorDetail(w, r, 500, "read failed", err.Error())
+			return
+		}
+		current := ""
+		if exists {
+			raw, err := d.marshal()
+			if err != nil {
+				httpx.Error(w, r, 500, "cannot encode state")
+				return
+			}
+			current = etagOf(raw)
+		}
+		if status, message := checkPrecondition(r, current); status != 0 {
+			failPrecondition(w, r, status, message, current, -1)
+			return
+		}
+	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, MaxBodyBytes+1))
 	if err != nil {
 		httpx.ErrorDetail(w, r, http.StatusBadRequest, "could not read body", err.Error())

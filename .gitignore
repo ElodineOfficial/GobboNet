@@ -93,3 +93,11 @@ installer-fedora/stage/
 installer-fedora/vendor/
 installer-fedora/dist/
 /linux-amd64/gobbonet
+
+# Local authentication and encrypted-history artifacts
+/j3.txt
+/jar2.txt
+/*cookies*.txt
+/state.keyring
+/state-*.json
+/.state.lock

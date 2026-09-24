@@ -278,8 +278,9 @@ function createThread() {
    It is gone, and nothing calls it: a conversation's place in the list is a
    number on the conversation, and with nothing explicit set that number IS
    its latest activity — so the timestamp on the message being sent does the
-   floating by itself, and renderSidebar() sorts. See CONVERSATION ORDER in
-   js/04-state.js.
+   floating by itself, and renderSidebar() sorts. That includes a chat you
+   dragged: a placement lasts until the conversation's next activity, exactly
+   as it did here (threadOrderKey). See CONVERSATION ORDER in js/04-state.js.
 
    What that bought is worth stating, because it is why the ordering lives
    where it does: writing an ordering field on the thread here would have

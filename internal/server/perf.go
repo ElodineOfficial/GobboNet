@@ -191,7 +191,7 @@ func (s *Server) perfPost(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.GPULayers != nil {
 		if *req.GPULayers < config.MinGPULayers || *req.GPULayers > config.MaxGPULayers {
-			httpx.Error(w, r, http.StatusBadRequest, "gpuLayers must be a number between 0 and 999.")
+			httpx.Error(w, r, http.StatusBadRequest, "gpuLayers must be a number between -1 (automatic) and 999.")
 			return
 		}
 		next.GPULayers = *req.GPULayers

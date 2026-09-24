@@ -80,7 +80,7 @@ const (
 	DefaultListenPort = 9066
 
 	DefaultCtxSize     = 16384
-	DefaultGPULayers   = 99
+	DefaultGPULayers   = -1
 	DefaultKVCacheType = "q8_0"
 
 	DefaultSessionTTLHours = 12
@@ -123,10 +123,11 @@ type Config struct {
 	AllowedHosts []string `toml:"allowed_hosts"`
 
 	// --- Local backend (hot-swap) ------------------------------------------
-	ServerExe   string `toml:"server_exe"`
-	GPULayers   int    `toml:"gpu_layers"`
-	CtxSize     int    `toml:"ctx_size"`
-	KVCacheType string `toml:"kv_cache_type"`
+	ServerExe     string `toml:"server_exe"`
+	GPULayers     int    `toml:"gpu_layers"`
+	GPUReserveMiB int    `toml:"gpu_reserve_mib"`
+	CtxSize       int    `toml:"ctx_size"`
+	KVCacheType   string `toml:"kv_cache_type"`
 
 	// --- Directories -------------------------------------------------------
 	ModelDir string `toml:"model_dir"`
@@ -273,14 +274,15 @@ func (c *Config) Runnable() error {
 // defaults can never drift.
 func Default() Config {
 	return Config{
-		LLMURL:      DefaultLLMURL,
-		SearchURL:   DefaultSearchURL,
-		EmbedURL:    DefaultEmbedURL,
-		ListenHost:  DefaultListenHost,
-		ListenPort:  DefaultListenPort,
-		GPULayers:   DefaultGPULayers,
-		CtxSize:     DefaultCtxSize,
-		KVCacheType: DefaultKVCacheType,
+		LLMURL:        DefaultLLMURL,
+		SearchURL:     DefaultSearchURL,
+		EmbedURL:      DefaultEmbedURL,
+		ListenHost:    DefaultListenHost,
+		ListenPort:    DefaultListenPort,
+		GPULayers:     DefaultGPULayers,
+		GPUReserveMiB: 1024,
+		CtxSize:       DefaultCtxSize,
+		KVCacheType:   DefaultKVCacheType,
 		// Left empty on purpose: normalise() then resolves it to
 		// <data_dir>/models, i.e. the XDG data directory. A literal "./models"
 		// here would resolve against the *config* directory and put multi-
@@ -595,6 +597,9 @@ func warnDeprecated(old, current string) {
 // file's own directory, so a config that lives next to launch.bat behaves the
 // way the Windows tree always did.
 func (c *Config) normalise() error {
+	if c.GPUReserveMiB < 0 || c.GPUReserveMiB > 65536 {
+		return fmt.Errorf("gpu_reserve_mib must be between 0 and 65536")
+	}
 	base := filepath.Dir(c.Path)
 
 	c.LLMURL = normaliseBaseURL(c.LLMURL)

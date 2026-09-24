@@ -1,0 +1,3 @@
+cfb351546ca170ebf05a978172fe696db1d98993e3bf4f7da6adfdaca2cedd5d  gobbonet
+8eaa2aa2854c8b4d941be2d30fcd20f85c1ea17c58ceb94e93f43d7e07f9e57f  gobbonet.exe
+cfb351546ca170ebf05a978172fe696db1d98993e3bf4f7da6adfdaca2cedd5d  linux-amd64/gobbonet

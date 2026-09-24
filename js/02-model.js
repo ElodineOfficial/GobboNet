@@ -625,8 +625,8 @@ async function loadPerfSettings() {
     const a = p.auto;
     _perfStatus(p.overridden
       ? 'Custom settings in use. Auto would pick ' + a.ctxSize + ' ctx, ' +
-        a.gpuLayers + ' layers, ' + a.kvCacheType + '.'
-      : 'Using automatic settings for your hardware.');
+        (a.gpuLayers === -1 ? 'automatic GPU placement' : a.gpuLayers + ' GPU layers') + ', ' + a.kvCacheType + '.'
+      : (p.current.gpuLayers === -1 ? 'Automatic GPU placement; model and context are preserved.' : 'Using configured GPU layers. Set -1 for automatic placement with memory headroom.'));
   } catch (e) {
     _perfStatus('Could not read current settings: ' + e.message, 'error');
   }

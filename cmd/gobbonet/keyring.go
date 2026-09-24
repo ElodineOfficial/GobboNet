@@ -14,6 +14,7 @@ import (
 	"github.com/ElodineOfficial/GobboNet/internal/auth"
 	"github.com/ElodineOfficial/GobboNet/internal/config"
 	"github.com/ElodineOfficial/GobboNet/internal/keyring"
+	"github.com/ElodineOfficial/GobboNet/internal/storelock"
 	"golang.org/x/term"
 )
 
@@ -68,6 +69,25 @@ install it reseals the key rather than writing a new hash.
 }
 
 // --- helpers ---------------------------------------------------------------
+
+// lockHistory reloads config under the same process lock held by serve.
+func lockHistory(cfg *config.Config) (*os.File, error) {
+	guard, err := storelock.Acquire(filepath.Dir(cfg.StatePath()))
+	if err != nil {
+		return nil, err
+	}
+	fresh, err := loadConfig(cfg.Path)
+	if err != nil {
+		guard.Close()
+		return nil, err
+	}
+	if filepath.Clean(fresh.StatePath()) != filepath.Clean(cfg.StatePath()) {
+		guard.Close()
+		return nil, errors.New("history location changed while acquiring its lock; retry the command")
+	}
+	*cfg = fresh
+	return guard, nil
+}
 
 // stateFiles lists the shared state.json and every state-<profile>.json beside
 // it. One keyring covers all of them.
@@ -214,6 +234,9 @@ func sealAll(cfg config.Config, k *keyring.Keyring) (int, error) {
 			return sealed, fmt.Errorf("reading %s: %w", f, err)
 		}
 		if keyring.IsSealed(raw) {
+			if _, err := k.Unseal(raw); err != nil {
+				return sealed, fmt.Errorf("checking %s: %w", f, err)
+			}
 			continue
 		}
 		body, err := k.Seal(raw)
@@ -241,11 +264,29 @@ func keyringInit(argv []string) error {
 	if err != nil {
 		return err
 	}
-	if keyring.Exists(cfg.KeyringPath()) {
-		return fmt.Errorf("this install is already encrypted (%s).\n"+
-			"      To change the password: gobbonet set-password\n"+
-			"      To replace the recovery phrase: gobbonet keyring set-recovery", cfg.KeyringPath())
+	guard, err := lockHistory(&cfg)
+	if err != nil {
+		return err
 	}
+	defer guard.Close()
+
+	if keyring.Exists(cfg.KeyringPath()) {
+		password, err := readPassword("  Current encryption password: ")
+		if err != nil {
+			return err
+		}
+		k, err := keyring.UnlockPassword(cfg.KeyringPath(), password)
+		if err != nil {
+			return err
+		}
+		if err := finishEncryption(cfg, k); err != nil {
+			return err
+		}
+		fmt.Println("  [OK] Encryption completed. Existing password and recovery phrase are unchanged.")
+		fmt.Println("       If setup was interrupted before you saved the phrase, run gobbonet keyring set-recovery.")
+		return nil
+	}
+
 	if !interactive() {
 		return errors.New("keyring init needs a terminal: it sets a password and shows a recovery phrase once")
 	}
@@ -273,21 +314,25 @@ func keyringInit(argv []string) error {
 	}
 	fmt.Printf("  [OK] keyring written to %s\n", cfg.KeyringPath())
 
-	if _, err := sealAll(cfg, k); err != nil {
-		return fmt.Errorf("the keyring was created but the history could not all be encrypted: %w.\n"+
-			"      Nothing was lost -- rerun this command, or 'gobbonet decrypt' to undo it", err)
+	// Show and confirm the recovery phrase before rewriting any history.
+	if err := showPhrase(phrase); err != nil {
+		return fmt.Errorf("keyring created but recovery confirmation interrupted: %w; rerun keyring init with your password, then keyring set-recovery", err)
 	}
-
-	// Last, so a failure above leaves an install that still starts normally.
-	if err := config.Set(cfg.Path, "access_secret", keyringMarker); err != nil {
-		return fmt.Errorf("could not point %s at the keyring: %w", cfg.Path, err)
-	}
-	fmt.Printf("  [OK] %s now defers to the keyring for the password\n", cfg.Path)
-
-	return showPhrase(phrase)
+	return finishEncryption(cfg, k)
 }
 
 // confirmedPassword asks twice and returns the agreed password.
+func finishEncryption(cfg config.Config, k *keyring.Keyring) error {
+	if _, err := sealAll(cfg, k); err != nil {
+		return fmt.Errorf("encryption incomplete: %w; rerun gobbonet keyring init with the same password to resume, or gobbonet decrypt to undo", err)
+	}
+	if err := config.Set(cfg.Path, "access_secret", keyringMarker); err != nil {
+		return fmt.Errorf("history encrypted but config not updated: %w; rerun gobbonet keyring init", err)
+	}
+	fmt.Println("  [OK] All history files encrypted; password is verified by the keyring.")
+	return nil
+}
+
 func confirmedPassword(cfg *config.Config) (string, error) {
 	for {
 		first, err := readPassword("  Choose the password: ")
@@ -404,6 +449,12 @@ func keyringSetRecovery(argv []string) error {
 	if err != nil {
 		return err
 	}
+	guard, err := lockHistory(&cfg)
+	if err != nil {
+		return err
+	}
+	defer guard.Close()
+
 	if !keyring.Exists(cfg.KeyringPath()) {
 		return errors.New("this install is not encrypted, so there is no recovery phrase.\n      To turn encryption on: gobbonet keyring init")
 	}
@@ -441,6 +492,12 @@ func keyringRecover(argv []string) error {
 	if err != nil {
 		return err
 	}
+	guard, err := lockHistory(&cfg)
+	if err != nil {
+		return err
+	}
+	defer guard.Close()
+
 	if !keyring.Exists(cfg.KeyringPath()) {
 		return errors.New("this install is not encrypted, so there is nothing to recover.\n      If you cannot sign in, run: gobbonet set-password")
 	}
@@ -512,6 +569,12 @@ func cmdDecrypt(argv []string) error {
 	if err != nil {
 		return err
 	}
+	guard, err := lockHistory(&cfg)
+	if err != nil {
+		return err
+	}
+	defer guard.Close()
+
 	if !keyring.Exists(cfg.KeyringPath()) {
 		return errors.New("this install is not encrypted")
 	}

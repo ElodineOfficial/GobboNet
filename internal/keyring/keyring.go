@@ -202,6 +202,15 @@ func (s slot) unwrap(secret []byte) ([]byte, error) {
 		return nil, fmt.Errorf("keyslot payload is not valid base64: %w", err)
 	}
 
+	// Bound file-supplied work and validate lengths before crypto calls, which
+	// otherwise panic on malformed parameters/nonces or allocate arbitrary RAM.
+	if s.KDF.Time < 1 || s.KDF.Time > 10 || s.KDF.Memory < 8*uint32(s.KDF.Threads) || s.KDF.Memory > 256*1024 || s.KDF.Threads < 1 || s.KDF.Threads > 16 {
+		return nil, errors.New("keyslot KDF parameters are outside supported bounds")
+	}
+	if len(salt) != saltLen || len(nonce) != chacha20poly1305.NonceSizeX || len(wrapped) != dekLen+chacha20poly1305.Overhead {
+		return nil, errors.New("keyslot salt, nonce or payload has an invalid length")
+	}
+
 	wrapKey := argon2.IDKey(secret, salt, s.KDF.Time, s.KDF.Memory, s.KDF.Threads, wrapKeyLen)
 	aead, err := chacha20poly1305.NewX(wrapKey)
 	if err != nil {

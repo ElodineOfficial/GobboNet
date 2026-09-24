@@ -232,6 +232,8 @@ func stringFlag(fs *flag.FlagSet, name, usage string) *string {
 // --- serve -----------------------------------------------------------------
 
 func cmdServe(argv []string) error {
+	restoreConsole := setupConsolePresentation()
+	defer restoreConsole()
 	fs := flag.NewFlagSet("gobbonet serve", flag.ContinueOnError)
 	configPath := stringFlag(fs, "config", "path to config.toml")
 	host := stringFlag(fs, "host", "override listen_host")
@@ -275,6 +277,12 @@ func cmdServe(argv []string) error {
 	if err != nil {
 		return err
 	}
+	guard, err := lockHistory(&cfg)
+	if err != nil {
+		return err
+	}
+	defer guard.Close()
+
 	if err := cfg.Runnable(); err != nil {
 		return err
 	}
@@ -333,7 +341,9 @@ func cmdServe(argv []string) error {
 		return err
 	}
 
-	fmt.Print(banner)
+	if os.Getenv("GOBBONET_BANNER_SHOWN") != "1" {
+		fmt.Print(banner)
+	}
 	fmt.Printf(" [OK] version: %s\n", version.Full())
 
 	if cfg.RequireAuth {
@@ -351,10 +361,11 @@ func cmdServe(argv []string) error {
 	var sup *supervisor.Supervisor
 	if mode == config.ModeLocal {
 		sup, err = supervisor.New(supervisor.Options{
-			ServerExe: cfg.ServerExe,
-			ModelDir:  cfg.ModelDir,
-			LLMURL:    cfg.LLMURL,
-			APIKey:    cfg.LLMAPIKey,
+			ServerExe:     cfg.ServerExe,
+			GPUReserveMiB: cfg.GPUReserveMiB,
+			ModelDir:      cfg.ModelDir,
+			LLMURL:        cfg.LLMURL,
+			APIKey:        cfg.LLMAPIKey,
 			Tuning: supervisor.Tuning{
 				CtxSize:     cfg.CtxSize,
 				GPULayers:   cfg.GPULayers,
@@ -490,65 +501,10 @@ func cmdServe(argv []string) error {
 		fmt.Println("      Harmless unless you use setup-lan.bat, which reads it.")
 	}
 
-	// Report the address actually bound, never the configured one. After a
-	// fallback those differ, and printing the configured host would advertise
-	// phone access the socket cannot provide.
-	fmt.Println()
-	if bind.FellBack {
-		fmt.Println(" [!]  LAN access is OFF -- this machine could not bind a network address.")
-		fmt.Printf("      %v\n", bind.WideErr)
-		fmt.Println()
-		fmt.Printf(" [OK] serving on http://%s:%d/  (this machine only)\n", bind.Host, bind.Port)
-		fmt.Println()
-		for _, line := range lanBindHelp(cfg) {
-			if line == "" {
-				fmt.Println()
-				continue
-			}
-			fmt.Println("      " + line)
-		}
-	} else if bind.LANReachable() {
-		// Every candidate, not one guess. A single address was wrong for
-		// anyone with Ethernet and Wi-Fi both up, with a VPN connected, or
-		// with a Hyper-V/WSL/Docker bridge winning route selection -- and
-		// being wrong with no alternative on screen is what made it arrive as
-		// "it wouldn't let me connect, so I found the address myself".
-		//
-		// The adapter name is the load-bearing part. Someone who cannot read a
-		// routing table can still recognise which line says Wi-Fi.
-		addrs := server.LANAddrsFor(bind.Host)
-		if len(addrs) == 0 {
-			// Bound wide, but no address to name: every adapter is virtual, or
-			// enumeration failed. Say so rather than printing 127.0.0.1 under
-			// a "phone / LAN" label, which would be a promise we cannot keep.
-			fmt.Printf(" [OK] serving on port %d (all interfaces)\n", bind.Port)
-			fmt.Printf("      this machine:  http://127.0.0.1:%d/\n", bind.Port)
-			fmt.Println("      phone / LAN:   no reachable address found on this machine.")
-			fmt.Println("                     `gobbonet doctor` lists what it looked at.")
-		} else {
-			fmt.Printf(" [OK] serving on %s\n", addrs[0].URL(bind.Port))
-			fmt.Printf("      this machine:  http://127.0.0.1:%d/\n", bind.Port)
-			label := "      phone / LAN:   "
-			for _, a := range addrs {
-				fmt.Printf("%s%-28s %s\n", label, a.URL(bind.Port), lanAddrNote(a))
-				label = "                     "
-			}
-			if len(addrs) > 1 {
-				fmt.Println()
-				fmt.Println("      More than one, because this machine has more than one network")
-				fmt.Println("      adapter and only your phone knows which one it shares. Try them")
-				fmt.Println("      top down; the one matching the Wi-Fi your phone is on is the one")
-				fmt.Println("      that works.")
-			}
-		}
-	} else {
-		// Loopback because the config asked for it. Not a warning.
-		fmt.Printf(" [OK] serving on http://%s:%d/  (this machine only)\n", bind.Host, bind.Port)
-	}
+	// Keep technical paths above the ready panel, so the addresses are the
+	// last prominent thing printed before the browser opens.
 	fmt.Printf(" [OK] data dir: %s\n", cfg.DataDir)
-	fmt.Println()
-	fmt.Println(" Press Ctrl+C to stop.")
-	fmt.Println()
+	printReadyPanel(os.Stdout, cfg, bind, server.LANAddrsFor(bind.Host))
 
 	// After the bind, so the tab never lands on a connection error: the socket
 	// is already accepting and anything that arrives before Serve starts waits
@@ -728,6 +684,12 @@ func cmdSetPassword(argv []string) error {
 	if err != nil {
 		return err
 	}
+	guard, err := lockHistory(&cfg)
+	if err != nil {
+		return err
+	}
+	defer guard.Close()
+
 	// On an encrypted install the password is not a hash to overwrite, it is a
 	// keyslot to reseal -- and a data key you cannot unwrap is one you cannot
 	// reseal, so this is the day changing the password starts needing the old

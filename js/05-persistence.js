@@ -202,24 +202,31 @@ function applyLoadedState(saved) {
       // in js/04-state.js), which is why this is a sort and not a lookup.
       //
       // Saves written before that field read their arrangement from a separate
-      // `threadOrder` list of ids, which is read here — once, as a tiebreaker,
-      // never written again. It IS only a tiebreaker: a conversation with no
-      // order of its own sorts by its own latest activity, and that wins over
-      // the legacy list, so a manual arrangement made before this version
-      // survives only where two conversations tie. The alternative was to mint
-      // an order for every conversation from this device's copy of the list —
-      // and since that list is precisely the thing two devices disagree about,
-      // each would have minted different numbers and every chat would have come
-      // back as a conflict in a conversation nobody had touched. A one-time
-      // reshuffle into most-recent-first is the cheaper surprise, and it is
-      // where a dragged order was already heading: fresh activity has always
-      // floated a chat back to the top.
+      // `threadOrder` list of ids. It is read here, once, and carried into the
+      // numeric keys by adoptLegacyThreadOrder(), which pins only the
+      // conversations the user had placed against the grain of activity --
+      // everything else keeps sorting by its own latest activity, which is
+      // where that list had them anyway. The list is never written again;
+      // loadState() persists the result straight away so this runs once.
+      //
+      // This used to be a tiebreaker only, which reshuffled every manual
+      // arrangement on upgrade, on the grounds that numbers minted from each
+      // device's copy of the list would turn every chat into a conflict. They
+      // do not: reconcile compares conversations without their place in the
+      // list (orderlessThread), so a difference in placement is settled
+      // silently by the last writer, and devices that synced the same list
+      // mint the same numbers anyway. The rank sort stays as the tiebreaker
+      // for anything the keys leave equal.
+      legacyThreadOrderAdopted = [];
       if (Array.isArray(saved.threadOrder) && state.threads.length > 1) {
         const rank = new Map(saved.threadOrder.map((id, i) => [id, i]));
         const unranked = saved.threadOrder.length;
         state.threads.sort((a, b) =>
           (rank.has(a.id) ? rank.get(a.id) : unranked) -
           (rank.has(b.id) ? rank.get(b.id) : unranked));
+        if (typeof adoptLegacyThreadOrder === 'function') {
+          legacyThreadOrderAdopted = adoptLegacyThreadOrder(saved.threadOrder);
+        }
       }
       sortThreadsByOrder();
 
@@ -439,8 +446,10 @@ function applyLoadedState(saved) {
         thread.messages.pop();
         console.log('[recover] Dropped an empty trailing assistant placeholder in thread', thread.id);
       }
+      return true;
   } catch (e) {
     console.error('Failed to apply loaded state:', e);
+    return false;
   }
 }
 
@@ -477,7 +486,7 @@ async function loadState(rawOverride) {
       if (meta) {
         // Normal IDB load: reconstruct the blob from meta + per-thread records.
         const threads = await idbGetAll('threads');
-        applyLoadedState({ ...meta, threads });
+        if (applyLoadedState({ ...meta, threads })) await persistAdoptedThreadOrder(meta);
         return;
       }
       // Fresh IDB. If a localStorage blob exists, this is an existing user —
@@ -516,9 +525,40 @@ async function loadState(rawOverride) {
       localStorage.removeItem(LEGACY_STORAGE_KEY);
     }
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) applyLoadedState(JSON.parse(raw));
+    if (raw) {
+      const saved = JSON.parse(raw);
+      // A legacy threadOrder list was just carried into the conversations'
+      // own keys; write that back now so it is not carried twice (see
+      // persistAdoptedThreadOrder). Best-effort, like every save here.
+      if (applyLoadedState(saved) && Array.isArray(saved.threadOrder)) {
+        try { localStorage.setItem(STORAGE_KEY, JSON.stringify(buildStateBlob())); }
+        catch (e) { console.warn('[order] Arrangement carried over in memory; saving it waits for the next save:', e && e.message); }
+      }
+    }
   } catch (e) {
     console.error('Failed to load state from localStorage:', e);
+  }
+}
+
+// The legacy threadOrder list is carried into numeric keys exactly once. Saved
+// here, before anything else runs, rather than left for the next full save:
+// were it read again after a chat had floated on new activity, the list would
+// pin that chat back where it used to be. Only the pinned conversations and
+// the meta record minus that one field are written -- nothing else in either
+// changes. On failure the carry simply runs again next load, which is safe
+// then because nothing has had a chance to move.
+async function persistAdoptedThreadOrder(meta) {
+  if (!meta || !Array.isArray(meta.threadOrder)) return;
+  try {
+    for (const t of legacyThreadOrderAdopted) await idbPut('threads', cleanThread(t));
+    const { threadOrder, ...rest } = meta;
+    await idbPut('meta', rest, 'app');
+    if (legacyThreadOrderAdopted.length) {
+      console.log('[order] Kept your sidebar arrangement: ' + legacyThreadOrderAdopted.length +
+                  ' chat(s) stay where you placed them until they are next used.');
+    }
+  } catch (e) {
+    console.warn('[order] Arrangement carried over in memory; saving it waits for the next save:', e && e.message);
   }
 }
 
@@ -725,7 +765,26 @@ function saveState(opts) {
   // pagehide exit save — during a generation the server push always defers
   // anyway (stateSyncWouldBeTransient). On the IDB backend this flag ALSO
   // selects the cheap active-thread-only write (see below).
-  const skipServerSchedule = !!(opts && opts.skipServerSchedule);
+  //
+  // opts.localOnly: the whole state goes to this device's storage and nothing
+  // is scheduled for the server -- for a save that must not push (the state
+  // check at boot failed) but also must not be reduced to one conversation,
+  // because what changed is a setting.
+  const localOnly = !!(opts && opts.localOnly);
+  const skipServerSchedule = localOnly || !!(opts && opts.skipServerSchedule);
+
+  // Streaming checkpoints need only this thread. Choose the cheap path before
+  // building the full library snapshot (including every unrelated message).
+  if (STORAGE_BACKEND === 'idb' && skipServerSchedule && !localOnly) {
+    const thread = opts && opts.thread ? opts.thread : getActiveThread();
+    if (thread) {
+      try {
+        idbPut('threads', cleanThread(thread)).catch(e =>
+          console.warn('[storage] active-thread write failed:', e && e.message));
+      } catch (e) { console.error('Failed to serialize thread for save:', e); }
+    }
+    return;
+  }
 
   // Build the snapshot once from in-memory state. If serialization fails there
   // is nothing we can persist, so bail rather than half-saving.
@@ -757,19 +816,8 @@ function saveState(opts) {
 
   // 2) Local persistence.
   if (STORAGE_BACKEND === 'idb') {
-    if (skipServerSchedule) {
-      // Streaming tick / exit save: rewrite ONLY the active thread (tiny),
-      // not the whole multi-MB history every ~2.5 s. This is the cost the
-      // migration exists to remove.
-      const at = state.threads.find(t => t.id === state.activeThreadId);
-      if (at) {
-        idbPut('threads', cleanThread(at)).catch(e =>
-          console.warn('[storage] active-thread write failed:', e && e.message));
-      }
-    } else {
-      // Full save: meta record + all thread records (debounced/coalesced).
-      saveFullToIdb(blob);
-    }
+    // Full save: meta record + all thread records (debounced/coalesced).
+    saveFullToIdb(blob);
     return;
   }
 

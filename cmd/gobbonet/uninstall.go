@@ -72,14 +72,25 @@ func cmdUninstall(argv []string) error {
 
 	// --- the parts that go without asking ---------------------------------
 	removed := 0
-	for _, p := range []string{
+	paths := []string{
 		filepath.Join(dataDir, "state.json"),
 		filepath.Join(dataDir, "state.json.bak"),
+		// Added after this list was written, and conversations or their keys
+		// just the same: the key that decrypts an encrypted backup, its lock
+		// file, and the engine's log. Device-sync profile backups
+		// (state-<name>.json) are globbed in below.
+		filepath.Join(dataDir, "state.keyring"),
+		filepath.Join(dataDir, ".state.lock"),
+		filepath.Join(dataDir, "llama-server.log"),
 		filepath.Join(dataDir, "setup-complete.json"),
 		// The Go server holds jobs in memory, but a tree carried over from the
 		// PowerShell lineage may still have the spool on disk.
 		filepath.Join(dataDir, ".jobs"),
-	} {
+	}
+	if profiles, err := filepath.Glob(filepath.Join(dataDir, "state-*.json*")); err == nil {
+		paths = append(paths, profiles...)
+	}
+	for _, p := range paths {
 		if err := os.RemoveAll(p); err == nil {
 			if _, statErr := os.Stat(p); statErr != nil {
 				removed++

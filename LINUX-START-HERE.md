@@ -1,6 +1,6 @@
-# GobboNet 1.7.5 — Linux
+# GobboNet 1.7.6 — Linux
 
-Install the Debian package with `sudo apt install ./gobbonet_1.7.5+go.nogit.*_amd64.deb`, then run `gobbonet` as your normal user or select GobboNet in the application menu.
+Install the Debian package with `sudo apt install ./gobbonet_1.7.6+go.nogit.*_amd64.deb`, then run `gobbonet` as your normal user or select GobboNet in the application menu. On Fedora, install the RPM instead: `sudo dnf install ./gobbonet-1.7.6-*.fedora.x86_64.rpm` (see `installer-fedora/FEDORA.md`).
 
 For the ZIP, extract it, open a terminal in GobboNet and run `./gobbonet`. The ZIP includes a Linux amd64 runtime and the editable source. It needs Python 3.8+, Bash, coreutils, xdg-utils and the same engine libraries listed in the Debian package. Keep the extracted folder in place while using it. Do not run the application with sudo.
 
@@ -52,4 +52,12 @@ GOBBONET_RUNTIME_DIR="$PWD/linux-amd64" bash installer-linux/build-deb.sh
 python3 tests/test-linux-onboarding.py
 ```
 
-This explicitly reuses the included runtime. For a newly compiled Go server and freshly fetched pinned engine, use the original build-release.sh / build-deb.sh path instead. Linux setup source lives in installer-linux/gobbonet-launch, gobbonet-setup.py and wizard.html. internal/setup remains the underlying Go setup API and standalone minimal wizard.
+This explicitly reuses the included runtime. For a newly compiled Go server and freshly fetched pinned engine, use the original build-release.sh / build-deb.sh path instead.
+
+A ZIP without `linux-amd64/llama-cpp` (an update ZIP) has no runtime engine to reuse. Point the builder at the included server instead; it fetches the pinned engine and refuses it unless the hash matches `engine.sha256`:
+
+```sh
+GOBBONET_BIN="$PWD/linux-amd64/gobbonet" bash installer-linux/build-deb.sh
+```
+
+To run the onboarding test against an installed package rather than this folder, as your normal user: `GOBBONET_TEST_PREFIX=/usr/lib/gobbonet python3 tests/test-linux-onboarding.py`. Linux setup source lives in installer-linux/gobbonet-launch, gobbonet-setup.py and wizard.html. internal/setup remains the underlying Go setup API and standalone minimal wizard.

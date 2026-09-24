@@ -36,8 +36,8 @@ import (
 const (
 	MinCtxSize   = 512     // below this nothing useful fits
 	MaxCtxSize   = 1048576 // past any current model
-	MinGPULayers = 0       // pure CPU: a real choice on a machine whose GPU is busy
-	MaxGPULayers = 999     // 99 is llama.cpp's idiom for "all of them"
+	MinGPULayers = -1      // -1 = automatic GPU placement; 0 = CPU only
+	MaxGPULayers = 999     // numeric values remain explicit upper layer counts
 )
 
 // KVCacheTypes are the quantisations llama-server accepts for --cache-type-k/v.
@@ -172,7 +172,7 @@ const perfTOML = `# Runtime tuning overrides, written by the settings panel.
 # instead of quietly running settings you did not choose.
 #
 #   ctx_size       %d..%d
-#   gpu_layers     %d..%d (0 = CPU only, 99 = all layers)
+#   gpu_layers     %d..%d (-1 = automatic, 0 = CPU only, 99 = up to 99 layers)
 #   kv_cache_type  %v
 
 ctx_size = %d

@@ -60,6 +60,9 @@ KNOWN_BATCH_ONLY = {
 # Flags BuildArgs passes that launch.bat does not. The Go server owns config
 # the batch path never had.
 KNOWN_GO_ONLY = {
+    "--fit": "automatic placement is capability-checked by the managed Go launcher",
+    "--fit-target": "managed auto placement leaves configured GPU headroom",
+    "--fit-ctx": "automatic placement may not shrink the selected context",
     "--api-key":            "llm_api_key, a Go-config-only setting",
     "--jinja":              "conditional; launch.bat interpolates !JINJA_FLAG!",
     "--chat-template":      "conditional; launch.bat uses !CHAT_TEMPLATE_FLAG!",

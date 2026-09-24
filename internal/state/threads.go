@@ -232,9 +232,15 @@ func serveIndex(w http.ResponseWriter, r *http.Request, t target) {
 		})
 	}
 
+	documentETag, err := d.etag()
+	if err != nil {
+		httpx.Error(w, r, 500, "cannot encode state")
+		return
+	}
 	mtime := mtimeMS(info)
 	w.Header().Set("X-State-Mtime", strconv.FormatInt(mtime, 10))
 	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{
+		"documentEtag":  documentETag,
 		"threads":       threads,
 		"unaddressable": unaddressable,
 		"meta":          etagOf(metaBytes(d)),

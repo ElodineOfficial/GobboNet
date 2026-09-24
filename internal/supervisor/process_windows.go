@@ -42,6 +42,9 @@ func processGroupID(cmd *exec.Cmd) int {
 // taskkill exits non-zero when the PID is already gone, which is success here,
 // so an error is only reported when the tree is demonstrably still present.
 func terminateGroup(pgid int, force bool) error {
+	if owned, err := terminateJob(pgid); owned {
+		return err
+	}
 	if pgid <= 0 {
 		return nil
 	}
@@ -88,6 +91,9 @@ func terminateGroup(pgid int, force bool) error {
 
 // groupAlive reports whether the root process still exists.
 func groupAlive(pgid int) bool {
+	if alive, owned := jobAlive(pgid); owned {
+		return alive
+	}
 	if pgid <= 0 {
 		return false
 	}

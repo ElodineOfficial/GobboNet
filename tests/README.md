@@ -135,6 +135,27 @@ come from someone else.
 Each resolves the repo root from its own location, so the working directory does
 not matter.
 
+`test-conversation-order.mjs` covers where a conversation sits in the sidebar:
+activity order, a drag holding until the chat is next used (the 1.7.5 rule),
+respacing, placements from builds that recorded no activity mark, carrying a
+saved `threadOrder` list into the keys through the real `applyLoadedState` and
+`loadState`, and the two sync guards -- a placement never reads as a message
+conflict, and reconcile keeps a placement's two fields together. Background is
+in [`docs/changelog/CHANGELOG-feature-restore.md`](../docs/changelog/CHANGELOG-feature-restore.md).
+
+`test-device-sync.mjs` covers the DEVICE SYNC choices against the real sync
+layer and an in-memory server with the protocol's rules: seeding a target
+records the versions it wrote (so a new profile, "keep this device", or sync
+back on ends synced, not in conflict), a write from another device in between
+is not adopted, and a chat missing the loader's defaults does not read as a
+conflict. It also holds `THREAD_LOAD_DEFAULTS` equal to the loader's block.
+Background is in [`docs/changelog/CHANGELOG-feature-restore.md`](../docs/changelog/CHANGELOG-feature-restore.md).
+
+`test-boot-resume.mjs` drives the real `24-boot.js` against the real sync layer:
+pending replies resume after the startup state check whether or not it
+succeeded, and the one-time notice flag reaches storage through
+`saveState({ localOnly })` without scheduling a push.
+
 ## Launcher invariants
 
 `test-launch-gpu-detect.py` checks the arrangement in `launch.bat` that lets it
@@ -158,6 +179,11 @@ read sits inside a parenthesised block. Background is in
 ```sh
 python3 tests/test-setup-lan.py
 ```
+
+`test-launch-gpu-layers.py` pins where `launch.bat` turns automatic GPU
+placement (`-1`) into 99 layers: on the legacy path only, before llama-server
+and the hot-swap variables see it, never on the managed hand-off to
+`gobbonet.exe`, which does its own capability-checked fitting.
 
 ## Preview pages (`preview/`)
 

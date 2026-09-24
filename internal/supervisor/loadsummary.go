@@ -48,6 +48,9 @@ it, and this project has already been bitten once by output that went quiet.
 // because llama.cpp rewords its own log strings and a summary that breaks when
 // it does would be worse than no summary.
 type loadSummary struct {
+	buffers   map[string]reportedBuffer
+	actualCtx int
+
 	device   string // "AMD Radeon RX 9070 XT"
 	backend  string // "Vulkan0", "CUDA0", ...
 	cpuName  string // "AMD Ryzen 7 9700F 8-Core Processor"
@@ -68,6 +71,13 @@ type loadSummary struct {
 func (s *loadSummary) Feed(line string) {
 	body := stripEngineStamp(strings.TrimSpace(line))
 	flat := strings.Join(strings.Fields(body), " ")
+	s.feedBuffer(flat)
+	if strings.Contains(flat, "n_ctx_seq =") {
+		fields := strings.Fields(afterWord(flat, "n_ctx_seq ="))
+		if len(fields) > 0 {
+			s.actualCtx, _ = strconv.Atoi(fields[0])
+		}
+	}
 
 	switch {
 	// "- Vulkan0 : AMD Radeon RX 9070 XT (16304 MiB, 15416 MiB free)"
@@ -127,22 +137,6 @@ func (s *loadSummary) Feed(line string) {
 
 	// "load_tensors:  Vulkan0 model buffer size =  2934.68 MiB"
 	// "load_tensors:  CPU_Mapped model buffer size =  2730.00 MiB"
-	case strings.Contains(flat, "model buffer size"):
-		who := strings.TrimSpace(firstBefore(flat, "model buffer size"))
-		if i := strings.LastIndex(who, ":"); i >= 0 {
-			who = strings.TrimSpace(who[i+1:])
-		}
-		mib := parseMiB(flat)
-		if mib <= 0 {
-			return
-		}
-		// Summed rather than replaced: a model split across devices reports one
-		// line per buffer, and the total is the number the user cares about.
-		if strings.HasPrefix(who, "CPU") {
-			s.cpuMiB += mib
-		} else {
-			s.gpuMiB += mib
-		}
 
 	// "llama_context: n_ctx_seq (32768) > n_ctx_train (2048) -- possible training
 	// context overflow"
@@ -200,10 +194,10 @@ func (s *loadSummary) Line() string {
 		parts = append(parts, "layers offloaded to the GPU")
 	}
 	if s.gpuMiB > 0 {
-		parts = append(parts, gigabytes(s.gpuMiB)+" of VRAM")
+		parts = append(parts, gigabytes(s.gpuMiB)+" model buffers on GPU")
 	}
 	if s.gpuMiB == 0 && s.cpuMiB > 0 {
-		parts = append(parts, gigabytes(s.cpuMiB)+" of RAM")
+		parts = append(parts, gigabytes(s.cpuMiB)+" model buffers in host RAM")
 	}
 
 	if len(parts) == 0 {

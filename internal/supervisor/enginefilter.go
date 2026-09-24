@@ -125,7 +125,9 @@ var loadLinesWorthKeeping = []string{
 func summaryAbsorbs(line string) bool {
 	var probe loadSummary
 	probe.Feed(line)
-	return probe != loadSummary{}
+	return probe.device != "" || probe.backend != "" || probe.cpuName != "" ||
+		probe.sawSplit || probe.sawOffloading || len(probe.buffers) > 0 ||
+		probe.ctxSeq != 0 || probe.ctxTrain != 0 || probe.actualCtx != 0
 }
 
 // alwaysNoise are substrings that mean "drop this", whatever else the line

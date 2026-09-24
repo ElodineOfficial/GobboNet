@@ -200,3 +200,19 @@ In the order they should be applied, smallest blast radius first.
 
 Items 1 and 2 are the minimum to produce a working Fedora package. Item 3 is
 what stops the next one being broken the same way.
+
+---
+
+## Status (1.7.6)
+
+Items 1–3 shipped in 1.7.4 ([`CHANGELOG-1.7.4-fedora-repair.md`](changelog/CHANGELOG-1.7.4-fedora-repair.md)).
+
+Item 4 — Finding 4 — was deferred, then covered in 1.7.6 by listing the engine's
+library *packages* by hand. Fedora 45's move to OpenSSL 4 showed why that is not
+the same thing: `openssl-libs >= 3.0` was satisfied by OpenSSL 4, and the
+engine, which needs `libssl.so.3`, could not start. The requirements are now
+generated from the engine itself, as proposed here, filtering only Vulkan and
+the bundled libraries. See
+[`CHANGELOG-1.7.6-fedora-rpm.md`](changelog/CHANGELOG-1.7.6-fedora-rpm.md).
+
+Item 5 is still open.

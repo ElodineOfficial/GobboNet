@@ -73,6 +73,12 @@ func (s *Supervisor) MarkActivity() {
 // happened since, and the reply is still streaming. Judging by last-activity
 // alone would stand down in the middle of it.
 func (s *Supervisor) BeginRequest() func() {
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
+	return s.beginRequest()
+}
+
+func (s *Supervisor) beginRequest() func() {
 	s.mu.Lock()
 	s.inFlight++
 	s.lastUse = time.Now()
@@ -123,6 +129,9 @@ func (s *Supervisor) standDownDecision(now time.Time, after time.Duration) (bool
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if s.closed {
+		return false, "shutting down"
+	}
 	if after <= 0 {
 		return false, "disabled"
 	}
@@ -137,7 +146,7 @@ func (s *Supervisor) standDownDecision(now time.Time, after time.Duration) (bool
 	if s.inFlight > 0 {
 		return false, fmt.Sprintf("%d request(s) in flight", s.inFlight)
 	}
-	if s.status.Phase != PhaseReady {
+	if s.status.Phase != PhaseReady && !s.usable {
 		return false, "phase is " + s.status.Phase
 	}
 	if s.cmd == nil {
@@ -159,69 +168,81 @@ func (s *Supervisor) standDownDecision(now time.Time, after time.Duration) (bool
 
 // StandDown unloads the model, freeing its VRAM. The model is remembered so
 // EnsureAwake can bring the same one back.
-func (s *Supervisor) StandDown() {
+func (s *Supervisor) StandDown() error {
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
+	s.mu.Lock()
+	busy := s.closed || s.swapping || s.inFlight > 0
+	s.mu.Unlock()
+	if busy {
+		return fmt.Errorf("engine is busy or shutting down")
+	}
+	return s.standDown()
+}
+
+// Caller owns opMu, including the idle decision that led here.
+func (s *Supervisor) standDown() error {
 	s.mu.Lock()
 	if s.stoodDown {
 		s.mu.Unlock()
-		return
+		return nil
 	}
-	file := s.current
-	name := s.status.Name
+	file, name := s.current, s.status.Name
+	s.mu.Unlock()
+	if err := s.stop(); err != nil {
+		s.setStatus(PhaseError, file, name, err.Error(), 0)
+		return err
+	}
+	s.mu.Lock()
 	s.stoodDown = true
 	s.standFile = file
 	s.mu.Unlock()
-
-	s.stop()
-	s.setStatus(PhaseStoodDown, file, name,
-		"Model unloaded to free VRAM. It will reload on the next message.", 0)
+	s.setStatus(PhaseStoodDown, file, name, "Model unloaded to free VRAM. It will reload on the next message.", 0)
+	return nil
 }
 
-// EnsureAwake reloads the model if it was stood down, and blocks until it is
-// serving. Safe to call concurrently: the first caller does the work and the
-// rest wait for the same load rather than starting several.
+// AcquireRequest makes wake and request registration one atomic operation
+// relative to idle unload. Release only after the upstream request has ended.
+func (s *Supervisor) AcquireRequest() (func(), error) {
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
+	if err := s.ensureAwake(); err != nil {
+		return nil, err
+	}
+	return s.beginRequest(), nil
+}
+
 func (s *Supervisor) EnsureAwake() error {
-	for {
-		s.mu.Lock()
-		if !s.stoodDown {
-			s.mu.Unlock()
-			return nil
-		}
-		if ch := s.waking; ch != nil {
-			// Someone else is already reloading. Wait for that, rather than
-			// queueing a second load of the same model onto a GPU that has
-			// only just been given its memory back.
-			s.mu.Unlock()
-			<-ch
-			continue
-		}
-		ch := make(chan struct{})
-		s.waking = ch
-		file := s.standFile
-		if file == "" {
-			file = s.current
-		}
-		s.mu.Unlock()
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
+	return s.ensureAwake()
+}
 
-		// Announced, because this is the delay the user is sitting through. A
-		// stood-down model reloads before the reply, so the first message after
-		// a pause is slow on purpose -- and a slow reply with no explanation is
-		// indistinguishable from a hang.
-		log.Printf("[standdown] WAKING -- reloading %s for your message", file)
-
-		// The success line comes from announceLoad inside wake(), so it carries
-		// the device and the layer split rather than just a duration. Two lines
-		// for one event is the clutter this round is removing.
-		err := s.wake(file)
-		if err != nil {
-			log.Printf("[standdown] could not reload %s: %v", file, err)
+func (s *Supervisor) ensureAwake() error {
+	s.mu.Lock()
+	down, file, closed, swapping, phase := s.stoodDown, s.standFile, s.closed, s.swapping, s.status.Phase
+	usable := s.usable
+	if file == "" {
+		file = s.current
+	}
+	s.mu.Unlock()
+	if closed || swapping {
+		return fmt.Errorf("engine is changing models or shutting down")
+	}
+	if !down {
+		if phase != PhaseReady && !usable {
+			return fmt.Errorf("model is not ready (%s)", phase)
 		}
-
-		s.mu.Lock()
-		s.waking = nil
-		s.mu.Unlock()
-		close(ch)
+		return nil
+	}
+	log.Printf("[standdown] WAKING -- reloading %s for your message", file)
+	if err := s.wake(file); err != nil {
+		// The requester gets a 503 with this detail; the console, which is
+		// where someone watching the reload looks, gets it too (1.7.5 did).
+		log.Printf("[standdown] could not reload %s: %v", file, err)
 		return err
 	}
+	return nil
 }
 
 func (s *Supervisor) wake(file string) error {
@@ -232,11 +253,7 @@ func (s *Supervisor) wake(file string) error {
 	startedAt := began.Unix()
 	s.setStatus(PhaseStarting, file, file, "Reloading model after idle stand-down", startedAt)
 
-	if err := s.start(file); err != nil {
-		s.setStatus(PhaseError, file, file, err.Error(), startedAt)
-		return err
-	}
-	if err := s.waitHealthy(time.Now().Add(swapTimeout)); err != nil {
+	if err := s.load(file); err != nil {
 		s.setStatus(PhaseError, file, file, err.Error(), startedAt)
 		return err
 	}
@@ -296,8 +313,10 @@ func (s *Supervisor) WatchIdle(after func() time.Duration, stop <-chan struct{},
 				lastReason = "disabled"
 				continue
 			}
+			s.opMu.Lock()
 			ok, reason := s.standDownDecision(now, d)
 			if !ok {
+				s.opMu.Unlock()
 				// SAY WHY. This reason used to be discarded -- the call read
 				// `ok, _ :=` -- so when stand-down did not happen there was
 				// nothing on screen at all, and the only way to tell a working
@@ -323,9 +342,16 @@ func (s *Supervisor) WatchIdle(after func() time.Duration, stop <-chan struct{},
 				// Verb first and one line, because this is the event people are
 				// listening for and it has to be recognisable without reading
 				// around it.
-				log("[standdown] UNLOADING %s after %s idle -- its VRAM is now free", file, d)
+				log("[standdown] UNLOADING %s after %s idle -- releasing its VRAM", file, d)
 			}
-			s.StandDown()
+			err := s.standDown()
+			s.opMu.Unlock()
+			if err != nil {
+				if log != nil {
+					log("[standdown] unload failed: %v", err)
+				}
+				continue
+			}
 			if log != nil {
 				log("[standdown] model unloaded. Your next message reloads it automatically.")
 			}

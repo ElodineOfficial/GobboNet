@@ -398,6 +398,16 @@ function toggleSidebar() {
      1. When the COT block first appears (no .cot-block in DOM yet)
      2. When content starts flowing after reasoning ends (cot-active → done)
 ================================================================ */
+// DOM-owned memo: discarded with the element, never added to saved messages.
+// Unchanged reasoning need not be parsed/replaced on every answer chunk.
+const streamRenderInputs = new WeakMap();
+function updateStreamMarkdown(element, text, color) {
+  const previous = streamRenderInputs.get(element);
+  if (previous && previous.text === text && previous.color === color) return;
+  element.innerHTML = parseMarkdown(text, color);
+  streamRenderInputs.set(element, { text, color });
+}
+
 function renderStreamingUpdate(assistantMsg) {
   const container = document.getElementById('messages');
   const thread = getActiveThread();
@@ -459,7 +469,7 @@ function renderStreamingUpdate(assistantMsg) {
   if (hasReasoning) {
     const cotContent = lastMsg && lastMsg.querySelector('.cot-content');
     if (cotContent) {
-      cotContent.innerHTML = parseMarkdown(assistantMsg.reasoning, aiDialogColor);
+      updateStreamMarkdown(cotContent, assistantMsg.reasoning, aiDialogColor);
       // Auto-pin to the latest reasoning, but only if the user hasn't
       // scrolled up within the COT box itself. The cot-content element
       // has its own pin state tracked on its dataset.
@@ -474,7 +484,7 @@ function renderStreamingUpdate(assistantMsg) {
       // Surface clean text live if the model is wrapping its reply in a
       // tool-call envelope (Llama 3.x); plain replies pass through untouched.
       const liveText = unwrapToolCallTextLive(assistantMsg.content);
-      contentEl.innerHTML = parseMarkdown(liveText, aiDialogColor);
+      updateStreamMarkdown(contentEl, liveText, aiDialogColor);
       if (aiTextColor) contentEl.style.color = aiTextColor;
     }
     // Auto-scroll page while content is streaming — no-ops if the

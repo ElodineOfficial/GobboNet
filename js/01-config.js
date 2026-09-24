@@ -21,7 +21,7 @@
    noticed. A constant that is only correct when someone remembers is
    not a version stamp, it is a comment.
 ================================================================ */
-const GOBBONET_UI_VERSION = '1.7.5';
+const GOBBONET_UI_VERSION = '1.7.6';
 console.log(`%c[gobbonet ui] ${GOBBONET_UI_VERSION}`, 'color:#0a0;font-weight:bold');
 
 /* ================================================================

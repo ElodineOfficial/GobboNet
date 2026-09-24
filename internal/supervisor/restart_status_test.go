@@ -72,7 +72,7 @@ func TestRestartAfterCrashPublishesFailure(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 
-	// Stop the loop: it retries forever by design.
+	// Stop the recovery loop once its published failure has been observed.
 	sup.mu.Lock()
 	sup.stopping = true
 	sup.mu.Unlock()

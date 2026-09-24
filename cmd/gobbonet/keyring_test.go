@@ -82,3 +82,48 @@ func TestStateFilesFindsProfilesAndNothingElse(t *testing.T) {
 		}
 	}
 }
+
+func TestEncryptionResumesWithoutReplacingKeyOrSealedFiles(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Config{Path: filepath.Join(dir, "config.toml"), DataDir: dir}
+	if err := os.WriteFile(cfg.Path, []byte("access_secret = \"old\"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	k, phrase, err := keyring.Create(cfg.KeyringPath(), "password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfg.StatePath(), []byte(`{"threads":[]}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	// A damaged sealed profile fails after state-a has already been sealed.
+	a := filepath.Join(dir, "state-a.json")
+	z := filepath.Join(dir, "state-z.json")
+	os.WriteFile(a, []byte(`{"threads":[]}`), 0600)
+	os.WriteFile(z, []byte(`{"gobbonet_envelope":1,"dek_id":"wrong-key"}`), 0600)
+	if err := finishEncryption(cfg, k); err == nil {
+		t.Fatal("bad profile silently accepted")
+	}
+	before, _ := os.ReadFile(a)
+	if !keyring.IsSealed(before) {
+		t.Fatal("fixture did not reach partial encryption")
+	}
+	os.WriteFile(z, []byte(`{"threads":[]}`), 0600)
+	if err := finishEncryption(cfg, k); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := os.ReadFile(a)
+	if string(before) != string(after) {
+		t.Fatal("resumption unnecessarily rewrote sealed history")
+	}
+	for _, path := range []string{a, z, cfg.StatePath()} {
+		raw, _ := os.ReadFile(path)
+		if _, err := k.Unseal(raw); err != nil {
+			t.Fatal(path, err)
+		}
+	}
+	recovered, err := keyring.UnlockPhrase(cfg.KeyringPath(), phrase)
+	if err != nil || recovered.DEKID() != k.DEKID() {
+		t.Fatal("recovery key changed", err)
+	}
+}
