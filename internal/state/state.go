@@ -16,6 +16,11 @@
 //	GET    /state/profiles   what is on the server, so a device can be pointed
 //	                         at a slot without guessing what exists.
 //
+// Conversations can also be addressed one at a time -- /state/index,
+// /state/threads/<id>, its /append subroute, and /state/meta. Those live in
+// threads.go, which documents why they exist and what they demand of a caller.
+// They patch the same single file; nothing about the format on disk changes.
+//
 // # Profiles
 //
 // Every route above takes an optional ?profile= selector. Without one the
@@ -35,6 +40,23 @@
 // shared file. Quietly writing the desktop's history into the slot the user
 // separated would be the one unrecoverable outcome here, and a typo in a query
 // string is not worth that risk.
+//
+// # Unknown subpaths are a 404
+//
+// The server routes the whole /state/* prefix here, so this package decides
+// what an unrecognised subpath means. It means 404, and that is load-bearing.
+//
+// Matching by name with a fall-through to the whole-document branch is how the
+// /state/info regression below happened, and the write direction of the same
+// mistake is worse: a PUT to any invented subpath -- /state/threads/abc, say --
+// passed json.Valid, went through writeAtomic, and replaced the entire history
+// with whatever the body held, answering {"status":"ok"} with a fresh mtime. A
+// client written against a newer server, talking to an older one, would destroy
+// a backup and be told it had succeeded.
+//
+// Nothing in the tree has ever sent such a request, which is the only reason
+// this never fired. Refusing by default costs one branch and removes the
+// possibility.
 //
 // The /state/info branch was once missing, and the wildcard route sent it into
 // the plain GET branch. The body parsed fine on the client but carried no
@@ -60,6 +82,7 @@ import (
 
 	"github.com/ElodineOfficial/GobboNet/internal/atomicfile"
 	"github.com/ElodineOfficial/GobboNet/internal/httpx"
+	"github.com/ElodineOfficial/GobboNet/internal/keyring"
 )
 
 // MaxBodyBytes caps a state upload. Generous — state is the user's entire chat
@@ -103,21 +126,34 @@ func profilePath(defaultPath, profile string) (string, bool) {
 	return p, true
 }
 
-// resolve pulls the profile out of the query and turns it into a path,
+// resolve pulls the profile out of the query and turns it into a target,
 // answering the request itself if the name is not usable.
-func resolve(w http.ResponseWriter, r *http.Request, defaultPath string) (string, bool) {
-	path, ok := profilePath(defaultPath, r.URL.Query().Get("profile"))
+//
+// Every profile on an install shares the one keyring: the separation between
+// state.json and state-phone.json is about whose history is whose, not about
+// who may read it, and the machine already draws the second line at the door.
+func resolve(w http.ResponseWriter, r *http.Request, def target) (target, bool) {
+	path, ok := profilePath(def.path, r.URL.Query().Get("profile"))
 	if !ok {
 		httpx.Error(w, r, http.StatusBadRequest,
 			"profile must be 1-32 characters of a-z, 0-9, _ or -, starting with a letter or digit")
-		return "", false
+		return target{}, false
 	}
-	return path, true
+	return target{path: path, key: def.key}, true
 }
 
-// Handle serves /state, /state/info and /state/profiles.
-func Handle(w http.ResponseWriter, r *http.Request, statePath string) {
+// Handle serves /state and its subroutes.
+//
+// Every path is matched by name. An unrecognised one is a 404 -- see the
+// package comment for why that matters more than it looks.
+//
+// key is the unlocked keyring, or nil on an install that stores plaintext.
+func Handle(w http.ResponseWriter, r *http.Request, statePath string, key *keyring.Keyring) {
+	def := target{path: statePath, key: key}
 	switch r.URL.Path {
+	case "/state":
+		serveDocument(w, r, def)
+
 	case "/state/info":
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			// Explicitly 405 rather than falling through to the write branch:
@@ -126,33 +162,64 @@ func Handle(w http.ResponseWriter, r *http.Request, statePath string) {
 			httpx.Error(w, r, http.StatusMethodNotAllowed, "method not allowed")
 			return
 		}
-		path, ok := resolve(w, r, statePath)
+		t, ok := resolve(w, r, def)
 		if !ok {
 			return
 		}
-		serveInfo(w, r, path)
-		return
+		serveInfo(w, r, t)
 
 	case "/state/profiles":
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			httpx.Error(w, r, http.StatusMethodNotAllowed, "method not allowed")
 			return
 		}
-		serveProfiles(w, r, statePath)
-		return
-	}
+		serveProfiles(w, r, def.path)
 
-	path, ok := resolve(w, r, statePath)
+	case "/state/index":
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			httpx.Error(w, r, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		t, ok := resolve(w, r, def)
+		if !ok {
+			return
+		}
+		serveIndex(w, r, t)
+
+	case "/state/meta":
+		t, ok := resolve(w, r, def)
+		if !ok {
+			return
+		}
+		handleMeta(w, r, t)
+
+	default:
+		if id, sub, ok := threadRoute(r.URL.Path); ok {
+			t, resolved := resolve(w, r, def)
+			if !resolved {
+				return
+			}
+			handleThread(w, r, t, id, sub)
+			return
+		}
+		httpx.Error(w, r, http.StatusNotFound, "no such state route")
+	}
+}
+
+// serveDocument is the whole-document surface: GET, POST/PUT and DELETE
+// against one state file.
+func serveDocument(w http.ResponseWriter, r *http.Request, def target) {
+	t, ok := resolve(w, r, def)
 	if !ok {
 		return
 	}
 	switch r.Method {
 	case http.MethodGet, http.MethodHead:
-		serveBody(w, r, path)
+		serveBody(w, r, t)
 	case http.MethodPost, http.MethodPut:
-		store(w, r, path)
+		store(w, r, t)
 	case http.MethodDelete:
-		remove(w, r, path)
+		remove(w, r, t)
 	default:
 		httpx.Error(w, r, http.StatusMethodNotAllowed, "method not allowed")
 	}
@@ -224,16 +291,16 @@ func serveProfiles(w http.ResponseWriter, r *http.Request, defaultPath string) {
 
 // remove deletes a stored snapshot. Deleting one that is not there is a
 // success, not a 404: the caller asked for it to be gone, and it is.
-func remove(w http.ResponseWriter, r *http.Request, statePath string) {
-	if err := os.Remove(statePath); err != nil && !os.IsNotExist(err) {
+func remove(w http.ResponseWriter, r *http.Request, t target) {
+	if err := os.Remove(t.path); err != nil && !os.IsNotExist(err) {
 		httpx.ErrorDetail(w, r, http.StatusInternalServerError, "delete failed", err.Error())
 		return
 	}
 	httpx.WriteJSON(w, r, http.StatusOK, map[string]any{"status": "ok"})
 }
 
-func serveInfo(w http.ResponseWriter, r *http.Request, statePath string) {
-	info, err := os.Stat(statePath)
+func serveInfo(w http.ResponseWriter, r *http.Request, t target) {
+	info, err := os.Stat(t.path)
 	if err != nil || !info.Mode().IsRegular() {
 		httpx.Error(w, r, http.StatusNotFound, "no state on server")
 		return
@@ -246,13 +313,13 @@ func serveInfo(w http.ResponseWriter, r *http.Request, statePath string) {
 	})
 }
 
-func serveBody(w http.ResponseWriter, r *http.Request, statePath string) {
-	info, err := os.Stat(statePath)
+func serveBody(w http.ResponseWriter, r *http.Request, t target) {
+	info, err := os.Stat(t.path)
 	if err != nil || !info.Mode().IsRegular() {
 		httpx.Error(w, r, http.StatusNotFound, "no state on server")
 		return
 	}
-	body, err := os.ReadFile(statePath)
+	body, err := t.read()
 	if err != nil {
 		httpx.ErrorDetail(w, r, http.StatusInternalServerError, "read failed", err.Error())
 		return
@@ -263,7 +330,7 @@ func serveBody(w http.ResponseWriter, r *http.Request, statePath string) {
 	httpx.WriteBytes(w, r, http.StatusOK, "application/json; charset=utf-8", body)
 }
 
-func store(w http.ResponseWriter, r *http.Request, statePath string) {
+func store(w http.ResponseWriter, r *http.Request, t target) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, MaxBodyBytes+1))
 	if err != nil {
 		httpx.ErrorDetail(w, r, http.StatusBadRequest, "could not read body", err.Error())
@@ -279,12 +346,12 @@ func store(w http.ResponseWriter, r *http.Request, statePath string) {
 		httpx.Error(w, r, http.StatusBadRequest, "body is not valid JSON")
 		return
 	}
-	if err := writeAtomic(statePath, body); err != nil {
+	if err := t.write(body); err != nil {
 		httpx.ErrorDetail(w, r, http.StatusInternalServerError, "write failed", err.Error())
 		return
 	}
 
-	info, err := os.Stat(statePath)
+	info, err := os.Stat(t.path)
 	if err != nil {
 		httpx.ErrorDetail(w, r, http.StatusInternalServerError, "stat after write failed", err.Error())
 		return

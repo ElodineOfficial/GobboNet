@@ -938,6 +938,37 @@ gobbo.every(5, async () =&gt; {
   </div>
 </div>
 
+<!-- UNLOCK MODAL
+     Shown when the server restarts and this tab's session goes with it. It
+     signs in over fetch rather than navigating, so the composer, a reply still
+     streaming, the scroll position and the open chat all survive. There is no
+     close button on purpose: nothing syncs until this is answered, and a
+     dismissed prompt would leave the sidebar showing a padlock nobody can
+     explain. Reloading the page is always still available. -->
+<div class="modal-backdrop" id="unlock-modal">
+  <div class="modal" style="max-width:440px;">
+    <h2>SIGNED OUT</h2>
+    <div class="form-hint" style="margin-bottom:14px;">
+      The server restarted, so this tab has been signed out.
+      <strong>Nothing has been lost</strong> — your chats are saved on this
+      device, and anything waiting to back up will go out as soon as you sign
+      back in.
+    </div>
+    <div class="form-hint" style="margin-bottom:14px;">
+      If this install encrypts its history, your password is also what unlocks
+      it, which is why it is needed again after every restart.
+    </div>
+    <div class="form-group">
+      <input type="password" id="unlock-password" autocomplete="current-password"
+             placeholder="Password" onkeydown="if(event.key==='Enter')submitUnlock();">
+    </div>
+    <div id="unlock-error" class="form-hint" style="display:none;color:var(--red-neon);margin-top:10px;"></div>
+    <div class="modal-actions">
+      <button class="btn btn-fill" id="unlock-submit" onclick="submitUnlock()">Unlock</button>
+    </div>
+  </div>
+</div>
+
 <!-- DATA MODAL -->
 <div class="modal-backdrop" id="data-modal">
   <div class="modal">

@@ -272,31 +272,20 @@ function createThread() {
   document.getElementById('msg-input').focus();
 }
 
-/**
- * Activity-based ordering: float a thread to the top of the list. Called
- * when a thread sees fresh activity (a message sent) so the threads you're
- * actively working in rise on their own — the same spot new threads and
- * forks already land via unshift. This keeps the in-use threads reachable
- * without anyone having to pin them.
- *
- * Operates on state.threads directly. Array order is the list's source of
- * truth — the very order drag-to-reorder edits — so this coexists with
- * manual arranging: a drag sets an order, and the next message in a thread
- * floats it back to the top. No-op when the thread is already first or isn't
- * found, so it's cheap to call on every send.
- *
- * The pinned / folder / unfiled sections each render a filtered view of this
- * one array in its existing order, so a bumped thread rises to the top of
- * WHICHEVER section it lives in (its folder, the pinned group, or unfiled)
- * without leaking across sections.
- */
-function bumpThreadToTop(threadId) {
-  const idx = state.threads.findIndex(t => t.id === threadId);
-  if (idx > 0) {
-    const [t] = state.threads.splice(idx, 1);
-    state.threads.unshift(t);
-  }
-}
+/* Activity-based ordering — float a thread to the top when it sees fresh
+   activity — used to live here as bumpThreadToTop(), splicing the array.
+
+   It is gone, and nothing calls it: a conversation's place in the list is a
+   number on the conversation, and with nothing explicit set that number IS
+   its latest activity — so the timestamp on the message being sent does the
+   floating by itself, and renderSidebar() sorts. See CONVERSATION ORDER in
+   js/04-state.js.
+
+   What that bought is worth stating, because it is why the ordering lives
+   where it does: writing an ordering field on the thread here would have
+   changed the conversation's head on every send, and a changed head cannot go
+   out as an append — every first message after switching chats would have
+   re-uploaded the whole conversation to move it up one row. */
 
 function deleteThread(id, event) {
   if (event) event.stopPropagation();
@@ -315,6 +304,15 @@ function deleteThread(id, event) {
   state.threads = state.threads.filter(t => t.id !== id);
   if (state.activeThreadId === id) {
     state.activeThreadId = state.threads.length > 0 ? state.threads[0].id : null;
+  }
+  // The IndexedDB record has to go explicitly. A full save only ever PUTs the
+  // threads that still exist (writeFullToIdb -> idbBulkPutThreads), so nothing
+  // in the save path removes a record -- the same gap wipeLocalStorageAll()
+  // documents for PURGE ALL. Left behind, the record is read straight back
+  // into state by the next boot and the deleted chat reappears.
+  if (STORAGE_BACKEND === 'idb') {
+    idbDelete('threads', id).catch(e =>
+      console.warn('[storage] could not remove thread record', id, e && e.message));
   }
   saveState();
   render();
@@ -342,6 +340,15 @@ function switchThread(id) {
   // scrollTop=0 and the user has to scroll down manually. (switchToBranch
   // does this already; switchThread was missing the call.)
   scrollToBottom();
+  // Ask the server whether anything here moved while we were elsewhere, and
+  // fold it in. Deliberately AFTER the render: the cached copy paints first
+  // and the view never waits on the network. This is the only moment a check
+  // happens — opening a chat is when the user has said which conversation
+  // they care about, and it is where a beat of latency is already expected.
+  // No timer, no polling. See PER-CONVERSATION SYNC in js/06-state-sync.js.
+  if (typeof reconcileWithServer === 'function') {
+    reconcileWithServer({ reason: 'switch', focus: id }).catch(() => {});
+  }
 }
 
 function getActiveThread() {

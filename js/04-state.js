@@ -9,6 +9,29 @@
 // Storage key — 'gobbonet_chat_state' going forward; migrate from old key if needed.
 const STORAGE_KEY = 'gobbonet_chat_state';
 const LEGACY_STORAGE_KEY = 'gemma4_chat_state';
+
+/* The shape of the save blob. Stamped into every write by buildStateMeta(),
+   so nothing downstream ever has to guess what it is reading -- not a later
+   version of GobboNet, not the migration pass, and not a person looking at
+   the file with a text editor.
+
+     (absent)  everything up to and including 1.7.5: conversations were
+               ordered by a `threadOrder` list of ids in the meta half of the
+               file, and messages/settings otherwise as they are now
+     1         conversations carry their own `order`; no `threadOrder`
+
+   Absent is a real value and means "written before the stamp existed", which
+   is a thing to look at, not an error -- there are files out there from the
+   PowerShell era.
+
+   Bump this when a load would have to do something DIFFERENT with an older
+   file, not merely tolerate a missing field, which every version has always
+   done. A bump is a promise that the migration pass knows how to get from the
+   version below it to this one. */
+const STATE_SCHEMA_VERSION = 1;
+
+// What the blob we actually loaded declared. Set by applyLoadedState().
+let loadedSchemaVersion = null;
 /* Fallback colours used when a card or persona has no colour set.
  *
  * These MUST match the values the colour pickers show (15-cards.js:183-184,
@@ -331,6 +354,132 @@ let state = {
   // without re-adding ones the user intentionally deleted. See loadState.
   seededDefaultMacros: DEFAULT_MACROS.map(m => m.trigger)
 };
+
+/* ================================================================
+   CONVERSATION ORDER
+
+   Where a conversation sits in the sidebar is a fact about that
+   conversation, so it lives on the conversation: `thread.order`, a number,
+   highest first. state.threads is kept sorted by it and renderSidebar()
+   restores that before it paints, so every existing renderer keeps reading
+   the array (the pinned / folder / unfiled sections are filtered views of
+   this one array, in its order).
+
+   It used to be the array order alone, persisted as a separate `threadOrder`
+   list of every id in the non-conversation half of the save blob. That works
+   exactly as long as one device owns the file. Now that conversations are
+   addressed one at a time, that list was the last whole-history field with a
+   claim on per-conversation data, and last-writer-wins on a list of ids is
+   not a merge: a device that had not yet seen your newest chat pushed an
+   order that did not mention it, and one that still remembered a deleted
+   chat put it back. The list was the bug, not the ordering.
+
+   The numbers are milliseconds, which makes the default need no storage at
+   all: a conversation with no order of its own sorts by its own latest
+   activity, so appending a message -- which already carries a timestamp --
+   floats that chat to the top without writing a single ordering field. That
+   is what keeps a sent turn a two-line append instead of a re-upload of the
+   whole conversation: a field written here would change the conversation's
+   head, and a changed head cannot go out as an append. So `order` is written
+   by exactly one gesture: a drag, which moves a conversation against the
+   grain of its own activity.
+================================================================ */
+
+// One second, in the same units as the keys. The spacing a drop leaves at
+// the ends of the list, and the step a respace uses.
+const ORDER_KEY_STEP = 1000;
+
+/** When a conversation last saw anything happen.
+ *
+ *  Derived only from content every device already agrees on, which is what
+ *  makes it safe as the default: two devices compute the same number for the
+ *  same conversation, so the order needs no reconciling. createdAt counts
+ *  because a fork copies old messages into a conversation that is new -- it
+ *  belongs at the top, where it visibly lands. Scanned from the end for the
+ *  last message that HAS a timestamp, so one that lacks one (an old import,
+ *  a card-code injection) doesn't drag the whole chat to the bottom. */
+function threadActivityAt(t) {
+  if (!t) return 0;
+  let at = (typeof t.createdAt === 'number' && isFinite(t.createdAt)) ? t.createdAt : 0;
+  const msgs = Array.isArray(t.messages) ? t.messages : [];
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const ts = msgs[i] && msgs[i].timestamp;
+    if (typeof ts === 'number' && isFinite(ts)) { at = Math.max(at, ts); break; }
+  }
+  return at;
+}
+
+/** The sort key: an explicit order where one was set, activity otherwise. */
+function threadOrderKey(t) {
+  const o = t && t.order;
+  return (typeof o === 'number' && isFinite(o)) ? o : threadActivityAt(t);
+}
+
+/** Restore the invariant. Stable, so equal keys keep the order they had. */
+function sortThreadsByOrder() {
+  state.threads.sort((a, b) => threadOrderKey(b) - threadOrderKey(a));
+}
+
+/** A key strictly between two neighbours, given their keys -- `above` is the
+ *  one that should end up higher in the list. Either may be undefined, for a
+ *  drop at an end of the list.
+ *
+ *  Returns null when the numbers between the two neighbours are used up,
+ *  which the caller answers by respacing. That takes about fifty drops into
+ *  the same gap, and saying so is better than quietly landing the
+ *  conversation somewhere the user did not point at. */
+function orderKeyBetween(above, below) {
+  if (above === undefined && below === undefined) return Date.now();
+  // Nothing above means the top of the list, and nothing below means the
+  // bottom. A drop at the top has to beat the conversation it lands over,
+  // which a bare Date.now() does not when that one was messaged this second.
+  if (above === undefined) return Math.max(Date.now(), below + ORDER_KEY_STEP);
+  if (below === undefined) return above - ORDER_KEY_STEP;
+  const mid = below + (above - below) / 2;
+  return (mid > below && mid < above) ? mid : null;
+}
+
+/** Give every conversation an explicit, evenly spaced order, preserving the
+ *  arrangement currently on screen. Only reached when a gap is exhausted.
+ *  Each conversation it touches is one more conditional write on the next
+ *  sync, which is why it is the recovery and not the routine path. */
+function respaceThreadOrder() {
+  sortThreadsByOrder();
+  let key = Math.max(Date.now(), threadOrderKey(state.threads[0]) || 0);
+  for (const t of state.threads) { t.order = key; key -= ORDER_KEY_STEP; }
+  console.warn('[order] Respaced ' + state.threads.length + ' conversation(s): the ' +
+               'numbers between two of them had run out.');
+}
+
+/** Order `moved` so it lands immediately before ('before', i.e. visually
+ *  above) or after the `target` conversation. Returns false if it could not,
+ *  in which case nothing moved.
+ *
+ *  Neighbours are taken from the whole list rather than the section the drop
+ *  happened in. The array is globally sorted and each section is a filtered
+ *  view of it, so a key between the target and its global neighbour is also
+ *  between the target and whatever the user can actually see next to it. */
+function placeThreadBeside(moved, target, pos) {
+  sortThreadsByOrder();
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const others = state.threads.filter(t => t !== moved);
+    const i = others.indexOf(target);
+    if (i === -1) return false;
+    const above = (pos === 'before') ? others[i - 1] : target;
+    const below = (pos === 'before') ? target : others[i + 1];
+    const key = orderKeyBetween(above && threadOrderKey(above),
+                                below && threadOrderKey(below));
+    if (key !== null) {
+      moved.order = key;
+      sortThreadsByOrder();
+      return true;
+    }
+    respaceThreadOrder();   // the second pass has room by construction
+  }
+  console.error('[order] Could not place "' + moved.name + '" next to "' + target.name +
+                '" even after respacing — the list was left as it was.');
+  return false;
+}
 
 let isGenerating = false;
 let abortController = null;

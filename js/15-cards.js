@@ -131,10 +131,14 @@ function closeCharacters() {
    read path, to arrive at the same list.
 
    The one real argument for a field is the threads store: cards persist as a
-   JSON array inside the meta record (js/05-persistence.js:570), so order
-   round-trips, but `threads` moved to an IDB store keyed by id and lost its
-   array order — hence `threadOrder` (js/05-persistence.js:567). If cards ever
-   move to a keyed store, the answer is the same six lines, not a schema
+   JSON array inside the meta record, so their order round-trips, but `threads`
+   moved to an IDB store keyed by id and lost its array order. Conversations
+   answer that with `thread.order`, a number on each one (see CONVERSATION
+   ORDER in js/04-state.js) — and they need it for a second reason cards do
+   not have: a conversation is synced individually, so its place in the list
+   has to travel with it rather than in a list of every id. Cards go over the
+   wire as one array in one field, where the array IS the order. If they ever
+   move to a keyed store, the answer is the same numeric key, not a schema
    change. Noted rather than pre-built.
 
    Nine sites read `[0]` as a fallback (getActiveCard, getActivePersona, the

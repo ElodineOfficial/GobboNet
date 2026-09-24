@@ -178,18 +178,42 @@ function idbGetAllKeys(store)  { return new Promise((res, rej) => { const r = id
 // old synchronous loadState so every load path shares one migration code path.
 function applyLoadedState(saved) {
   try {
+      // Which shape this blob was written in, before anything is read out of
+      // it. null means it predates the stamp — a thing to look at, not an
+      // error. A version we do not know about is the case worth shouting
+      // about: the file was written by a newer GobboNet, so every write this
+      // device makes splices an older shape into a document it does not fully
+      // understand, and fields that version added are the ones at risk.
+      // Recorded here and acted on by the migration pass, which owns the
+      // decision between migrating forward and refusing to write.
+      loadedSchemaVersion = (typeof saved.schemaVersion === 'number') ? saved.schemaVersion : null;
+      if (loadedSchemaVersion !== null && loadedSchemaVersion > STATE_SCHEMA_VERSION) {
+        console.error('[state] This history was written by a newer GobboNet (schema ' +
+                      loadedSchemaVersion + '; this build understands ' + STATE_SCHEMA_VERSION +
+                      '). Anything that version added is not preserved by what this build writes.');
+      }
+
       state.threads = saved.threads || [];
 
-      // Restore the user-arranged thread order. On the IndexedDB backend the
-      // 'threads' store is keyed by id, so idbGetAll('threads') hands records
-      // back in id order — not the array order the user arranged by dragging
-      // (nor what bump-to-top / new-thread-unshift produced). buildStateBlob()
-      // persists that order as `threadOrder`; re-apply it here so a reload
-      // matches what was on screen. Idempotent for the localStorage/server
-      // blobs (their `threads` already arrive in order) and skipped for older
-      // saves that predate `threadOrder`. Any thread absent from the order list
-      // (e.g. a record synced in separately) keeps its relative position after
-      // the ranked ones, thanks to the stable sort.
+      // Restore the thread order. The IndexedDB 'threads' store is keyed by
+      // id, so idbGetAll('threads') hands records back in id order — the
+      // array order has to be rebuilt from something. That something is now
+      // `thread.order`, a number on each conversation (see CONVERSATION ORDER
+      // in js/04-state.js), which is why this is a sort and not a lookup.
+      //
+      // Saves written before that field read their arrangement from a separate
+      // `threadOrder` list of ids, which is read here — once, as a tiebreaker,
+      // never written again. It IS only a tiebreaker: a conversation with no
+      // order of its own sorts by its own latest activity, and that wins over
+      // the legacy list, so a manual arrangement made before this version
+      // survives only where two conversations tie. The alternative was to mint
+      // an order for every conversation from this device's copy of the list —
+      // and since that list is precisely the thing two devices disagree about,
+      // each would have minted different numbers and every chat would have come
+      // back as a conflict in a conversation nobody had touched. A one-time
+      // reshuffle into most-recent-first is the cheaper surprise, and it is
+      // where a dragged order was already heading: fresh activity has always
+      // floated a chat back to the top.
       if (Array.isArray(saved.threadOrder) && state.threads.length > 1) {
         const rank = new Map(saved.threadOrder.map((id, i) => [id, i]));
         const unranked = saved.threadOrder.length;
@@ -197,6 +221,7 @@ function applyLoadedState(saved) {
           (rank.has(a.id) ? rank.get(a.id) : unranked) -
           (rank.has(b.id) ? rank.get(b.id) : unranked));
       }
+      sortThreadsByOrder();
 
       state.activeThreadId = saved.activeThreadId || null;
       // Whether this device has ever chosen for itself. Read once, by the
@@ -550,6 +575,18 @@ function isQuotaError(e) {
   );
 }
 
+// Message fields that exist only while the app is running and are never
+// persisted. Named once because two places have to agree on the list: the
+// cleaner below, and the per-conversation fingerprint in 06-state-sync.js
+// that decides whether a thread has changed since it was last pushed. If the
+// fingerprint counted a field the cleaner strips, every thread with a live
+// parser state would look permanently dirty and re-upload forever.
+//
+//   _reasoningDone  legacy v1 parser flag
+//   _parseState     current parser state
+//   _smartLimitAt   smart-limit crossing marker
+const RUNTIME_MESSAGE_FIELDS = ['_reasoningDone', '_parseState', '_smartLimitAt'];
+
 // Strip the runtime-only message fields (never persisted) from one thread.
 // Single source of truth reused by buildStateBlob and the streaming-tick
 // active-thread write.
@@ -558,9 +595,7 @@ function cleanThread(t) {
     ...t,
     messages: (t.messages || []).map(m => {
       const clean = { ...m };
-      delete clean._reasoningDone; // legacy runtime flag, not for storage
-      delete clean._parseState;    // current parser state, not for storage
-      delete clean._smartLimitAt;  // smart-limit crossing marker, runtime only
+      for (const f of RUNTIME_MESSAGE_FIELDS) delete clean[f];
       return clean;
     })
   };
@@ -572,13 +607,32 @@ function cleanThread(t) {
 function buildStateBlob() {
   return {
     threads: state.threads.map(cleanThread),
-    // Persist the user-arranged order explicitly. The IDB 'threads' store is
-    // keyed by id, so idbGetAll('threads') returns records in id order on
-    // reload — losing the array order that drag-to-reorder, bump-to-top, and
-    // new-thread-unshift produce (array order is the list's source of truth).
-    // This id list rides along in the blob (and, via metaPartOf, into the IDB
-    // 'meta' record) so applyLoadedState() can restore that order on load.
-    threadOrder: state.threads.map(t => t.id),
+    ...buildStateMeta()
+  };
+}
+
+// Everything in the blob that is NOT a conversation — the IDB 'meta' record,
+// and the body of PUT /state/meta.
+//
+// Split out of buildStateBlob so the per-conversation sync can build it
+// without also cleaning and copying every thread in the history: on a device
+// with a few hundred megabytes of chat, "has anything outside the
+// conversations changed?" should not cost a full deep copy of all of them.
+// buildStateBlob spreads this, so the two can never list different keys.
+function buildStateMeta() {
+  // `threadOrder` used to be here: a list of every thread id, so that a load
+  // could rebuild the array order the sidebar reads. It is gone, and nothing
+  // replaced it — the order rides on each conversation as `thread.order`, so
+  // it reconciles per conversation like everything else about one. See
+  // CONVERSATION ORDER in js/04-state.js, and applyLoadedState() for the
+  // one place the old list is still read.
+  return {
+    // Always OUR version, never the one that was loaded: this is a statement
+    // about the shape of what is being written. It lives in the meta half
+    // deliberately -- PUT /state/meta replaces the non-conversation keys of
+    // the document wholesale, so a stamp anywhere else would be erased by the
+    // first per-conversation sync.
+    schemaVersion: STATE_SCHEMA_VERSION,
     activeThreadId: state.activeThreadId,
     settings: state.settings,
     characterCards: state.characterCards,
@@ -690,8 +744,15 @@ function saveState(opts) {
   //    conversation still reaches durable storage and a reload can recover it.
   //    apiKey is stripped before sending; see redactedSyncJson().
   //    (Streaming ticks pass skipServerSchedule and defer the push by design.)
+  //
+  //    No snapshot is serialised here any more. This used to hand
+  //    redactedSyncJson(blob) — a JSON.stringify of the ENTIRE history,
+  //    attachments and all — to a 2-second debounce that then threw away
+  //    every copy but the last. The sync layer now works out for itself which
+  //    conversations actually moved, so all this has to do is say "something
+  //    changed"; see PER-CONVERSATION SYNC in 06-state-sync.js.
   if (!skipServerSchedule) {
-    scheduleStateSync(redactedSyncJson(blob));
+    scheduleStateSync();
   }
 
   // 2) Local persistence.

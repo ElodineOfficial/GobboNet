@@ -40,6 +40,7 @@ import (
 	"github.com/ElodineOfficial/GobboNet/internal/config"
 	"github.com/ElodineOfficial/GobboNet/internal/httpx"
 	"github.com/ElodineOfficial/GobboNet/internal/jobs"
+	"github.com/ElodineOfficial/GobboNet/internal/keyring"
 	"github.com/ElodineOfficial/GobboNet/internal/models"
 	"github.com/ElodineOfficial/GobboNet/internal/proxy"
 	"github.com/ElodineOfficial/GobboNet/internal/state"
@@ -75,6 +76,19 @@ type Server struct {
 	standDown   standDown
 	searchProxy *proxy.Proxy
 	embedProxy  *proxy.Proxy
+
+	// vault is the unlocked keyring, or nil. It is filled by the login that
+	// unwrapped it and lives until the process exits.
+	//
+	// That lifetime is not a compromise, it is the session table's lifetime.
+	// internal/auth keeps sessions in memory and loses them on restart, so a
+	// server holding a valid session is a server that unwrapped the key, and
+	// there is no state where somebody is authenticated against a store nobody
+	// has opened. It does mean unlocking is global: the first device to log in
+	// after a restart opens the history for every other valid session, which is
+	// the same trust boundary the door already draws.
+	vaultMu sync.RWMutex
+	vault   *keyring.Keyring
 
 	// secret is guarded because a successful login against a legacy hash
 	// rewrites it in place.
@@ -181,6 +195,15 @@ func (s *Server) Shutdown() {
 
 // authRequired reports whether the password gate is active.
 func (s *Server) authRequired() bool {
+	// An encrypted install always requires the password, whatever the config
+	// or --no-auth say. The password is the only thing that unwraps the data
+	// key, so dropping the gate would not open the history -- it would leave
+	// every other route unguarded while the history stayed locked, which is
+	// the worst of both. Startup refuses the combination outright; this is the
+	// second lock on the same door.
+	if s.encrypted() {
+		return true
+	}
 	if !s.cfg.RequireAuth {
 		return false
 	}
@@ -286,7 +309,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteJSON(w, r, http.StatusOK, map[string]any{"ui": ui})
 
 	case path == "/state" || strings.HasPrefix(path, "/state/"):
-		state.Handle(w, r, s.cfg.StatePath())
+		key, unlocked := s.stateVault(w, r)
+		if !unlocked {
+			return
+		}
+		state.Handle(w, r, s.cfg.StatePath(), key)
 
 	case path == "/perf":
 		s.handlePerf(w, r)
@@ -357,21 +384,13 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	password := r.PostFormValue("password")
 
-	s.secretMu.RLock()
-	secret := s.secret
-	s.secretMu.RUnlock()
-
-	ok, needsRehash, err := auth.Verify(secret, password)
-	if err != nil {
-		log.Printf("[auth] stored secret is unusable: %v", err)
-	}
-	if !ok {
+	// On an encrypted install this is also what unlocks the store: the password
+	// keyslot is the verifier, so proving the password and unwrapping the data
+	// key are one act. See vault.go.
+	ok, err := s.checkPassword(password)
+	if !ok || err != nil {
 		httpx.WriteText(w, r, http.StatusUnauthorized, "text/html; charset=utf-8", auth.LoginPage(true))
 		return
-	}
-
-	if needsRehash {
-		s.upgradeSecret(password)
 	}
 
 	token, err := s.sessions.Create(auth.ClientFingerprint(r))

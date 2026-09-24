@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -14,7 +15,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ElodineOfficial/GobboNet/internal/auth"
 	"github.com/ElodineOfficial/GobboNet/internal/config"
+	"github.com/ElodineOfficial/GobboNet/internal/keyring"
 	"github.com/ElodineOfficial/GobboNet/internal/server"
 	"github.com/ElodineOfficial/GobboNet/internal/version"
 )
@@ -96,6 +99,8 @@ func cmdDoctor(argv []string) error {
 		fmt.Printf("  llm_url:     %s\n", cfg.LLMURL)
 	}
 	fmt.Println()
+
+	reportStorage(os.Stdout, cfg)
 
 	// --- Ports --------------------------------------------------------------
 	fmt.Println("WEB PORT")
@@ -550,4 +555,106 @@ func reportURLACL(port int) {
 // one place the user is already being pointed at.
 func startupLogPath() string {
 	return filepath.Join(config.ConfigDir(), "startup-error.log")
+}
+
+// reportStorage says how the history is stored and whether the two halves of
+// that arrangement agree with each other.
+//
+// The reason this section exists at all: an encrypted file and a damaged file
+// look identical to anything that just tries to parse them. Reporting a locked
+// history as missing or corrupt is how somebody spends an evening restoring a
+// backup they never needed, and this tool has form -- internal/debugreport
+// still tells a user with a profile that their history is stranded.
+func reportStorage(w io.Writer, cfg config.Config) {
+	fmt.Fprintln(w, "STORAGE")
+	fmt.Fprintf(w, "  history:     %s\n", filepath.Dir(cfg.StatePath()))
+
+	info, err := keyring.Describe(cfg.KeyringPath())
+	encrypted := err == nil
+
+	switch {
+	case errors.Is(err, keyring.ErrNoKeyring):
+		fmt.Fprintln(w, "  encryption:  off -- conversations are stored as plain JSON")
+	case err != nil:
+		fmt.Fprintf(w, "  encryption:  KEYRING UNREADABLE -- %v\n", err)
+		fmt.Fprintf(w, "               %s\n", cfg.KeyringPath())
+		fmt.Fprintln(w, "               The history is not lost; nothing can open it until")
+		fmt.Fprintln(w, "               this file is readable again. Restore it from a backup")
+		fmt.Fprintln(w, "               before writing anything else.")
+	default:
+		fmt.Fprintln(w, "  encryption:  on")
+		fmt.Fprintf(w, "  keyring:     %s\n", cfg.KeyringPath())
+		fmt.Fprintf(w, "  data key:    %s\n", info.DEKID)
+		ways := make([]string, 0, len(info.Kinds))
+		hasRecovery := false
+		for _, k := range info.Kinds {
+			ways = append(ways, string(k))
+			if k == keyring.SlotRecovery {
+				hasRecovery = true
+			}
+		}
+		fmt.Fprintf(w, "  ways in:     %s\n", strings.Join(ways, ", "))
+		if !hasRecovery {
+			fmt.Fprintln(w, "               [!] One way in. Forget this password and the history")
+			fmt.Fprintln(w, "                   cannot be read by anyone, including us.")
+			fmt.Fprintln(w, "                   Fix: gobbonet keyring set-recovery")
+		}
+		if cfg.AccessSecret != keyringMarker && auth.SecretConfigured(cfg.AccessSecret) {
+			fmt.Fprintln(w, "               [!] config still holds a password hash as well as the")
+			fmt.Fprintln(w, "                   keyring. That is a second, cheaper verifier for the")
+			fmt.Fprintln(w, "                   same password, in a file that stays readable.")
+			fmt.Fprintln(w, "                   Fix: gobbonet set-password")
+		}
+	}
+
+	files, err := stateFiles(cfg)
+	if err != nil {
+		fmt.Fprintf(w, "  files:       could not list %s: %v\n", filepath.Dir(cfg.StatePath()), err)
+		fmt.Fprintln(w)
+		return
+	}
+	if len(files) == 0 {
+		fmt.Fprintln(w, "  files:       none yet -- nothing has been synced to this server")
+		fmt.Fprintln(w)
+		return
+	}
+
+	var strays []string
+	for _, f := range files {
+		raw, err := os.ReadFile(f)
+		if err != nil {
+			fmt.Fprintf(w, "  %-12s unreadable: %v\n", filepath.Base(f)+":", err)
+			continue
+		}
+		sealed := keyring.IsSealed(raw)
+		switch {
+		case sealed:
+			fmt.Fprintf(w, "  %-12s encrypted, %s\n", filepath.Base(f)+":", byteSize(len(raw)))
+		case encrypted:
+			fmt.Fprintf(w, "  %-12s PLAINTEXT, %s\n", filepath.Base(f)+":", byteSize(len(raw)))
+			strays = append(strays, f)
+		default:
+			fmt.Fprintf(w, "  %-12s plain JSON, %s\n", filepath.Base(f)+":", byteSize(len(raw)))
+		}
+	}
+
+	if len(strays) > 0 {
+		fmt.Fprintln(w, "               [!] Encrypted install, but the files above are not.")
+		fmt.Fprintln(w, "                   Either encryption was turned on and these have not")
+		fmt.Fprintln(w, "                   been written since, or an older build wrote them.")
+		fmt.Fprintln(w, "                   Each is sealed the next time it is written, or now:")
+		fmt.Fprintln(w, "                     gobbonet keyring init")
+	}
+	fmt.Fprintln(w)
+}
+
+func byteSize(n int) string {
+	switch {
+	case n >= 1<<20:
+		return fmt.Sprintf("%.1f MB", float64(n)/(1<<20))
+	case n >= 1<<10:
+		return fmt.Sprintf("%.0f kB", float64(n)/(1<<10))
+	default:
+		return fmt.Sprintf("%d bytes", n)
+	}
 }
