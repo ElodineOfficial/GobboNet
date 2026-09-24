@@ -94,10 +94,41 @@ installer-fedora/vendor/
 installer-fedora/dist/
 /linux-amd64/gobbonet
 
-# Local authentication and encrypted-history artifacts
+# Local authentication cookies
 /j3.txt
 /jar2.txt
-/*cookies*.txt
-/state.keyring
-/state-*.json
-/.state.lock
+*cookies*.txt
+
+# Authentication-file backups
+.gobbonet-secret.*
+
+# Conversation history and backups, including portable subfolders
+.gobbonet-state.json.*
+state.json
+state.json.*
+state-*.json
+state-*.json.*
+
+# Encrypted-history keyrings and locks
+state.keyring
+state.keyring.*
+.state.lock
+
+# Local configuration and backups, including portable subfolders
+config.toml
+config.toml.*
+perf.toml
+perf.toml.*
+
+# Temporary writes that may contain authentication or conversation data
+.config.toml.*.tmp
+.perf.toml.*.tmp
+.state*.tmp
+
+# Local setup, tuning, and machine-specific runtime files
+.gobbonet-perf.json
+setup-complete.json
+.gobbonet-lan
+.swap-in-progress
+hardware.json.tmp
+hardware.ini.tmp
