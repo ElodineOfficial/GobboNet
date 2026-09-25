@@ -2600,11 +2600,25 @@ goto :monitor_loop
 :: UTILITY SUBROUTINES
 :: ===============================================================
 :minimize_window
-powershell -NoProfile -command "try{Add-Type -Name W -Namespace C -MemberDefinition '[DllImport(\"kernel32.dll\")]public static extern IntPtr GetConsoleWindow();[DllImport(\"user32.dll\")]public static extern bool ShowWindow(IntPtr h,int c);' -EA Stop}catch{};[C.W]::ShowWindow([C.W]::GetConsoleWindow(),6)" >nul 2>&1
+set "WIN_BUILD=0"
+for /f "tokens=6 delims=[]. " %%A in ('ver') do set "WIN_BUILD=%%A"
+
+if !WIN_BUILD! GEQ 22000 (
+    powershell -NoProfile -command "try{Add-Type -Name W -Namespace C -MemberDefinition '[DllImport(\"user32.dll\")]public static extern bool ShowWindow(IntPtr h,int c);'; $p = Get-Process -Name WindowsTerminal -ErrorAction SilentlyContinue | Where-Object {$_.MainWindowTitle -match 'Gobbonet'}; if ($p) { [C.W]::ShowWindow($p.MainWindowHandle, 6) } }catch{}" >nul 2>&1
+) else (
+    powershell -NoProfile -command "try{Add-Type -Name W -Namespace C -MemberDefinition '[DllImport(\"kernel32.dll\")]public static extern IntPtr GetConsoleWindow();[DllImport(\"user32.dll\")]public static extern bool ShowWindow(IntPtr h,int c);' -EA Stop}catch{};[C.W]::ShowWindow([C.W]::GetConsoleWindow(),6)" >nul 2>&1
+)
 exit /b
 
 :restore_window
-powershell -NoProfile -command "try{Add-Type -Name W -Namespace C -MemberDefinition '[DllImport(\"kernel32.dll\")]public static extern IntPtr GetConsoleWindow();[DllImport(\"user32.dll\")]public static extern bool ShowWindow(IntPtr h,int c);' -EA Stop}catch{};[C.W]::ShowWindow([C.W]::GetConsoleWindow(),9)" >nul 2>&1
+set "WIN_BUILD=0"
+for /f "tokens=6 delims=[]. " %%A in ('ver') do set "WIN_BUILD=%%A"
+
+if !WIN_BUILD! GEQ 22000 (
+    powershell -NoProfile -command "try{Add-Type -Name W -Namespace C -MemberDefinition '[DllImport(\"user32.dll\")]public static extern bool ShowWindow(IntPtr h,int c);'; $p = Get-Process -Name WindowsTerminal -ErrorAction SilentlyContinue | Where-Object {$_.MainWindowTitle -match 'Gobbonet'}; if ($p) { [C.W]::ShowWindow($p.MainWindowHandle, 9) } }catch{}" >nul 2>&1
+) else (
+    powershell -NoProfile -command "try{Add-Type -Name W -Namespace C -MemberDefinition '[DllImport(\"kernel32.dll\")]public static extern IntPtr GetConsoleWindow();[DllImport(\"user32.dll\")]public static extern bool ShowWindow(IntPtr h,int c);' -EA Stop}catch{};[C.W]::ShowWindow([C.W]::GetConsoleWindow(),9)" >nul 2>&1
+)
 exit /b
 
 :: ---------------------------------------------------------------
