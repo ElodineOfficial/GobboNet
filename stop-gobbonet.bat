@@ -68,6 +68,13 @@ set "FAILED="
 :: given a moment to take its child down cleanly.
 call :stop_image "gobbonet.exe"
 
+:: The launch.bat health monitor. Target by command line to avoid killing unrelated cmd windows.
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$p=@(Get-CimInstance Win32_Process -Filter \"Name='cmd.exe'\" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like '*launch.bat*' }); if ($p.Count -gt 0) { $p | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }; exit 10 } else { exit 0 }" >nul 2>&1
+if errorlevel 10 (
+    if not defined QUIET echo  [OK] Stopped the launch.bat health monitor.
+    set "STOPPED=1"
+)
+
 :: llama.cpp. Normally already gone with its parent; killed directly in case
 :: it was orphaned by an earlier crash, because it holds the GPU.
 call :stop_image "llama-server.exe"
@@ -91,13 +98,18 @@ if not defined QUIET (
     if defined FAILED (
         echo  [!] Something would not stop. Close it and run this again,
         echo      or reboot -- a reboot always clears it.
+        echo.
+        pause
     ) else if "!STOPPED!"=="1" (
         echo  [OK] Done. Nothing of GobboNet's is running now.
+        echo.
+        timeout /t 10 /nobreak >nul
     ) else (
         echo  [OK] Nothing was running.
+        echo.
+        timeout /t 10 /nobreak >nul
     )
     echo.
-    pause
 )
 if defined FAILED exit /b 1
 exit /b 0
@@ -110,31 +122,31 @@ goto :after_subs
 :stop_image
 setlocal EnableDelayedExpansion
 set "_IMG=%~1"
-tasklist /fi "imagename eq !_IMG!" 2>nul | findstr /i "!_IMG!" >nul 2>&1
+tasklist /fi "imagename eq %_IMG%" 2>nul | findstr /i "%_IMG%" >nul 2>&1
 if errorlevel 1 (
     endlocal & goto :eof
 )
 
 :: Ask first. A clean exit lets the server shut its child down and release
 :: the port itself, which /F does not.
-taskkill /IM "!_IMG!" >nul 2>&1
+taskkill /IM "%_IMG%" >nul 2>&1
 ping -n 3 127.0.0.1 >nul 2>&1
 
-tasklist /fi "imagename eq !_IMG!" 2>nul | findstr /i "!_IMG!" >nul 2>&1
+tasklist /fi "imagename eq %_IMG%" 2>nul | findstr /i "%_IMG%" >nul 2>&1
 if not errorlevel 1 (
-    taskkill /F /IM "!_IMG!" >nul 2>&1
-    ping -n 2 127.0.0.1 >nul 2>&1
+    taskkill /F /IM "%_IMG%" >nul 2>&1
+    ping -n 10 127.0.0.1 >nul 2>&1
 )
 
-tasklist /fi "imagename eq !_IMG!" 2>nul | findstr /i "!_IMG!" >nul 2>&1
+tasklist /fi "imagename eq %_IMG%" 2>nul | findstr /i "%_IMG%" >nul 2>&1
 if not errorlevel 1 (
-    echo  [!] Could not stop !_IMG!. Close it and run this again.
+    echo  [!] Could not stop %_IMG%. Close it and run this again.
     rem FAILED, not STOPPED: reporting 'nothing is running now' while something
     rem still holds the port is the exact false reassurance this script exists
     rem to remove.
     endlocal & set "STOPPED=1" & set "FAILED=1" & goto :eof
 )
-echo  [OK] Stopped !_IMG!
+echo  [OK] Stopped %_IMG%
 endlocal & set "STOPPED=1" & goto :eof
 
 :after_subs
