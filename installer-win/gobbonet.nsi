@@ -81,6 +81,9 @@ Var hPw2
 Var hPwSkip
 Var PwPlain
 Var PwSkipped
+Var hRamOffload
+Var RamOffload
+Var RamOffloadSeen
 
 !define MUI_ICON   "art\gobbonet.ico"
 !define MUI_UNICON "art\gobbonet.ico"
@@ -130,6 +133,7 @@ BrandingText "GobboNet ${APPVER}  --  Elodine / GoblinCorps"
 !insertmacro MUI_PAGE_DIRECTORY
 Page custom PasswordPageCreate PasswordPageLeave
 Page custom PortPageCreate PortPageLeave
+Page custom RamOffloadPageCreate RamOffloadPageLeave
 !define MUI_PAGE_CUSTOMFUNCTION_SHOW InstFilesPageShow
 !insertmacro MUI_PAGE_INSTFILES
 
@@ -404,6 +408,76 @@ Function PortPageLeave
   StrCpy $PortValue $0
 FunctionEnd
 
+Function RamOffloadPageCreate
+  !insertmacro MUI_HEADER_TEXT "System RAM offload" "Larger models, at a cost in speed."
+  nsDialogs::Create 1018
+  Pop $Dialog
+  ${If} $Dialog == error
+    Abort
+  ${EndIf}
+  SetCtlColors $Dialog "${MUI_TEXTCOLOR}" "${MUI_BGCOLOR}"
+
+  ; First visit only. Going Back must keep the box as the user left it,
+  ; not snap back to whatever was already on disk. A reinstall that
+  ; already opted in is the one case that starts checked: the file from
+  ; the previous install is still in $INSTDIR, because this page runs
+  ; before any files are written.
+  ${If} $RamOffloadSeen != "1"
+    StrCpy $RamOffloadSeen "1"
+    StrCpy $RamOffload "99"
+    ${If} ${FileExists} "$INSTDIR\.gobbonet-ram-offload"
+      ClearErrors
+      FileOpen $9 "$INSTDIR\.gobbonet-ram-offload" r
+      ${IfNot} ${Errors}
+        FileReadByte $9 $0
+        FileReadByte $9 $1
+        FileReadByte $9 $2
+        ; Exact "-1" (bytes 45, 49) and then end of file. A longer file
+        ; is not a yes -- "99" and anything unreadable stay off.
+        StrCpy $3 "0"
+        ${If} ${Errors}
+          StrCpy $3 "1"
+        ${EndIf}
+        FileClose $9
+        ${If} $3 == "1"
+        ${AndIf} $0 == 45
+        ${AndIf} $1 == 49
+          StrCpy $RamOffload "-1"
+        ${EndIf}
+      ${EndIf}
+    ${EndIf}
+  ${EndIf}
+
+  ${NSD_CreateLabel} 0 0 100% 36u "You will be able to load larger models than your GPU can hold. They will be much slower, because the extra layers run on the CPU and use system RAM."
+  Pop $0
+  SetCtlColors $0 "${MUI_TEXTCOLOR}" "${MUI_BGCOLOR}"
+
+  ${NSD_CreateCheckbox} 0 44u 100% 12u "Allow models to offload to system RAM"
+  Pop $hRamOffload
+  ; Themed checkboxes draw their label with DrawThemeText and ignore the
+  ; text colour. Detach the theme first, same as the password skip box.
+  System::Call 'uxtheme::SetWindowTheme(p $hRamOffload, t " ", t " ")'
+  SetCtlColors $hRamOffload "${GN_CHECKCOLOR}" "${MUI_BGCOLOR}"
+  ${If} $RamOffload == "-1"
+    ${NSD_Check} $hRamOffload
+  ${EndIf}
+
+  ${NSD_CreateLabel} 0 64u 100% 20u "You can change this later in GobboNet settings, under GPU layers."
+  Pop $0
+  SetCtlColors $0 "8FA383" "${MUI_BGCOLOR}"
+
+  nsDialogs::Show
+FunctionEnd
+
+Function RamOffloadPageLeave
+  ${NSD_GetState} $hRamOffload $0
+  ${If} $0 == ${BST_CHECKED}
+    StrCpy $RamOffload "-1"
+  ${Else}
+    StrCpy $RamOffload "99"
+  ${EndIf}
+FunctionEnd
+
 Function DefenderPageCreate
   !insertmacro MUI_HEADER_TEXT "One Thing Before You Start" "Windows Defender and GobboNet."
   nsDialogs::Create 1018
@@ -646,6 +720,29 @@ If it will not close, a reboot always clears it." \
   FileClose $9
   DetailPrint "Web UI port: $PortValue"
 
+  ; --- record the RAM-offload choice --------------------------------------
+  ; launch.bat reads this on every start and passes it to gobbonet.exe as
+  ; gpu_layers. -1 is automatic placement: layers that do not fit in VRAM
+  ; spill into system RAM and run on the CPU. 99 keeps every layer on the
+  ; GPU, and a model that does not fit fails to load. An empty value means
+  ; the page was never shown (a silent install) and is the unchecked choice.
+  ;
+  ; Raw ASCII bytes, same as .gobbonet-port above. A Unicode FileWrite can
+  ; emit UTF-16, which the launcher would not recognise as either value.
+  ${If} $RamOffload != "-1"
+    StrCpy $RamOffload "99"
+  ${EndIf}
+  FileOpen $9 "$INSTDIR\.gobbonet-ram-offload" w
+  ${If} $RamOffload == "-1"
+    FileWriteByte $9 45
+    FileWriteByte $9 49
+  ${Else}
+    FileWriteByte $9 57
+    FileWriteByte $9 57
+  ${EndIf}
+  FileClose $9
+  DetailPrint "GPU layers: $RamOffload"
+
   ; --- write the access secret, if one was set in the wizard --------------
   ; The password reaches PowerShell through an environment variable, never
   ; the command line: command lines are readable from the process list by
@@ -771,6 +868,7 @@ report that the folder is still open in another program." \
   Delete "$INSTDIR\.hw-parsed.env"
   Delete "$INSTDIR\.gobbonet-perf.json"
   Delete "$INSTDIR\.gobbonet-port"
+  Delete "$INSTDIR\.gobbonet-ram-offload"
   Delete "$INSTDIR\.gobbonet-secret"
   Delete "$INSTDIR\.gobbonet-secret.bad"
   Delete "$INSTDIR\*.log"
