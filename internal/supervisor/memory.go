@@ -15,9 +15,13 @@ import (
 // unknown flags or fall back to an all-GPU allocation.
 func (s *Supervisor) checkMemoryArgs(args []string) error {
 	auto := false
+	target := itoaInt(s.opts.GPUReserveMiB)
 	for i, a := range args {
 		if a == "--n-gpu-layers" && i+1 < len(args) && args[i+1] == "auto" {
 			auto = true
+		}
+		if a == "--fit-target" && i+1 < len(args) {
+			target = args[i+1]
 		}
 	}
 	if !auto {
@@ -27,7 +31,7 @@ func (s *Supervisor) checkMemoryArgs(args []string) error {
 		return err
 	}
 
-	log.Printf("[memory] automatic GPU placement targets %d MiB free per device; model, context and KV precision stay unchanged", s.opts.GPUReserveMiB)
+	log.Printf("[memory] automatic GPU placement targets %s MiB free per device; model, context and KV precision stay unchanged", target)
 	log.Printf("[memory] CPU offload may use more system RAM and reduce speed; headroom is a target, not a hard memory cap")
 	return nil
 }

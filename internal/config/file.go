@@ -145,6 +145,8 @@ gpu_layers = -1
 # Free GPU memory targeted by automatic fitting, per device, in MiB.
 # A target, not a hard allocation cap; other applications can allocate later.
 # CPU offload uses system RAM. No model or context reduction is performed.
+# Mixture-of-Experts models use at least 2048 (they page out to system RAM at
+# 1024 on cards they do not fit); set this above 2048 to raise that too.
 gpu_reserve_mib = 1024
 
 # Context window in tokens. Must not exceed the model's maximum.
