@@ -17,6 +17,9 @@ type GGUFMeta struct {
 	Architecture  string
 	ChatTemplate  string
 	ContextLength int
+	// ExpertCount is <arch>.expert_count: non-zero for Mixture-of-Experts
+	// models (qwen3moe, gpt-oss, gemma4 A4B, ...), zero for dense ones.
+	ExpertCount int
 }
 
 // ReadGGUFMeta pulls general.architecture, tokenizer.chat_template and
@@ -37,6 +40,7 @@ func ReadGGUFMeta(path string) (*GGUFMeta, error) {
 	meta := &GGUFMeta{
 		Architecture:  f.Metadata().Architecture,
 		ContextLength: int(f.Architecture().MaximumContextLength),
+		ExpertCount:   int(f.Architecture().ExpertCount),
 	}
 	if kv, ok := f.Header.MetadataKV.Get("tokenizer.chat_template"); ok {
 		meta.ChatTemplate = kv.ValueString()
@@ -147,6 +151,7 @@ func identifyFrom(path string, meta *GGUFMeta, err error) Record {
 		ChatTemplate:  meta.ChatTemplate,
 		Architecture:  meta.Architecture,
 		ContextLength: meta.ContextLength,
+		ExpertCount:   meta.ExpertCount,
 		SidecarFile:   sidecar,
 	})
 }

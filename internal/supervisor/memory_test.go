@@ -32,6 +32,43 @@ func TestAutoPlacementPreservesContextAndPrecision(t *testing.T) {
 	}
 }
 
+func TestMoEModelsGetMoreFitHeadroom(t *testing.T) {
+	fitTarget := func(s *Supervisor, rec models.Record) string {
+		args := s.BuildArgs(rec, "model.gguf")
+		for i := 0; i+1 < len(args); i++ {
+			if args[i] == "--fit-target" {
+				return args[i+1]
+			}
+		}
+		return ""
+	}
+	auto := Tuning{CtxSize: 16384, GPULayers: -1, KVCacheType: "q8_0"}
+	dense, moe := models.Record{}, models.Record{ExpertCount: 128}
+
+	s, err := New(Options{LLMURL: "http://127.0.0.1:1", GPUReserveMiB: 1024, Tuning: auto})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := fitTarget(s, dense); got != "1024" {
+		t.Errorf("dense model fit-target = %q, want the configured 1024", got)
+	}
+	if got := fitTarget(s, moe); got != "2048" {
+		t.Errorf("MoE model fit-target = %q, want the %d floor", got, MoEFitTargetMiB)
+	}
+
+	// A configured reserve above the floor is never lowered.
+	s, _ = New(Options{LLMURL: "http://127.0.0.1:1", GPUReserveMiB: 3072, Tuning: auto})
+	if got := fitTarget(s, moe); got != "3072" {
+		t.Errorf("MoE model with reserve 3072 got fit-target %q", got)
+	}
+
+	// Explicit layer counts never carry fit flags, MoE or not.
+	s.SetTuning(Tuning{CtxSize: 16384, GPULayers: 99, KVCacheType: "q8_0"})
+	if strings.Contains(strings.Join(s.BuildArgs(moe, "model.gguf"), " "), "--fit") {
+		t.Fatal("explicit layers got fit flags for a MoE model")
+	}
+}
+
 func TestMemoryReportSeparatesBuffersAndDeduplicates(t *testing.T) {
 	s := feed(realVulkanLoad)
 	lines := []string{"llama_kv_cache_unified: Vulkan0 KV buffer size = 2048.00 MiB", "llama_context: Vulkan0 compute buffer size = 512.00 MiB", "llama_context: Vulkan_Host compute buffer size = 128.00 MiB", "llama_context: n_ctx_seq = 32768"}

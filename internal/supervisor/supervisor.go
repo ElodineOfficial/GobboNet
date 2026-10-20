@@ -374,7 +374,7 @@ func (s *Supervisor) BuildArgs(rec models.Record, modelPath string) []string {
 		"-lv", "4",
 	}
 	if tune.GPULayers == -1 {
-		args = append(args, "--fit", "on", "--fit-target", itoaInt(s.opts.GPUReserveMiB), "--fit-ctx", itoaInt(tune.CtxSize))
+		args = append(args, "--fit", "on", "--fit-target", itoaInt(s.fitTargetMiB(rec)), "--fit-ctx", itoaInt(tune.CtxSize))
 	}
 	if useJinja {
 		args = append(args, "--jinja")
@@ -392,6 +392,35 @@ func (s *Supervisor) BuildArgs(rec models.Record, modelPath string) []string {
 }
 
 func itoaInt(n int) string { return fmt.Sprintf("%d", n) }
+
+// MoEFitTargetMiB is the least free-VRAM target automatic placement uses for a
+// Mixture-of-Experts model. gpu_reserve_mib still applies when it is larger.
+//
+// Why MoE models need more room than dense ones: the engine's fit pass is
+// MoE-aware and already keeps most expert weights in system RAM, but on a card
+// the model does not fit it lands right at the target, and the 1024 MiB default
+// does not cover the compute buffers allocated after loading plus whatever the
+// desktop holds. The driver then pages ~1 GB of the engine's allocations out to
+// system RAM, silently. Measured on an 8 GB RTX 4070 Laptop with the pinned
+// engine, through gobbonet.exe, stock config (issue #65):
+//
+//	Qwen3.6 35B-A3B   13.3 t/s at 1024  ->  21.6 t/s at 2048
+//	gpt-oss 20B        9.3 t/s at 1024  ->  20.3 t/s at 2048
+//	Gemma 4 26B-A4B   prompt 54 t/s     ->  169 t/s      (generation unchanged)
+//
+// Dense models are not affected by this floor (they keep gpu_reserve_mib), and
+// they should not be: with 2048 a dense 9B that fit with 1024 lost 4 of 33
+// layers to the CPU and dropped from 38.7 to 22.4 t/s. A MoE model that fits
+// entirely with 1 GB spare pays at most one layer's experts for the extra room.
+const MoEFitTargetMiB = 2048
+
+// fitTargetMiB is the --fit-target handed to llama-server for rec.
+func (s *Supervisor) fitTargetMiB(rec models.Record) int {
+	if rec.ExpertCount > 0 && s.opts.GPUReserveMiB < MoEFitTargetMiB {
+		return MoEFitTargetMiB
+	}
+	return s.opts.GPUReserveMiB
+}
 
 // --- Process lifecycle -----------------------------------------------------
 
