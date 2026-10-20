@@ -287,6 +287,14 @@ if !WEB_PORT! gtr 32767 (
 )
 set "CTX_SIZE=16384"
 set "GPU_LAYERS=-1"
+:: The installer writes .gobbonet-ram-offload: -1 spills layers that do not
+:: fit in VRAM into system RAM, 99 keeps them on the GPU. Absent file (a ZIP
+:: or an install from before this page) keeps the -1 above. Anything else
+:: is ignored and falls back to that same -1.
+if exist "%~dp0.gobbonet-ram-offload" (
+    set /p "GPU_LAYERS="<"%~dp0.gobbonet-ram-offload"
+    if not "!GPU_LAYERS!"=="-1" if not "!GPU_LAYERS!"=="99" set "GPU_LAYERS=-1"
+)
 set "KV_CACHE_TYPE=q8_0"
 
 :: Log verbosity handed to llama-server as -lv. Not cosmetic: STEP 3b confirms
@@ -1227,11 +1235,17 @@ if "!MODEL_CHOICE!"=="10" set "PICK_MIN=24"
 if not defined HW_VRAM set "HW_VRAM=0"
 if !HW_VRAM! gtr 0 if !PICK_MIN! gtr 0 if !HW_VRAM! lss !PICK_MIN! (
     echo.
-    echo  [*] Heads up: this model wants about !PICK_MIN! GB of GPU
-    echo       memory, but only !HW_VRAM! GB was detected. It may run
-    echo       far more slowly than a model that fits, and on a large
-    echo       enough shortfall llama-server will fail to start at all
-    echo       rather than fall back to system RAM.
+    if not "!GPU_LAYERS!"=="99" (
+        echo  [*] Heads up: this model wants about !PICK_MIN! GB of GPU
+        echo       memory, but only !HW_VRAM! GB was detected. It can still
+        echo       load by using system RAM, and it will be much slower.
+    ) else (
+        echo  [*] Heads up: this model wants about !PICK_MIN! GB of GPU
+        echo       memory, but only !HW_VRAM! GB was detected. It may run
+        echo       far more slowly than a model that fits, and on a large
+        echo       enough shortfall llama-server will fail to start at all
+        echo       rather than fall back to system RAM.
+    )
     echo.
     call :prompt_yn "  Download it anyway?" GO_BIG
     if /i "!GO_BIG!"=="N" goto :show_catalog
