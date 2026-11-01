@@ -57,7 +57,7 @@ function saveMacroEdit() {
 
   if (!trigger) { alert('Trigger name cannot be empty.'); return; }
   if (!/^[a-zA-Z0-9_]+$/.test(trigger)) {
-    alert('Trigger may only contain letters, numbers, and underscores.\nExample: fast_forward');
+    alert('Trigger may only contain letters, numbers, and underscores. Enter the name without braces.\nExample: rosebud becomes {{rosebud}}');
     return;
   }
   if (RESERVED_MACROS.has(trigger.toLowerCase())) {
