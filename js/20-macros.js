@@ -44,7 +44,21 @@ function showMacroEditor(triggerName) {
   }
   document.getElementById('macro-editor').style.display = '';
   document.getElementById('macro-add-btn').style.display = 'none';
+  updateMacroPreview();
   triggerInput.focus();
+}
+
+/** Under the editor: what {{name: some text}} would become, as the model
+ *  gets it, so passing text to a macro (1.7.9) explains itself. */
+function updateMacroPreview() {
+  const out = document.getElementById('macro-preview');
+  if (!out) return;
+  const name = (document.getElementById('macro-trigger').value || '').trim() || 'name';
+  const text = document.getElementById('macro-text').value || '';
+  if (!text.trim()) { out.textContent = ''; return; }
+  MACRO_INPUT_RE.lastIndex = 0;
+  const sample = MACRO_INPUT_RE.test(text) && /\{\{\s*input[1-9]\s*\}\}/i.test(text) ? 'first | second' : 'your text here';
+  out.textContent = 'Preview \u2014 {{' + name + ': ' + sample + '}} becomes:\n' + macroExpand({ text }, sample);
 }
 
 function editMacro(trigger) {
@@ -94,10 +108,22 @@ function cancelMacroEdit() {
 }
 
 function deleteMacro(trigger) {
-  if (!confirm(`Delete macro {{${trigger}}}? This cannot be undone.`)) return;
-  state.macros = (state.macros || []).filter(m => m.trigger !== trigger);
+  // No confirm any more (1.7.9): it said "This cannot be undone", and now it can.
+  const list = state.macros || [];
+  const at = list.findIndex(m => m.trigger === trigger);
+  if (at < 0) return;
+  const macro = list[at];
+  state.macros = list.filter(m => m.trigger !== trigger);
   saveState();
   renderMacroList();
+  undoable({
+    label: 'Deleted macro {{' + String(trigger).slice(0, 30) + '}}',
+    undo: () => {
+      state.macros = state.macros || [];
+      if (!state.macros.some(m => m.trigger === trigger)) state.macros.splice(Math.min(at, state.macros.length), 0, macro);
+      renderMacroList();
+    },
+  });
 }
 
 function updateExtStatusLabel() {

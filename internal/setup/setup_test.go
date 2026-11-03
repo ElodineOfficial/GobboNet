@@ -2,6 +2,7 @@ package setup
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -73,7 +74,7 @@ func TestEverythingIsGatedBehindThePassword(t *testing.T) {
 
 func TestPasswordIsStoredAsArgon2id(t *testing.T) {
 	s := newTestServer(t)
-	rec := post(t, s, "/api/password", `{"password":"hunter22","confirm":"hunter22"}`)
+	rec := post(t, s, "/api/password", `{"password":"hunter2222","confirm":"hunter2222"}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("set password: got %d (%s)", rec.Code, rec.Body)
 	}
@@ -87,7 +88,7 @@ func TestPasswordIsStoredAsArgon2id(t *testing.T) {
 	if !auth.SecretConfigured(cfg.AccessSecret) {
 		t.Error("the stored secret does not verify as configured")
 	}
-	if strings.Contains(cfg.AccessSecret, "hunter22") {
+	if strings.Contains(cfg.AccessSecret, "hunter2222") {
 		t.Error("the plaintext password appears in the config")
 	}
 }
@@ -102,6 +103,42 @@ func TestShortAndMismatchedPasswordsAreRejected(t *testing.T) {
 	}
 }
 
+// 1.7.9: the minimum is min_password_length (8 unless set, never below 4),
+// the server enforces it, and /api/state tells the wizard page the same number.
+// Both sides of each boundary are tested.
+func TestPasswordMinimumFollowsConfig(t *testing.T) {
+	cases := []struct {
+		set, want int
+	}{
+		{0, 8}, // unset: the default
+		{4, 4}, // a PIN, as GobboNet once allowed
+		{12, 12},
+		{2, 8}, // below the floor in the struct: the server falls back to the default
+	}
+	for _, c := range cases {
+		s := newTestServer(t)
+		s.cfg.MinPasswordLen = c.set
+		if got := s.minPasswordLength(); got != c.want {
+			t.Errorf("min_password_length=%d: minimum %d, want %d", c.set, got, c.want)
+			continue
+		}
+		short := strings.Repeat("a", c.want-1)
+		rec := post(t, s, "/api/password", `{"password":"`+short+`","confirm":"`+short+`"}`)
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), fmt.Sprintf("%d characters", c.want)) {
+			t.Errorf("min %d: %d chars got %d %q, want 400 naming %d", c.want, len(short), rec.Code, rec.Body.String(), c.want)
+		}
+		ok := strings.Repeat("b", c.want)
+		if rec := post(t, s, "/api/password", `{"password":"`+ok+`","confirm":"`+ok+`"}`); rec.Code != http.StatusOK {
+			t.Errorf("min %d: %d chars got %d, want 200", c.want, len(ok), rec.Code)
+		}
+		w := httptest.NewRecorder()
+		s.handleState(w, httptest.NewRequest(http.MethodGet, "/api/state", nil))
+		if !strings.Contains(w.Body.String(), fmt.Sprintf(`"min_password":%d`, c.want)) {
+			t.Errorf("min %d: /api/state does not tell the page: %s", c.want, w.Body.String())
+		}
+	}
+}
+
 // Part 6's first pitfall. A double-click on the final button, a browser retry
 // and a refresh-and-resubmit all produce a second call. If the handler closes
 // its shutdown channel unguarded, the second close panics the setup server —
@@ -109,7 +146,7 @@ func TestShortAndMismatchedPasswordsAreRejected(t *testing.T) {
 // rather than an earlier panic.
 func TestFinishIsIdempotent(t *testing.T) {
 	s := newTestServer(t)
-	post(t, s, "/api/password", `{"password":"hunter22","confirm":"hunter22"}`)
+	post(t, s, "/api/password", `{"password":"hunter2222","confirm":"hunter2222"}`)
 
 	first := post(t, s, "/api/finish", `{"lan":false}`)
 	if first.Code != http.StatusOK {
@@ -169,7 +206,7 @@ func TestFinishSurvivesConcurrentCalls(t *testing.T) {
 
 	for attempt := 0; attempt < attempts; attempt++ {
 		s := newTestServer(t)
-		post(t, s, "/api/password", `{"password":"hunter22","confirm":"hunter22"}`)
+		post(t, s, "/api/password", `{"password":"hunter2222","confirm":"hunter2222"}`)
 
 		start := make(chan struct{})
 		var wg sync.WaitGroup
@@ -235,7 +272,7 @@ func TestPasswordSurvivesConcurrentCalls(t *testing.T) {
 			go func(i int) {
 				defer wg.Done()
 				<-start
-				rec := post(t, s, "/api/password", `{"password":"hunter22","confirm":"hunter22"}`)
+				rec := post(t, s, "/api/password", `{"password":"hunter2222","confirm":"hunter2222"}`)
 				codes[i], bodies[i] = rec.Code, rec.Body.String()
 			}(i)
 		}
@@ -292,7 +329,7 @@ func TestBackendSurvivesConcurrentCalls(t *testing.T) {
 	}
 	for attempt := 0; attempt < attempts; attempt++ {
 		s := newTestServer(t)
-		post(t, s, "/api/password", `{"password":"hunter22","confirm":"hunter22"}`)
+		post(t, s, "/api/password", `{"password":"hunter2222","confirm":"hunter2222"}`)
 
 		// Half pick remote, half pick local: the interleaving that could mix them.
 		payloads := []string{
@@ -351,7 +388,7 @@ func TestLANAnswerControlsListenHost(t *testing.T) {
 		{`{"lan":"on"}`, "0.0.0.0"},
 	} {
 		s := newTestServer(t)
-		post(t, s, "/api/password", `{"password":"hunter22","confirm":"hunter22"}`)
+		post(t, s, "/api/password", `{"password":"hunter2222","confirm":"hunter2222"}`)
 		rec := post(t, s, "/api/finish", tc.body)
 		if rec.Code != http.StatusOK {
 			t.Fatalf("finish %s: got %d (%s)", tc.body, rec.Code, rec.Body)
@@ -394,7 +431,7 @@ func TestFinishWritesTheCompletionMarker(t *testing.T) {
 	if Complete(s.cfg.DataDir) {
 		t.Fatal("a fresh install reports setup already complete")
 	}
-	post(t, s, "/api/password", `{"password":"hunter22","confirm":"hunter22"}`)
+	post(t, s, "/api/password", `{"password":"hunter2222","confirm":"hunter2222"}`)
 	post(t, s, "/api/finish", `{"lan":false}`)
 	if !Complete(s.cfg.DataDir) {
 		t.Error("setup finished but left no completion marker, so the launcher would re-ask every start")
@@ -403,7 +440,7 @@ func TestFinishWritesTheCompletionMarker(t *testing.T) {
 
 func TestRemoteBackendNeedsAURL(t *testing.T) {
 	s := newTestServer(t)
-	post(t, s, "/api/password", `{"password":"hunter22","confirm":"hunter22"}`)
+	post(t, s, "/api/password", `{"password":"hunter2222","confirm":"hunter2222"}`)
 	if rec := post(t, s, "/api/backend", `{"mode":"remote","url":"  "}`); rec.Code != http.StatusBadRequest {
 		t.Errorf("remote with a blank URL: got %d, want 400", rec.Code)
 	}
@@ -413,7 +450,7 @@ func TestRemoteBackendNeedsAURL(t *testing.T) {
 // must not quietly set it, or the server comes up local with no engine.
 func TestRemoteModeLeavesServerExeEmpty(t *testing.T) {
 	s := newTestServer(t)
-	post(t, s, "/api/password", `{"password":"hunter22","confirm":"hunter22"}`)
+	post(t, s, "/api/password", `{"password":"hunter2222","confirm":"hunter2222"}`)
 	rec := post(t, s, "/api/backend", `{"mode":"remote","url":"http://10.0.0.5:8080"}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("remote backend: got %d (%s)", rec.Code, rec.Body)
@@ -432,7 +469,7 @@ func TestRemoteModeLeavesServerExeEmpty(t *testing.T) {
 
 func TestLocalModePointsAtThePackagedEngine(t *testing.T) {
 	s := newTestServer(t)
-	post(t, s, "/api/password", `{"password":"hunter22","confirm":"hunter22"}`)
+	post(t, s, "/api/password", `{"password":"hunter2222","confirm":"hunter2222"}`)
 	rec := post(t, s, "/api/backend", `{"mode":"local"}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("local backend: got %d (%s)", rec.Code, rec.Body)
@@ -463,7 +500,7 @@ func TestIndexServesTheWizard(t *testing.T) {
 func TestAutostartIsOffUnlessRequested(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	s := newTestServer(t)
-	post(t, s, "/api/password", `{"password":"hunter22","confirm":"hunter22"}`)
+	post(t, s, "/api/password", `{"password":"hunter2222","confirm":"hunter2222"}`)
 	post(t, s, "/api/finish", `{"lan":false}`)
 	if autostart.Enabled() {
 		t.Error("setup enabled autostart without being asked")
@@ -473,7 +510,7 @@ func TestAutostartIsOffUnlessRequested(t *testing.T) {
 func TestAutostartIsSetWhenRequested(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	s := newTestServer(t)
-	post(t, s, "/api/password", `{"password":"hunter22","confirm":"hunter22"}`)
+	post(t, s, "/api/password", `{"password":"hunter2222","confirm":"hunter2222"}`)
 	rec := post(t, s, "/api/finish", `{"lan":false,"autostart":true}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("finish: got %d (%s)", rec.Code, rec.Body)
@@ -490,7 +527,7 @@ func TestAutostartIsSetWhenRequested(t *testing.T) {
 func TestAutostartAcceptsStringForm(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	s := newTestServer(t)
-	post(t, s, "/api/password", `{"password":"hunter22","confirm":"hunter22"}`)
+	post(t, s, "/api/password", `{"password":"hunter2222","confirm":"hunter2222"}`)
 	post(t, s, "/api/finish", `{"lan":"off","autostart":"on"}`)
 	if !autostart.Enabled() {
 		t.Error(`autostart:"on" was not honoured`)

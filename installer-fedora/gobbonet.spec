@@ -328,6 +328,20 @@ fi
 %{_datadir}/icons/hicolor/256x256/apps/gobbonet.png
 
 %changelog
+* Tue Oct 27 2026 GobboNet - 1.7.9-1
+- 1.7.9. Same package layout, launcher flow and engine (llama.cpp b10456).
+- Tekken-format models (Mistral Nemo and its family) chat properly: a
+  built-in chat template now always goes out with --no-jinja.
+- The setup wizard asks for a password of the configured minimum
+  (min_password_length, 8 by default, as low as 4).
+- models.ini lists sixteen models, with Light/Medium/Heavy/MoE tiers.
+- In the chat: UNDO for deletions, an optional tour, CONFIG in sections with
+  a search box, models found in the HuggingFace cache, per-mod switches,
+  endorsed mods, and a rewritten Gobbonet Informant.
+- gobbonet uninstall reads your config, so it clears the conversations in
+  the data folder chosen during setup; it used to leave them and say they
+  were gone.
+- Built with Go 1.25.14, as 1.7.8 was.
 * Fri Oct 23 2026 GobboNet - 1.7.8-1
 - 1.7.8. Same package layout, launcher flow and engine (llama.cpp b10456).
 - Setup wizard: Enter in a field moves to the next step; Mixture-of-Experts

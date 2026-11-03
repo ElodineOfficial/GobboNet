@@ -134,7 +134,7 @@ LIB="$APPDIR/usr/lib/gobbonet"
 # engine checks build-deb.sh makes, so a .deb that slipped past them -- or one
 # from somewhere else -- is caught here instead of in a stranger's launch.log.
 # ---------------------------------------------------------------------------
-bash "$ROOT/verify-payload.sh" "$LIB" "AppImage payload"
+bash "$ROOT/scripts/verify-payload.sh" "$LIB" "AppImage payload"
 [ -f "$LIB/llama-cpp/llama-server" ] && file "$LIB/llama-cpp/llama-server" | grep -q 'ELF 64-bit' \
     || fail "the .deb has no llama-server ELF in usr/lib/gobbonet/llama-cpp."
 ls "$LIB/llama-cpp"/libggml-vulkan.so* >/dev/null 2>&1 \

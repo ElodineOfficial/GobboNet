@@ -392,8 +392,23 @@ func (s *Supervisor) BuildArgs(rec models.Record, modelPath string) []string {
 	if tune.GPULayers == -1 {
 		args = append(args, "--fit", "on", "--fit-target", itoaInt(s.fitTargetMiB(rec)), "--fit-ctx", itoaInt(tune.CtxSize))
 	}
+	// A built-in template NAME only means something to llama.cpp's legacy
+	// (non-Jinja) formatter. With Jinja on, llama-server takes the
+	// --chat-template value as Jinja *source*, so "mistral-v7-tekken" renders
+	// as that literal string for every request: the model never sees the
+	// conversation and free-associates on the word "tekken" (1.7.9, every
+	// Tekken model). So a name always travels with Jinja off, whatever the
+	// record said.
+	if chatTemplateFile == "" && chatTemplate != "" {
+		useJinja = false
+	}
+	// Jinja's state is always stated, never left to the engine's default.
+	// The pinned engine (b10456) has Jinja on by default, so leaving out
+	// --jinja no longer turns it off -- the assumption behind the bug above.
 	if useJinja {
 		args = append(args, "--jinja")
+	} else {
+		args = append(args, "--no-jinja")
 	}
 	if chatTemplateFile != "" {
 		args = append(args, "--chat-template-file", chatTemplateFile)

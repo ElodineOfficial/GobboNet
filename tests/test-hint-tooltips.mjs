@@ -80,8 +80,8 @@ console.log('\n=== C. warnings stay in sight ===');
   ok(/http:\/\//.test(lineOf('tip-phone')), 'phone: type it with http://');
   ok(/your IP address/.test(lineOf('tip-remote-images')), 'remote images: loading one tells that server your IP address');
   ok(/stay on this machine/.test(lineOf('tip-privacy')) && /optional/.test(lineOf('tip-privacy')), 'privacy: what goes online, and that it is optional');
-  ok(/<strong>Cannot be undone\.<\/strong> Export first if you want a backup\./.test(HTML.replace(/<div class="tip-body"[\s\S]*?<\/div>\n/g, '')),
-     'PURGE: "Cannot be undone" is still a visible note, not a tooltip');
+  ok(/offers <strong>UNDO for 10 seconds<\/strong>; after that it is gone, so export first if you want a backup\./.test(HTML.replace(/<div class="tip-body"[\s\S]*?<\/div>\n/g, '')),
+     'PURGE: the warning (UNDO for 10 seconds, then gone; export first) is a visible note, not a tooltip');
 }
 
 /* ================================================================ D */

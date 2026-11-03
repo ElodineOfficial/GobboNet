@@ -33,6 +33,8 @@
 <link rel="stylesheet" href="css/15-lore-view.css">
 <link rel="stylesheet" href="css/16-math.css">
   <link rel="stylesheet" href="css/17-markdown.css">
+  <link rel="stylesheet" href="css/18-config-sections.css">
+  <link rel="stylesheet" href="css/19-tour.css">
 </head>
 <body>
 <div id="app">
@@ -45,7 +47,7 @@
       </div>
       <div style="display:flex;gap:6px;margin-bottom:8px;">
         <button class="btn btn-sm" style="flex:1;" onclick="goHome()" title="Home / Dashboard">&#8962; HOME</button>
-        <button class="btn btn-fill btn-sm" style="flex:2;" onclick="createThread()">+ NEW_THREAD</button>
+        <button class="btn btn-fill btn-sm" style="flex:2;" onclick="createThread()" data-tour="new-chat">+ NEW_THREAD</button>
       </div>
       <div class="thread-search-wrap">
         <span class="thread-search-icon">&#128269;</span>
@@ -56,8 +58,8 @@
     <div class="thread-list" id="thread-list"></div>
     <div class="sidebar-footer">
       <div class="sidebar-footer-btns" style="margin-bottom:6px;">
-        <button class="btn btn-block" onclick="openCharacters()">// CHARS</button>
-        <button class="btn btn-amber btn-block" onclick="openSettings()">// CONFIG</button>
+        <button class="btn btn-block" onclick="openCharacters()" data-tour="characters">// CHARS</button>
+        <button class="btn btn-amber btn-block" onclick="openSettings()" data-tour="config">// CONFIG</button>
       </div>
       <div class="sidebar-footer-btns" style="margin-bottom:6px;">
         <button class="btn btn-block ext-btn" onclick="openExtensions()" id="ext-btn" title="Custom stylesheets and JS extensions">// MODS <span id="ext-status-dot"></span></button>
@@ -75,8 +77,8 @@
   <main id="chat">
     <div class="chat-header">
       <button class="toggle-sidebar" onclick="toggleSidebar()" title="Toggle sidebar">&#9776;</button>
-      <button class="home-btn" onclick="goHome()" title="Go to dashboard" id="home-btn">&#8962;</button>
-      <div class="header-model-wrap" id="header-model-wrap" title="Active model — pick another to hot-swap (no restart needed)">
+      <button class="home-btn" onclick="goHome()" title="Go to dashboard" id="home-btn" data-tour="home">&#8962;</button>
+      <div class="header-model-wrap" id="header-model-wrap" data-tour="model" title="Active model — pick another to hot-swap (no restart needed)">
         <span class="header-model-label">MODEL</span>
         <select id="header-model-select" onchange="onHeaderModelChange(this)">
           <option value="">— detecting —</option>
@@ -122,7 +124,7 @@
     <div class="context-info" id="context-info"></div>
     <div class="auto-continue-bar" id="auto-continue-indicator" style="display:none;"></div>
     <div class="attach-tray" id="attach-tray" style="display:none;"></div>
-    <div class="input-area">
+    <div class="input-area" data-tour="message">
       <input type="file" id="attach-input" multiple style="display:none" onchange="onAttachInput(this)">
       <button class="attach-btn" id="attach-btn" onclick="document.getElementById('attach-input').click()" title="Attach files (or drag & drop onto the chat)">&#128206;</button>
       <textarea id="msg-input" placeholder="Type your message... (Enter to send, Shift+Enter for newline)" rows="1"></textarea>
@@ -158,6 +160,18 @@
 <div class="modal-backdrop" id="settings-modal">
   <div class="modal">
     <h2>CONFIG</h2>
+
+    <!-- CONFIG SECTIONS (1.7.9, F3). Every setting from 1.7.8 is here, unchanged,
+         only grouped. js/15-cards.js CONFIG SECTIONS & SEARCH filters them;
+         Advanced starts closed and remembers how you left it, on this device.
+         tests/test-config-sections.mjs checks nothing was lost or doubled. -->
+    <div class="cfg-search-row">
+      <input type="search" id="cfg-search" class="cfg-search" placeholder="Find a setting&hellip;" aria-label="Find a setting" aria-describedby="cfg-search-empty" autocomplete="off" spellcheck="false">
+      <div class="cfg-search-empty" id="cfg-search-empty" role="status" aria-live="polite"></div>
+    </div>
+
+    <section class="cfg-section" data-cfg-section="basics" aria-labelledby="cfg-h-basics">
+      <h3 class="cfg-section-title" id="cfg-h-basics">Basics<span class="cfg-section-blurb">How the chat looks and replies.</span></h3>
 
     <div class="form-group" style="margin-top:12px; padding:12px; border:1px solid rgba(0,243,255,0.18); border-radius:var(--radius); background:rgba(0,243,255,0.02);">
       <label for="set-avatar-scale">&#128100; Avatar Size</label>
@@ -201,6 +215,33 @@
       </div>
     </div>
 
+    <div class="form-group" style="margin-top:4px; padding:10px 12px; border:1px dashed rgba(0,243,255,0.15); border-radius:var(--radius); background:rgba(0,243,255,0.02);">
+      <div class="form-hint" style="margin:0;">Your name, avatar and colours are on your persona card, under Characters.<button type="button" class="tip-btn" aria-label="More about Personas" aria-describedby="tip-personas-moved" aria-expanded="false">?</button></div>
+      <div class="tip-body" id="tip-personas-moved" hidden>Your name, avatar, and text colors moved to <strong>Personas</strong> &mdash;
+        open the Characters panel and edit your persona card.
+        You can keep multiple personas and swap between them per conversation.</div>
+    </div>
+    <div class="form-group" id="cfg-tour-group" style="margin-top:12px; padding:12px; border:1px solid rgba(0,243,255,0.18); border-radius:var(--radius); background:rgba(0,243,255,0.02);">
+      <label>&#129517; Tour</label>
+      <div class="form-hint" style="margin-top:2px;margin-bottom:10px;">A one-minute look at the main controls; starting it closes CONFIG without saving.<button type="button" class="tip-btn" aria-label="More about the Tour" aria-describedby="cfg-tip-tour" aria-expanded="false">?</button></div>
+      <div class="tip-body" id="cfg-tip-tour" hidden>Six stops: characters, sending a message, the model menu, CONFIG, your phone, and where to get help. It runs entirely in this page and fetches nothing. A new profile is offered it once; to stop that offer on every new device, put <code>tour_seen = true</code> in the <code>[ui]</code> section of config.toml.</div>
+      <button type="button" class="btn btn-sm" id="cfg-tour-btn" onclick="replayTour()">SHOW ME AROUND</button>
+    </div>
+    </section>
+
+    <section class="cfg-section" data-cfg-section="chat" aria-labelledby="cfg-h-chat">
+      <h3 class="cfg-section-title" id="cfg-h-chat">Characters &amp; Chat<span class="cfg-section-blurb">Characters, web search and longer conversations.</span></h3>
+
+    <div class="form-group" style="margin-top:12px; padding:12px; border:1px solid rgba(0,243,255,0.18); border-radius:var(--radius); background:rgba(0,243,255,0.02);">
+      <label>&#9906; Character Editor</label>
+      <div class="form-hint" style="margin-top:2px;margin-bottom:10px;">Stops a stray click on the backdrop from closing a half-written character.<button type="button" class="tip-btn" aria-label="More about the sticky character editor" aria-describedby="tip-sticky-cards" aria-expanded="false">?</button></div>
+      <div class="tip-body" id="tip-sticky-cards" hidden>The CAST window normally ignores a single click on the backdrop while you have a character open, so a stray click can't throw away what you were writing. Double-click to leave, or use CANCEL / SAVE. Turn this off and it closes on one click like every other window. Either way, you'll still be asked before unsaved edits are discarded.</div>
+      <label class="code-enable-row">
+        <input type="checkbox" id="set-sticky-cards">
+        <span>Sticky character editor</span>
+      </label>
+    </div>
+
     <!-- Roadmap 1.7.7 #6b. Were AUTO_CONTINUE_DELAY_MS / _MAX_CHAIN in
          js/09-threads.js; the defaults are those values. Box copied from Reply
          Delivery above; the number rows from Infinite Runtime Bug Fix below. -->
@@ -221,23 +262,6 @@
       </div>
     </div>
 
-    <div class="form-group" style="margin-top:12px; padding:12px; border:1px solid rgba(0,243,255,0.18); border-radius:var(--radius); background:rgba(0,243,255,0.02);">
-      <label>&#9906; Character Editor</label>
-      <div class="form-hint" style="margin-top:2px;margin-bottom:10px;">Stops a stray click on the backdrop from closing a half-written character.<button type="button" class="tip-btn" aria-label="More about the sticky character editor" aria-describedby="tip-sticky-cards" aria-expanded="false">?</button></div>
-      <div class="tip-body" id="tip-sticky-cards" hidden>The CAST window normally ignores a single click on the backdrop while you have a character open, so a stray click can't throw away what you were writing. Double-click to leave, or use CANCEL / SAVE. Turn this off and it closes on one click like every other window. Either way, you'll still be asked before unsaved edits are discarded.</div>
-      <label class="code-enable-row">
-        <input type="checkbox" id="set-sticky-cards">
-        <span>Sticky character editor</span>
-      </label>
-    </div>
-
-    <div class="form-group" style="margin-top:4px; padding:10px 12px; border:1px dashed rgba(0,243,255,0.15); border-radius:var(--radius); background:rgba(0,243,255,0.02);">
-      <div class="form-hint" style="margin:0;">Your name, avatar and colours are on your persona card, under Characters.<button type="button" class="tip-btn" aria-label="More about Personas" aria-describedby="tip-personas-moved" aria-expanded="false">?</button></div>
-      <div class="tip-body" id="tip-personas-moved" hidden>Your name, avatar, and text colors moved to <strong>Personas</strong> &mdash;
-        open the Characters panel and edit your persona card.
-        You can keep multiple personas and swap between them per conversation.</div>
-    </div>
-
     <div class="form-group">
       <label for="set-apikey">Search API Key (web search)</label>
       <!-- autocomplete="new-password": this is an API key, not a sign-in.
@@ -252,23 +276,38 @@
       </div>
       <pre id="search-test-output" style="display:none; margin-top:8px; max-height:200px; overflow:auto; font-size:11px; padding:8px; background:var(--black); border:1px solid var(--border); border-radius:var(--radius); color:var(--cyan-mid);"></pre>
       <div class="form-hint">Web search needs a free key from ollama.com/settings/keys.<button type="button" class="tip-btn" aria-label="More about the search key" aria-describedby="tip-search-key" aria-expanded="false">?</button></div>
-      <div class="tip-body" id="tip-search-key" hidden>Free key from ollama.com/settings/keys. The search proxy on :11435 is started for you alongside the chat server. Note: the search proxy is the ONLY network traffic — llama.cpp itself is fully offline.</div>
+      <div class="tip-body" id="tip-search-key" hidden>Free key from ollama.com/settings/keys. GobboNet passes each search to ollama.com with your key and keeps neither; with search off, nothing is sent. llama.cpp itself is fully offline.</div>
     </div>
 
-    <!-- Prompt Order (settings.retrievalNearEnd). A browser setting, saved with
-         CONFIG's SAVE like Reply Delivery; the order itself is built in
-         buildContextMessages (js/08-rag.js). Box copied from Character Editor. -->
-    <div class="form-group" id="prompt-order-group" style="margin-top:12px; padding:12px; border:1px solid rgba(0,243,255,0.18); border-radius:var(--radius); background:rgba(0,243,255,0.02);">
-      <label>&#8645; Prompt Order &mdash; less work per message</label>
-      <div class="form-hint" style="margin-top:2px;margin-bottom:10px;">In a long chat, this cuts most of the work done before each reply.<button type="button" class="tip-btn" aria-label="More about Prompt Order" aria-describedby="tip-prompt-order" aria-expanded="false">?</button></div>
-      <div class="tip-body" id="tip-prompt-order" hidden>Before each reply the model reads the whole prompt. It keeps the last one it read and skips what has not changed, up to the first difference. Lorebook snippets change from message to message and normally sit near the top, with the character, so everything below them, the whole conversation included, is read again every time. In a long chat that is most of the work done before the reply starts.</div>
+    <div class="form-group" style="margin-top:12px; padding:12px; border:1px solid var(--green-dim); border-radius:var(--radius); background:rgba(0,255,65,0.03);">
+      <label>&#127760; Remote Images In Cards</label>
+      <div class="form-hint" style="margin-top:2px;margin-bottom:10px;">Off by default: loading a picture from a web address tells that server your IP address.<button type="button" class="tip-btn" aria-label="More about Remote Images" aria-describedby="tip-remote-images" aria-expanded="false">?</button></div>
+      <div class="tip-body" id="tip-remote-images" hidden>Character avatars and backgrounds can point at a web address instead of holding the picture themselves. Loading one contacts that server, which tells it your IP address &mdash; the only thing in GobboNet that reaches outside your machine without you asking. Off by default. Pictures pasted or uploaded directly are unaffected and always work.</div>
       <label class="code-enable-row">
-        <input type="checkbox" id="set-retrieval-near-end">
-        <span>Put lorebook snippets just before my newest message</span>
+        <input type="checkbox" id="set-allow-remote-images">
+        <span>Allow remote images</span>
       </label>
-      <div class="form-hint" style="margin-top:8px;">On, only the end of the prompt is read again, so replies start sooner (off by default).<button type="button" class="tip-btn" aria-label="More about this switch" aria-describedby="tip-prompt-order-switch" aria-expanded="false">?</button></div>
-      <div class="tip-body" id="tip-prompt-order-switch" hidden><strong>On:</strong> character and lore &rarr; the conversation &rarr; lorebook snippets &rarr; your new message. Only the end is read again, so replies start sooner and your graphics card (or processor) works less. <strong>Off</strong> <em>(default)</em>: snippets sit with the character, as before. Only matters for characters with a RAG Storybook or memory files. The model may lean on the snippets a little differently, so try both. Starts with your next message.</div>
-      <div class="form-hint" style="margin-top:8px;"><strong>Planned:</strong> arranging the whole prompt yourself. This switch moves the one part that changes most.</div>
+    </div>
+    </section>
+
+    <section class="cfg-section" data-cfg-section="model" aria-labelledby="cfg-h-model">
+      <h3 class="cfg-section-title" id="cfg-h-model">Model &amp; Performance<span class="cfg-section-blurb">Getting a model, and how it runs on this PC.</span></h3>
+
+    <!-- Sits directly above Privacy Status, which stays last. This is a button,
+         not a setting: openSettings() does not populate it and saveSettings()
+         does not read it.
+         Held off from 1.7 to 1.7.7 as known-bugged; live again for testing
+         (roadmap 1.7.7 #8b). While it is not confirmed working,
+         applyModelCatalogAvailability() in js/02-model.js says so in
+         #add-model-unavailable under the button. -->
+    <div class="form-group" id="add-model-block" style="margin-top:12px; padding:12px; border:1px solid rgba(0,243,255,0.18); border-radius:var(--radius); background:rgba(0,243,255,0.02);">
+      <label>&#128229; Add a Model</label>
+      <div class="form-hint" style="margin-top:2px;margin-bottom:10px;">
+        Browse the model list and download one straight into your models folder,
+        where it will appear in the header dropdown when it lands.
+      </div>
+      <button class="btn btn-sm" type="button" onclick="openModelCatalog()">BROWSE CATALOGUE</button>
+      <div class="form-hint" id="add-model-unavailable" style="display:none;margin-top:8px;"></div>
     </div>
 
     <div class="form-group" style="margin-top:12px; padding:12px; border:1px solid rgba(255,149,0,0.22); border-radius:var(--radius); background:rgba(255,149,0,0.03);">
@@ -312,12 +351,55 @@
       </div>
     </div>
 
+    <!-- Bottom of CONFIG, directly above Privacy Status.
+
+         NOT hidden when unsupported any more. It used to hide itself entirely
+         unless the server manages llama.cpp, on the reasoning that a switch
+         which cannot do anything gets blamed when VRAM stays pinned. The cost
+         of that turned out to be worse: an invisible feature is
+         indistinguishable from one that was never built, and the first
+         question it produced was "did we implement this at all?".
+
+         So it is always here, and when it cannot work it says why. -->
+    <div class="form-group" id="standdown-group" style="margin-top:12px; padding:12px; border:1px solid rgba(0,243,255,0.18); border-radius:var(--radius); background:rgba(0,243,255,0.02);">
+      <label>&#128268; Idle Stand-Down</label>
+      <div class="form-hint" style="margin-top:2px;margin-bottom:10px;">Unloads the model after this many idle minutes to free VRAM (0 keeps it loaded).<button type="button" class="tip-btn" aria-label="More about Idle Stand-Down" aria-describedby="tip-standdown" aria-expanded="false">?</button></div>
+      <div class="tip-body" id="tip-standdown" hidden>llama.cpp holds the whole model in VRAM for as long as it runs, whether or not anyone is talking to it. Leaving GobboNet open therefore pins several gigabytes against nothing. After this many minutes with no messages the model is unloaded, and the next message reloads it &mdash; that reload takes as long as starting up does, so a shorter timeout trades waiting for memory. Set it to 0 to keep the model loaded always.</div>
+      <div class="standdown-row" id="standdown-row">
+        <input type="number" id="set-standdown-minutes" min="0" max="1440" step="1">
+        <span>minutes idle before unloading</span>
+        <button class="btn btn-sm" id="standdown-apply" onclick="applyStandDown()">APPLY</button>
+      </div>
+      <div class="standdown-status" id="standdown-status"></div>
+    </div>
+
+    <div class="form-group" style="margin-top:12px; padding:12px; border:1px solid rgba(255,165,0,0.25); border-radius:var(--radius); background:rgba(255,165,0,0.03);">
+      <label style="color:var(--amber,#ffaa00);">&#9201; Infinite Runtime Bug Fix</label>
+      <div class="form-hint" style="margin-top:2px;margin-bottom:10px;">Stops a reply that is still thinking after this long.<button type="button" class="tip-btn" aria-label="More about the runtime limit" aria-describedby="tip-cot-timeout" aria-expanded="false">?</button></div>
+      <div class="tip-body" id="tip-cot-timeout" hidden>If COT (chain-of-thought) hangs forever, this auto-stops generation once it exceeds your expected runtime. Set to whatever feels right — if it hasn't finished by then, something's stuck. This is the only time limit on a reply: there is no fixed cut-off behind it, and it still applies if you close this page or your phone goes to sleep.</div>
+      <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
+        <label style="display:flex;align-items:center;gap:7px;cursor:pointer;font-size:13px;color:rgba(255,255,255,0.75);">
+          <input type="checkbox" id="set-cot-timeout-enabled" style="accent-color:var(--amber,#ffaa00);width:15px;height:15px;cursor:pointer;" onchange="updateCotTimeoutRow()">
+          Enable auto-cull
+        </label>
+        <div id="cot-timeout-timer-wrap" style="display:flex;align-items:center;gap:8px;opacity:0.35;pointer-events:none;transition:opacity 0.15s;">
+          <span style="font-size:12px;color:rgba(255,255,255,0.5);">Max runtime:</span>
+          <input type="number" id="set-cot-timeout-minutes" min="1" max="60" step="1" value="2" style="width:62px;text-align:center;font-size:13px;">
+          <span style="font-size:12px;color:rgba(255,255,255,0.5);">min</span>
+        </div>
+      </div>
+    </div>
+    </section>
+
+    <section class="cfg-section" data-cfg-section="network" aria-labelledby="cfg-h-network">
+      <h3 class="cfg-section-title" id="cfg-h-network">Devices &amp; Network<span class="cfg-section-blurb">Reaching GobboNet from your phone and other devices.</span></h3>
+
     <!-- Roadmap 1.7.7 #7. A server setting, so it works like Idle Stand-Down:
          filled from the server when CONFIG opens, saved on its own button, its
          result in a status line. Box copied from Idle Stand-Down; the address
          rows are ABOUT's build rows with its COPY button; the address/port pair
          and the button row are Performance's. -->
-    <div class="form-group" id="lan-group" style="margin-top:12px; padding:12px; border:1px solid rgba(0,243,255,0.18); border-radius:var(--radius); background:rgba(0,243,255,0.02);">
+    <div class="form-group" id="lan-group" data-tour="phone" style="margin-top:12px; padding:12px; border:1px solid rgba(0,243,255,0.18); border-radius:var(--radius); background:rgba(0,243,255,0.02);">
       <label>&#128241; Phone &amp; Other Devices</label>
       <div class="form-hint" style="margin-top:2px;margin-bottom:10px;">Type one of these into your phone's browser, <b>http://</b> included.<button type="button" class="tip-btn" aria-label="More about using GobboNet on a phone" aria-describedby="tip-phone" aria-expanded="false">?</button></div>
       <div class="tip-body" id="tip-phone" hidden>To use GobboNet on your phone, or another computer on the same network, type one of these into its browser. Each is named after the network connection it belongs to &mdash; pick the one your phone is on. The first is the most likely. Type it exactly as shown, <b>http://</b> included: without it, phone browsers try a secure https:// address instead and show an error that never mentions GobboNet.</div>
@@ -356,6 +438,40 @@
       <button class="btn btn-sm" id="network-hosts-save" onclick="saveNetworkHosts()" disabled>SAVE NETWORK NAMES</button>
       <div class="form-hint" id="network-hosts-status" role="status" aria-live="polite"></div>
     </div>
+    </section>
+
+    <details class="cfg-section cfg-advanced" id="cfg-advanced" data-cfg-section="advanced">
+      <summary class="cfg-section-title" id="cfg-h-advanced">Advanced<span class="cfg-section-blurb">Fine-tuning for power users. Safe to leave alone.</span></summary>
+
+    <!-- Prompt Order (settings.retrievalNearEnd). A browser setting, saved with
+         CONFIG's SAVE like Reply Delivery; the order itself is built in
+         buildContextMessages (js/08-rag.js). Box copied from Character Editor. -->
+    <div class="form-group" id="prompt-order-group" style="margin-top:12px; padding:12px; border:1px solid rgba(0,243,255,0.18); border-radius:var(--radius); background:rgba(0,243,255,0.02);">
+      <label>&#8645; Prompt Order &mdash; less work per message</label>
+      <div class="form-hint" style="margin-top:2px;margin-bottom:10px;">In a long chat, this cuts most of the work done before each reply.<button type="button" class="tip-btn" aria-label="More about Prompt Order" aria-describedby="tip-prompt-order" aria-expanded="false">?</button></div>
+      <div class="tip-body" id="tip-prompt-order" hidden>Before each reply the model reads the whole prompt. It keeps the last one it read and skips what has not changed, up to the first difference. Lorebook snippets change from message to message and normally sit near the top, with the character, so everything below them, the whole conversation included, is read again every time. In a long chat that is most of the work done before the reply starts.</div>
+      <label class="code-enable-row">
+        <input type="checkbox" id="set-retrieval-near-end">
+        <span>Put lorebook snippets just before my newest message</span>
+      </label>
+      <div class="form-hint" style="margin-top:8px;">On, only the end of the prompt is read again, so replies start sooner (off by default).<button type="button" class="tip-btn" aria-label="More about this switch" aria-describedby="tip-prompt-order-switch" aria-expanded="false">?</button></div>
+      <div class="tip-body" id="tip-prompt-order-switch" hidden><strong>On:</strong> character and lore &rarr; the conversation &rarr; lorebook snippets &rarr; your new message. Only the end is read again, so replies start sooner and your graphics card (or processor) works less. <strong>Off</strong> <em>(default)</em>: snippets sit with the character, as before. Only matters for characters with a RAG Storybook or memory files. The model may lean on the snippets a little differently, so try both. Starts with your next message.</div>
+      <div class="form-hint" style="margin-top:8px;"><strong>Planned:</strong> arranging the whole prompt yourself. This switch moves the one part that changes most.</div>
+    </div>
+
+    <!-- Roadmap 1.7.7 #6c. Was LORE_TIMEOUT_MS in js/07-prompt.js; 45 s is
+         still the default. Box copied from Reply Delivery; the number row from
+         Infinite Runtime Bug Fix above. -->
+    <div class="form-group" style="margin-top:12px; padding:12px; border:1px solid rgba(0,243,255,0.18); border-radius:var(--radius); background:rgba(0,243,255,0.02);">
+      <label>&#128221; Lore Compression</label>
+      <div class="form-hint" style="margin-top:2px;margin-bottom:10px;">How long summarising older messages may take before your message goes without it.<button type="button" class="tip-btn" aria-label="More about the Lore Compression time limit" aria-describedby="tip-lore-timeout" aria-expanded="false">?</button></div>
+      <div class="tip-body" id="tip-lore-timeout" hidden>When a chat outgrows the model's context, the oldest messages are summarised into the lore log before your message is sent. If that takes longer than this, it is cancelled so your message can go through &mdash; and those oldest messages leave the context without a summary. Slow or CPU-only computers may need longer.</div>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <span style="font-size:12px;color:rgba(255,255,255,0.5);">Give up after:</span>
+        <input type="number" id="set-lore-timeout" min="5" step="5" value="45" style="width:62px;text-align:center;font-size:13px;">
+        <span style="font-size:12px;color:rgba(255,255,255,0.5);">s</span>
+      </div>
+    </div>
 
     <!-- config.toml, the server's settings file (js/15-cards.js CONFIG FILE
          PANEL; internal/server/configfile.go). Saved on its own buttons, like
@@ -378,90 +494,11 @@
       </div>
       <div class="standdown-status" id="config-file-status" role="status" aria-live="polite"></div>
     </div>
-
-    <div class="form-group" style="margin-top:12px; padding:12px; border:1px solid var(--green-dim); border-radius:var(--radius); background:rgba(0,255,65,0.03);">
-      <label>&#127760; Remote Images In Cards</label>
-      <div class="form-hint" style="margin-top:2px;margin-bottom:10px;">Off by default: loading a picture from a web address tells that server your IP address.<button type="button" class="tip-btn" aria-label="More about Remote Images" aria-describedby="tip-remote-images" aria-expanded="false">?</button></div>
-      <div class="tip-body" id="tip-remote-images" hidden>Character avatars and backgrounds can point at a web address instead of holding the picture themselves. Loading one contacts that server, which tells it your IP address &mdash; the only thing in GobboNet that reaches outside your machine without you asking. Off by default. Pictures pasted or uploaded directly are unaffected and always work.</div>
-      <label class="code-enable-row">
-        <input type="checkbox" id="set-allow-remote-images">
-        <span>Allow remote images</span>
-      </label>
-    </div>
-
-    <div class="form-group" style="margin-top:12px; padding:12px; border:1px solid rgba(255,165,0,0.25); border-radius:var(--radius); background:rgba(255,165,0,0.03);">
-      <label style="color:var(--amber,#ffaa00);">&#9201; Infinite Runtime Bug Fix</label>
-      <div class="form-hint" style="margin-top:2px;margin-bottom:10px;">Stops a reply that is still thinking after this long.<button type="button" class="tip-btn" aria-label="More about the runtime limit" aria-describedby="tip-cot-timeout" aria-expanded="false">?</button></div>
-      <div class="tip-body" id="tip-cot-timeout" hidden>If COT (chain-of-thought) hangs forever, this auto-stops generation once it exceeds your expected runtime. Set to whatever feels right — if it hasn't finished by then, something's stuck. This is the only time limit on a reply: there is no fixed cut-off behind it, and it still applies if you close this page or your phone goes to sleep.</div>
-      <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
-        <label style="display:flex;align-items:center;gap:7px;cursor:pointer;font-size:13px;color:rgba(255,255,255,0.75);">
-          <input type="checkbox" id="set-cot-timeout-enabled" style="accent-color:var(--amber,#ffaa00);width:15px;height:15px;cursor:pointer;" onchange="updateCotTimeoutRow()">
-          Enable auto-cull
-        </label>
-        <div id="cot-timeout-timer-wrap" style="display:flex;align-items:center;gap:8px;opacity:0.35;pointer-events:none;transition:opacity 0.15s;">
-          <span style="font-size:12px;color:rgba(255,255,255,0.5);">Max runtime:</span>
-          <input type="number" id="set-cot-timeout-minutes" min="1" max="60" step="1" value="2" style="width:62px;text-align:center;font-size:13px;">
-          <span style="font-size:12px;color:rgba(255,255,255,0.5);">min</span>
-        </div>
-      </div>
-    </div>
-
-    <!-- Roadmap 1.7.7 #6c. Was LORE_TIMEOUT_MS in js/07-prompt.js; 45 s is
-         still the default. Box copied from Reply Delivery; the number row from
-         Infinite Runtime Bug Fix above. -->
-    <div class="form-group" style="margin-top:12px; padding:12px; border:1px solid rgba(0,243,255,0.18); border-radius:var(--radius); background:rgba(0,243,255,0.02);">
-      <label>&#128221; Lore Compression</label>
-      <div class="form-hint" style="margin-top:2px;margin-bottom:10px;">How long summarising older messages may take before your message goes without it.<button type="button" class="tip-btn" aria-label="More about the Lore Compression time limit" aria-describedby="tip-lore-timeout" aria-expanded="false">?</button></div>
-      <div class="tip-body" id="tip-lore-timeout" hidden>When a chat outgrows the model's context, the oldest messages are summarised into the lore log before your message is sent. If that takes longer than this, it is cancelled so your message can go through &mdash; and those oldest messages leave the context without a summary. Slow or CPU-only computers may need longer.</div>
-      <div style="display:flex;align-items:center;gap:8px;">
-        <span style="font-size:12px;color:rgba(255,255,255,0.5);">Give up after:</span>
-        <input type="number" id="set-lore-timeout" min="5" step="5" value="45" style="width:62px;text-align:center;font-size:13px;">
-        <span style="font-size:12px;color:rgba(255,255,255,0.5);">s</span>
-      </div>
-    </div>
-
-    <!-- Sits directly above Privacy Status, which stays last. This is a button,
-         not a setting: openSettings() does not populate it and saveSettings()
-         does not read it.
-         Held off from 1.7 to 1.7.7 as known-bugged; live again for testing
-         (roadmap 1.7.7 #8b). While it is not confirmed working,
-         applyModelCatalogAvailability() in js/02-model.js says so in
-         #add-model-unavailable under the button. -->
-    <div class="form-group" id="add-model-block" style="margin-top:12px; padding:12px; border:1px solid rgba(0,243,255,0.18); border-radius:var(--radius); background:rgba(0,243,255,0.02);">
-      <label>&#128229; Add a Model</label>
-      <div class="form-hint" style="margin-top:2px;margin-bottom:10px;">
-        Browse the model list and download one straight into your models folder,
-        where it will appear in the header dropdown when it lands.
-      </div>
-      <button class="btn btn-sm" type="button" onclick="openModelCatalog()">BROWSE CATALOGUE</button>
-      <div class="form-hint" id="add-model-unavailable" style="display:none;margin-top:8px;"></div>
-    </div>
-
-    <!-- Bottom of CONFIG, directly above Privacy Status.
-
-         NOT hidden when unsupported any more. It used to hide itself entirely
-         unless the server manages llama.cpp, on the reasoning that a switch
-         which cannot do anything gets blamed when VRAM stays pinned. The cost
-         of that turned out to be worse: an invisible feature is
-         indistinguishable from one that was never built, and the first
-         question it produced was "did we implement this at all?".
-
-         So it is always here, and when it cannot work it says why. -->
-    <div class="form-group" id="standdown-group" style="margin-top:12px; padding:12px; border:1px solid rgba(0,243,255,0.18); border-radius:var(--radius); background:rgba(0,243,255,0.02);">
-      <label>&#128268; Idle Stand-Down</label>
-      <div class="form-hint" style="margin-top:2px;margin-bottom:10px;">Unloads the model after this many idle minutes to free VRAM (0 keeps it loaded).<button type="button" class="tip-btn" aria-label="More about Idle Stand-Down" aria-describedby="tip-standdown" aria-expanded="false">?</button></div>
-      <div class="tip-body" id="tip-standdown" hidden>llama.cpp holds the whole model in VRAM for as long as it runs, whether or not anyone is talking to it. Leaving GobboNet open therefore pins several gigabytes against nothing. After this many minutes with no messages the model is unloaded, and the next message reloads it &mdash; that reload takes as long as starting up does, so a shorter timeout trades waiting for memory. Set it to 0 to keep the model loaded always.</div>
-      <div class="standdown-row" id="standdown-row">
-        <input type="number" id="set-standdown-minutes" min="0" max="1440" step="1">
-        <span>minutes idle before unloading</span>
-        <button class="btn btn-sm" id="standdown-apply" onclick="applyStandDown()">APPLY</button>
-      </div>
-      <div class="standdown-status" id="standdown-status"></div>
-    </div>
+    </details>
 
     <div class="form-group" style="margin-top:12px; padding:12px; border:1px solid var(--green-dim); border-radius:var(--radius); background:rgba(0,255,65,0.03);">
       <label style="color:var(--green-neon);">&#128274; Privacy Status</label>
-      <div class="form-hint" style="color:var(--green-dim);">Your chats and models stay on this machine; only web search and the model list go online, and both are optional.<button type="button" class="tip-btn" aria-label="More about Privacy Status" aria-describedby="tip-privacy" aria-expanded="false">?</button></div>
+      <div class="form-hint" style="color:var(--green-dim);">Your chats and models stay on this machine; only web search and the model and mod lists go online, and all are optional.<button type="button" class="tip-btn" aria-label="More about Privacy Status" aria-describedby="tip-privacy" aria-expanded="false">?</button></div>
       <div class="tip-body" id="tip-privacy" hidden>llama.cpp runs 100% offline &mdash; no accounts, no telemetry, no tracking.
         Your model and conversations never leave your machine.
         Two things can reach the internet, both optional and both listed here:
@@ -489,10 +526,19 @@
 
     <div class="form-hint" id="model-catalog-intro" style="margin-bottom:12px;">Models download from HuggingFace to your models folder and are checked before use.<button type="button" class="tip-btn" aria-label="More about model downloads" aria-describedby="tip-catalog" aria-expanded="false">?</button></div>
     <div class="tip-body" id="tip-catalog" hidden>These download from HuggingFace straight to your models folder. GobboNet
-      checks each one against the publisher's checksum and throws it away if it
-      does not match. Only one download runs at a time.</div>
+      checks each one against the checksum pinned in the catalogue and throws it
+      away if it does not match. A model marked Unverified has no pinned checksum
+      yet: it is checked against HuggingFace's own record only, and asks for a
+      second click. Only one download runs at a time.
+      Models already on this computer -- in the HuggingFace cache, or in folders
+      listed under model_dirs in config.toml -- are shown first, and USE IT links
+      one into your models folder without copying it.</div>
 
     <div class="form-hint" id="model-catalog-free" style="margin-bottom:10px;"></div>
+
+    <!-- 1.7.9, issue #12: GGUFs already on this computer. Filled by
+         loadLocalModels() in js/02-model.js. -->
+    <div id="model-catalog-local" style="margin-bottom:12px;"></div>
 
     <!-- Roadmap 1.7.7: narrow the list by what a model is for and how much it
          needs. Performance's row of btn btn-sm buttons, the chosen one filled
@@ -513,6 +559,7 @@
         <button class="btn btn-sm" type="button" data-kind="size" data-value="light" onclick="setCatalogFilter('size','light')" title="Needs 8 GB of GPU memory or less">LIGHT</button>
         <button class="btn btn-sm" type="button" data-kind="size" data-value="medium" onclick="setCatalogFilter('size','medium')" title="Needs 9 to 16 GB of GPU memory">MEDIUM</button>
         <button class="btn btn-sm" type="button" data-kind="size" data-value="heavy" onclick="setCatalogFilter('size','heavy')" title="Needs more than 16 GB of GPU memory">HEAVY</button>
+        <button class="btn btn-sm" type="button" data-kind="size" data-value="moe" onclick="setCatalogFilter('size','moe')" title="Mixture of Experts: big models that also run on a smaller card beside system RAM">MOE</button>
       </div>
     </div>
 
@@ -664,7 +711,7 @@
       <div class="form-group">
         <label for="card-personality">Personality</label>
         <textarea id="card-personality" rows="3" placeholder="Character traits, reminders, behavioral rules..."></textarea>
-        <div class="form-hint">Injected periodically as a reminder to maintain character.</div>
+        <div class="form-hint">Sent with every reply, near the top, to keep the character in voice.</div>
       </div>
 
       <div class="form-group">
@@ -733,10 +780,20 @@
 
       <div class="form-group">
         <label for="card-rag-storybook">RAG Storybook <span style="opacity:0.5;font-weight:400;font-size:11px;">&mdash; retrieved on demand, not always-on</span></label>
-        <textarea id="card-rag-storybook" rows="6" placeholder="The big character/world bible. Author once; only the slice a scene needs enters context.&#10;&#10;Structured (weighted tags fire by theme):&#10;# selah&#10;A winged figure, divine and remote.&#10;tags: angel [1.0], divine [0.8], winged [1.0], halo [0.5]&#10;relation: reinhard&#10;role_in_arcs: protector&#10;offscreen_default: false&#10;use_principles: Render her speech as formal and archaic.&#10;&#10;...or just plain prose, which is chunked and matched semantically." style="font-size:12px;resize:vertical;" oninput="updateStorybookReadout()"></textarea>
+        <textarea id="card-rag-storybook" rows="6" placeholder="The big character/world bible. Only the entries a scene touches are sent.&#10;&#10;Just write it -- plain text works. Every 4 sentences is an entry, and a name or one of its words in the chat pulls it in:&#10;Selah is an angel wandering the world as a human. Some of his friends in town call him &lsquo;Neighbor&rsquo;.&#10;&#10;Or label an entry: the name fires it, and weighted tags fire it when they add up to 1.0:&#10;# Selah, [.7 wing, .3 light, 1.0 angel]&#10;Sometimes called &lsquo;Neighbor&rsquo; by his friends in town, Selah is secretly an angel." style="font-size:12px;resize:vertical;" oninput="updateStorybookReadout()"></textarea>
         <div class="form-hint">A large character or world bible, of which only the parts a scene needs are sent.<button type="button" class="tip-btn" aria-label="More about the RAG Storybook" aria-describedby="tip-storybook" aria-expanded="false">?</button></div>
-        <div class="tip-body" id="tip-storybook" hidden>Unlike Starting Lore (small, always present), the storybook is large and pulled <strong>on demand</strong>. Accepts structured lines (<code>tags:</code>, <code>relation:</code>, <code>role_in_arcs:</code>, <code>offscreen_default:</code>, <code>use_principles:</code> &mdash; flat <code>name_tags:</code> form works too) and/or plain prose; the parser routes by shape. Tag <code>[weights]</code> are control data and never reach the model.</div>
+        <div class="tip-body" id="tip-storybook" hidden>Unlike Starting Lore (small, always present), the storybook is large and pulled <strong>on demand</strong>. Write it two ways, or mix them. <strong>Plain text:</strong> every four sentences is an entry; a name in it, or one of its distinctive words in the chat (or two or three, set below), pulls it in &mdash; and, with the retrieval model running, anything close in meaning. <strong>Labelled:</strong> <code># Selah, [.7 wing, .3 light, 1.0 angel]</code> on its own line, then the entry; saying the name fires it, and tags fire it when their weights add up to 1.0. Power-user lines still work below a header (<code>tags:</code>, <code>relation:</code>, <code>role_in_arcs:</code>, <code>offscreen_default:</code>, <code>use_principles:</code>), and so does the flat <code>name_tags:</code> form. Headers, tags and weights are control data and never reach the model. The line under this box shows how your text was read.</div>
         <div class="carousel-counter" id="storybook-readout"></div>
+        <div style="display:flex;align-items:center;gap:10px;margin-top:8px;flex-wrap:wrap;">
+          <label for="card-rag-words" style="margin:0;font-size:12px;">Plain text fires on</label>
+          <select id="card-rag-words" style="width:auto;">
+            <option value="1">1 of its words (default)</option>
+            <option value="2">2 of its words</option>
+            <option value="3">3 of its words</option>
+          </select>
+        </div>
+        <div class="form-hint">How many of a plain-text entry's distinctive words must come up in the chat to pull it in.<button type="button" class="tip-btn" aria-label="More about plain-text firing" aria-describedby="tip-rag-words" aria-expanded="false">?</button></div>
+        <div class="tip-body" id="tip-rag-words" hidden>One is how lorebooks usually behave: any distinctive word of an entry pulls it in. Ask for two or three when a big storybook pulls in too much. Either way, a name in the entry pulls it in by itself, common words never count, a word several entries share counts for less, and entries with a <code># Header</code> follow their own tags instead.</div>
       </div>
 
       <!-- Memory files (issue #41). The list lives in the hidden textarea as
@@ -1112,20 +1169,62 @@ gobbo.every(5, async () =&gt; {
       <span class="ext-warning-icon">&#9888;</span>
       <div>
         <strong>Only load stylesheets and scripts you trust.</strong>
-        Extensions run with full access to the Gobbonet interface.
+        Mods run with full access to the Gobbonet interface.
         External URLs are fetched at load time — keep them on your local network
         or from sources you control.
       </div>
     </div>
 
+    <!-- 1.7.9 (F1): mods, each with its own switch. Filled by renderModList()
+         in js/19-extensions.js. -->
+    <div class="ext-section" id="mods-section" style="margin-top:12px;">
+      <div class="ext-section-header">&#129513; YOUR MODS</div>
+      <div class="mods-body">
+        <div class="form-hint" style="margin-top:0;margin-bottom:10px;">Each mod has its own switch and loads in the order shown.<button type="button" class="tip-btn" aria-label="More about mods" aria-describedby="tip-mods" aria-expanded="false">?</button></div>
+        <div class="tip-body" id="tip-mods" hidden>A mod is a folder in GobboNet's <code>mods</code> folder holding a
+          <code>mod.json</code> and the stylesheets and scripts it lists, for example
+          <code>{"name": "Neon theme", "version": "1.0", "files": ["theme.css", "extra.js"]}</code>.
+          They load top to bottom; within a mod, in the order <code>files</code> lists them.
+          Mods are added, changed and switched on only from GobboNet on the PC it runs on, so a phone
+          or another device can never put code here; any signed-in device can switch one off.
+          A folder you add by hand starts switched off. Removing a mod can be undone until GobboNet restarts.</div>
+        <div id="mods-list"></div>
+        <div class="form-hint" id="mods-where" style="margin-top:8px;"></div>
+        <div class="form-hint" id="mods-note" style="display:none;margin-top:6px;" role="status"></div>
+      </div>
+    </div>
+
+    <!-- 1.7.9 (F6): endorsed mods from goblincorps.com. Nothing is fetched
+         until BROWSE is clicked; js/19-extensions.js browseEndorsedMods(). -->
+    <div class="ext-section" id="endorsed-section" style="margin-top:12px;">
+      <div class="ext-section-header">&#11088; ENDORSED MODS</div>
+      <div class="mods-body">
+        <div class="form-hint" style="margin-top:0;margin-bottom:10px;">Mods Elodine has looked at and endorses one by one, installed with one click.<button type="button" class="tip-btn" aria-label="More about endorsed mods" aria-describedby="tip-endorsed" aria-expanded="false">?</button></div>
+        <div class="tip-body" id="tip-endorsed" hidden>The list comes from goblincorps.com, where each mod is
+          endorsed individually. It is fetched by GobboNet on this PC only when you click BROWSE, as a plain
+          request with nothing about you in it, and a mod&rsquo;s files only when you click INSTALL. Every file
+          is checked against the SHA-256 the list pins for it: if one does not match, nothing is installed.
+          A new mod is switched on once when installed; an update keeps your switch as it was. Mods marked 18+
+          stay hidden until you say you are 18 or older on this device. Point <code>mod_list_url</code> in
+          config.toml at another list, or empty it to switch the list off.</div>
+        <div class="endorsed-actions">
+          <button type="button" class="btn btn-sm" id="endorsed-browse-btn" onclick="browseEndorsedMods(false)">BROWSE ENDORSED MODS</button>
+          <button type="button" class="btn btn-sm" id="endorsed-refresh-btn" onclick="browseEndorsedMods(true)" style="display:none;">REFRESH</button>
+          <a class="btn btn-sm" href="https://goblincorps.com/gobbonet_extras" target="_blank" rel="noopener noreferrer">OPEN THE EXTRAS PAGE</a>
+        </div>
+        <div id="endorsed-list" aria-live="polite"></div>
+        <div class="form-hint" id="endorsed-note" style="display:none;margin-top:6px;" role="status"></div>
+      </div>
+    </div>
+
     <div class="form-group" style="margin-top:16px;">
-      <label>Extension Status</label>
+      <label>My extensions</label>
       <div style="display:flex;align-items:center;gap:12px;margin-top:4px;">
         <label class="ext-toggle-wrap">
           <input type="checkbox" id="ext-enabled" onchange="updateExtStatusLabel()">
           <span class="ext-toggle-label" id="ext-toggle-label">Disabled</span>
         </label>
-        <span class="form-hint" style="margin:0;">Toggle all extensions on/off without clearing them.</span>
+        <span class="form-hint" style="margin:0;">Your own stylesheets and scripts below, kept as one mod with this switch.</span>
       </div>
     </div>
 
@@ -1158,16 +1257,18 @@ gobbo.every(5, async () =&gt; {
       <div class="form-group">
         <div class="form-hint" style="margin-top:0;margin-bottom:10px;">Shortcuts that expand to your text before it reaches the model.<button type="button" class="tip-btn" aria-label="More about macros" aria-describedby="tip-macros" aria-expanded="false">?</button></div>
         <div class="tip-body" id="tip-macros" hidden>Define <code>{{trigger}}</code> shortcuts — when found in any message or character card field, the trigger expands to your text <em>before being sent to the model</em>. In the chat itself the compact <code>{{trigger}}</code> tag stays visible, so your messages don't get cluttered with the full expansion.<br><br>
+          <strong>Passing text to a macro:</strong> <code>{{SYSTEM: Foo bar}}</code>, or <code>{{SYSTEM:}} Foo bar</code> for the rest of the line. The text lands on a new line after the macro's own text &mdash; or, if its text has <code>{{input}}</code> in it, exactly there (as many times as it appears). <code>{{input1}}</code>, <code>{{input2}}</code>&hellip; are the pieces of the passed text split at <code>|</code>: <code>{{scene: tavern | night}}</code>. A plain <code>{{SYSTEM}}</code> still works, with the placeholders left empty. <code>{{SYSTEM:}}</code> comes ready-made for out-of-character notes; edit it like any other.<br><br>
           <strong>Built-in (read-only):</strong>&nbsp;<code>{{char}}</code> &middot; <code>{{user}}</code> &middot; <code>{{current_DAT}}</code> <span style="opacity:0.7;">(these still resolve on screen)</span></div>
         <div id="macro-list"></div>
         <div id="macro-editor" style="display:none;margin-top:10px;padding:12px;border:1px solid var(--border);border-radius:var(--radius);background:rgba(0,243,255,0.02);">
           <div class="form-group" style="margin-bottom:8px;">
             <label for="macro-trigger" style="font-size:11px;">Trigger name <span class="form-hint" style="display:inline;margin:0;">(letters, numbers, underscores — no spaces)</span></label>
-            <input type="text" id="macro-trigger" placeholder="e.g. continue" autocomplete="off" spellcheck="false" style="font-family:var(--font);letter-spacing:0.5px;">
+            <input type="text" id="macro-trigger" placeholder="e.g. continue" autocomplete="off" spellcheck="false" style="font-family:var(--font);letter-spacing:0.5px;" oninput="updateMacroPreview()">
           </div>
           <div class="form-group" style="margin-bottom:10px;">
             <label for="macro-text" style="font-size:11px;">Expansion text</label>
-            <textarea id="macro-text" rows="3" placeholder="The text that replaces {{trigger}} everywhere it appears."></textarea>
+            <textarea id="macro-text" rows="3" placeholder="The text that replaces {{trigger}} everywhere it appears. Put {{input}} where text passed as {{trigger: ...}} should go." oninput="updateMacroPreview()"></textarea>
+            <div class="form-hint" id="macro-preview" style="margin-top:6px;white-space:pre-wrap;" aria-live="polite"></div>
           </div>
           <div style="display:flex;gap:8px;">
             <button class="btn btn-sm btn-fill" onclick="saveMacroEdit()">Save Macro</button>
@@ -1186,8 +1287,8 @@ gobbo.every(5, async () =&gt; {
 
     <div class="modal-actions">
       <button class="btn" onclick="closeExtensions()">Cancel</button>
-      <button class="btn btn-danger btn-sm" onclick="clearAllExtensions()" style="margin-right:auto;" title="Remove all extension data">CLEAR ALL</button>
-      <button class="btn btn-fill" onclick="saveExtensions()">SAVE &amp; APPLY</button>
+      <button class="btn btn-danger btn-sm" id="ext-clear-btn" onclick="clearAllExtensions()" style="margin-right:auto;" title="Remove every stylesheet and script in My extensions">CLEAR ALL</button>
+      <button class="btn btn-fill" id="ext-save-btn" onclick="saveExtensions()">SAVE &amp; APPLY</button>
     </div>
   </div>
 </div>
@@ -1351,7 +1452,7 @@ gobbo.every(5, async () =&gt; {
     <div class="data-section data-section-danger">
       <div class="data-section-header" style="color:var(--red-neon);border-color:rgba(255,0,60,0.2);background:rgba(255,0,60,0.04);">&#128465; PURGE</div>
       <div class="data-section-body">
-        <div class="form-hint" style="margin-bottom:10px;"><strong>Cannot be undone.</strong> Export first if you want a backup.</div>
+        <div class="form-hint" style="margin-bottom:10px;">Each one asks first, then offers <strong>UNDO for 10 seconds</strong>; after that it is gone, so export first if you want a backup.</div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
           <button class="btn btn-sm btn-danger" onclick="purgeData('threads')" title="Delete all conversation threads">Purge Threads</button>
           <button class="btn btn-sm btn-danger" onclick="purgeData('cards')" title="Reset characters to the built-in default">Purge Characters</button>
@@ -1511,5 +1612,6 @@ gobbo.every(5, async () =&gt; {
 <script src="js/22-scheduler.js"></script>
 <script src="js/23-card-code.js"></script>
 <script src="js/24-boot.js"></script>
+<script src="js/25-tutorial.js"></script>
 </body>
 </html>

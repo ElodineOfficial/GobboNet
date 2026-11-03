@@ -5,7 +5,7 @@ this one holds few surprises — it stages the same tree, from the same sources,
 and the differences below are the ones RPM and Fedora force.
 
 ```sh
-../build-release.sh          # produces the linux/amd64 binary (or use the
+../scripts/build-release.sh          # produces the linux/amd64 binary (or use the
                              # release binary already at ../linux-amd64/gobbonet)
 ./build-rpm.sh               # fetch + verify the engine, stage, build, check
 sudo dnf install ./dist/gobbonet-*.rpm
@@ -28,7 +28,7 @@ macro whose default differs between hosts is pinned in the spec.
   The package's Release field is taken from that same string (`1.go.<build id>`),
   so the package names the build inside it — not today's date, not whatever
   commit the checkout has moved on to.
-- **the staged tree** against `payload.manifest`, via `../verify-payload.sh`,
+- **the staged tree** against `payload.manifest`, via `../scripts/verify-payload.sh`,
   exactly as the deb does. See that file for why both builds share one list.
 - **the finished package** against `check-rpm.sh`. A package that fails is
   removed from `dist/`.

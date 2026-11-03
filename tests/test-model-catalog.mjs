@@ -63,6 +63,8 @@ function makeEl(id) {
     set innerHTML(v) { this._html = String(v); this._text = ''; this.children = []; },
     get innerHTML() { return this._html; },
     appendChild(c) { this.children.push(c); return c; },
+    attrs: {},
+    setAttribute(k, v) { this.attrs = { ...this.attrs, [k]: String(v) }; },
     querySelector(sel) {
       const tag = sel.toLowerCase();
       const hit = (n) => n.tag === tag || (n.children || []).some(hit);
@@ -173,10 +175,12 @@ await run('Catalogue values are inserted as text, never markup', {
   await tick();
   const list = els['model-catalog-list'];
   eq(list.innerHTML, '', 'nothing was assigned to innerHTML');
-  const name = list.children[0].children[0];
+  // 1.7.9: the first child is the tier heading; the row follows it.
+  const row = list.children.find(c => c.classList.contains('catalog-entry'));
+  const name = row.children[0];
   eq(name.textContent, '<img src=x onerror=alert(1)>',
      'a hostile display name survives as literal text');
-  ok(list.children[0].children.every(c => c.innerHTML === ''),
+  ok(list.children.every(c => c.innerHTML === '' && c.children.every(k => k.innerHTML === '')),
      'no child of the row used innerHTML either');
 });
 
@@ -206,13 +210,14 @@ await run('An installed model is marked and cannot be re-downloaded', {
 }, async ({ ctx, els }) => {
   await ctx.loadModelCatalog();
   await tick();
-  const rows = els['model-catalog-list'].children;
-  const installedRow = rows[1];
+  const rows = els['model-catalog-list'].children.filter(c => c.classList.contains('catalog-entry'));
+  const byName = (n) => rows.find(r => r.children[0].textContent === n);
+  const installedRow = byName('Small Model');
   ok(installedRow.classList.contains('installed'), 'the row is flagged installed');
   const btn = installedRow.children[2];
   ok(btn.disabled === true, 'its button is disabled');
   eq(btn.textContent, 'ALREADY INSTALLED', 'and says so');
-  ok(rows[0].children[2].disabled !== true, 'the uninstalled model is still offered');
+  ok(byName('Big Model').children[2].disabled !== true, 'the uninstalled model is still offered');
 });
 
 /* --- 4. a download already running is adopted, not duplicated ------------- */

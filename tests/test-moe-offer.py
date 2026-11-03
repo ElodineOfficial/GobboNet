@@ -35,10 +35,10 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-GEN = ROOT / 'installer' / 'gen-catalog.py'
+GEN = ROOT / 'catalog' / 'gen-catalog.py'
 PWSH = os.environ.get('GOBBONET_TEST_PWSH') or shutil.which('pwsh')
 
-MOE = {5: 24, 6: 32, 8: 16}   # slot -> system RAM, beside an 8 GB card
+MOE = {5: 24, 6: 32, 8: 16, 17: 24}   # slot -> system RAM, beside an 8 GB card
 FITS = '[ fits: MoE, uses system RAM ]'
 
 
@@ -85,10 +85,10 @@ class Generator(unittest.TestCase):
             self.assertEqual('moe_min_vram' in s, 'min_ram' in s, 'slot %d has half an allowance' % i)
         # The whole-model figure is unchanged: it is still what the card needs
         # without help from system RAM.
-        self.assertEqual({i: int(sections(ini)[i]['min_vram']) for i in MOE}, {5: 18, 6: 24, 8: 14})
+        self.assertEqual({i: int(sections(ini)[i]['min_vram']) for i in MOE}, {5: 18, 6: 24, 8: 14, 17: 22})
 
     def test_committed_catalogues_carry_it(self):
-        for rel in ('installer/models.ini', 'linux-amd64/models.ini'):
+        for rel in ('catalog/models.ini', 'linux-amd64/models.ini'):
             secs = sections((ROOT / rel).read_text(encoding='ascii'))
             got = {i: int(s['min_ram']) for i, s in secs.items() if 'min_ram' in s}
             self.assertEqual(got, MOE, rel)
@@ -130,17 +130,17 @@ class Menu(unittest.TestCase):
                                capture_output=True, text=True, timeout=120)
         self.assertEqual(p.returncode, 0, p.stderr)
         kv = dict(l.split('=', 1) for l in p.stdout.splitlines() if '=' in l)
-        return int(kv['REC']), {i: kv['MK_%d' % i] for i in range(1, 11)}
+        return int(kv['REC']), {i: kv['MK_%d' % i] for i in list(range(1, 11)) + list(range(12, 18))}
 
     def test_8gb_card_with_32gb_ram_is_offered_all_three(self):
         rec, mk = self.menu(8, 32)
         self.assertEqual(rec, 1, 'the recommendation is unchanged')
-        self.assertEqual({i for i, m in mk.items() if m == FITS}, {5, 6, 8})
+        self.assertEqual({i for i, m in mk.items() if m == FITS}, {5, 6, 8, 17})
         self.assertEqual(mk[7], '[ needs ~11 GB VRAM - will be slow ]', 'a dense model is not')
         self.assertEqual(mk[10], '[ needs ~24 GB VRAM - will be slow ]', 'nor is the 35B dense one')
 
     def test_ram_decides_which(self):
-        for ram, fits in ((16, {8}), (24, {5, 8}), (31, {5, 8}), (32, {5, 6, 8})):
+        for ram, fits in ((16, {8}), (24, {5, 8, 17}), (31, {5, 8, 17}), (32, {5, 6, 8, 17})):
             rec, mk = self.menu(8, ram)
             self.assertEqual(rec, 1)
             self.assertEqual({i for i, m in mk.items() if m == FITS}, fits, '%d GB RAM' % ram)
@@ -150,7 +150,7 @@ class Menu(unittest.TestCase):
     def test_12gb_card(self):
         rec, mk = self.menu(12, 32)
         self.assertEqual(rec, 4, 'the recommendation is unchanged')
-        self.assertEqual({i for i, m in mk.items() if m == FITS}, {5, 6, 8})
+        self.assertEqual({i for i, m in mk.items() if m == FITS}, {5, 6, 8, 17})
 
     def test_below_8gb_nothing_changes(self):
         rec, mk = self.menu(6, 64)
@@ -162,6 +162,7 @@ class Menu(unittest.TestCase):
         self.assertEqual(rec, 5)
         self.assertEqual(mk[6], '', 'Qwen3.6 fits a 24 GB card outright')
         self.assertEqual(mk[8], '')
+        self.assertEqual(mk[17], '', 'and so does Qwen3-Coder (22 GB)')
 
     def test_no_gpu_still_says_too_slow(self):
         rec, mk = self.menu(0, 64, tier='cpu_only')

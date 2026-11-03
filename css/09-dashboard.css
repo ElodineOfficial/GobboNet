@@ -274,6 +274,11 @@
   color: var(--green-neon);
   background: rgba(0, 255, 115, 0.08);
 }
+.landing-preset-badge-update {
+  border-color: var(--magenta-dim);
+  color: var(--magenta);
+  background: rgba(217, 0, 255, 0.10);
+}
 .landing-preset-installable {
   cursor: pointer;
 }

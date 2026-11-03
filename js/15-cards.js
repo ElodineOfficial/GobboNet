@@ -51,7 +51,119 @@ function openSettings() {
   // it is correct even if the panel is built before 02-model.js has run.
   try { applyModelCatalogAvailability(); } catch (e) { console.error('[catalog]', e); }
   loadLanPanel();
+  try { initConfigSections(); } catch (e) { console.error('[config-sections]', e); }
   document.getElementById('settings-modal').classList.add('open');
+}
+
+/* ================================================================
+   CONFIG SECTIONS & SEARCH (1.7.9, F3)
+
+   CONFIG is grouped into Basics, Characters & Chat, Model & Performance,
+   Devices & Network and Advanced (chat.html). Nothing was renamed or
+   removed, only moved; tests/test-config-sections.mjs holds that.
+
+   - Advanced is a <details>, closed until asked for. Whether it is open is
+     remembered on this device: a per-viewer convenience, so localStorage,
+     wrapped like every other optional storage read.
+   - The search box at the top finds a setting by any word of its title,
+     note or "?" text, across every section, Advanced included. Typing opens
+     Advanced while a match is inside it and puts it back as it was when the
+     box is cleared. Esc clears.
+   - Hiding is a class (.cfg-hide), never style.display, so search cannot
+     fight the panels that show or hide themselves.
+================================================================ */
+const CFG_ADVANCED_KEY = 'gobbonet.cfg.advancedOpen';
+let _cfgInit = false;
+let _cfgAdvancedBeforeSearch = null;
+
+/** Every setting box CONFIG holds, in order, with the section it is in. */
+function configBlocks() {
+  const modal = document.getElementById('settings-modal');
+  if (!modal) return [];
+  const out = [];
+  modal.querySelectorAll('.cfg-section').forEach(sec => {
+    for (const el of sec.children) {
+      if (el.classList.contains('form-group')) out.push({ el, section: sec });
+    }
+  });
+  // Privacy Status sits after the sections, on its own, always last.
+  const inner = modal.querySelector('.modal');
+  if (inner) for (const el of inner.children) {
+    if (el.classList.contains('form-group')) out.push({ el, section: null });
+  }
+  return out;
+}
+
+function _cfgNorm(s) {
+  return String(s || '').toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+function initConfigSections() {
+  const adv = document.getElementById('cfg-advanced');
+  const box = document.getElementById('cfg-search');
+  if (!adv || !box) return;
+  if (!_cfgInit) {
+    _cfgInit = true;
+    adv.addEventListener('toggle', () => {
+      // Opening it by searching is not a choice to remember.
+      if (_cfgAdvancedBeforeSearch !== null) return;
+      try { localStorage.setItem(CFG_ADVANCED_KEY, adv.open ? '1' : '0'); } catch (_) {}
+    });
+    box.addEventListener('input', () => filterConfig(box.value));
+    box.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && box.value) {
+        e.preventDefault(); e.stopPropagation();
+        box.value = ''; filterConfig('');
+      }
+    });
+  }
+  // Each opening starts with the whole panel showing.
+  if (box.value) { box.value = ''; filterConfig(''); }
+  let open = false;
+  try { open = localStorage.getItem(CFG_ADVANCED_KEY) === '1'; } catch (_) {}
+  adv.open = open;
+}
+
+/**
+ * Show only the settings matching every word of query. Returns how many
+ * matched. An empty query shows everything again.
+ */
+function filterConfig(query) {
+  const words = _cfgNorm(query).split(' ').filter(Boolean);
+  const adv = document.getElementById('cfg-advanced');
+  const empty = document.getElementById('cfg-search-empty');
+  const blocks = configBlocks();
+  let shown = 0, advHit = false;
+
+  for (const { el, section } of blocks) {
+    const title = section ? section.querySelector('.cfg-section-title') : null;
+    const hay = _cfgNorm((title ? title.textContent : '') + ' ' + el.textContent);
+    const hit = words.every(w => hay.includes(w));
+    el.classList.toggle('cfg-hide', !hit);
+    if (hit) { shown++; if (section && section === adv) advHit = true; }
+  }
+  document.querySelectorAll('#settings-modal .cfg-section').forEach(sec => {
+    const any = [...sec.children].some(c => c.classList.contains('form-group') && !c.classList.contains('cfg-hide'));
+    sec.classList.toggle('cfg-hide', words.length > 0 && !any);
+  });
+
+  if (adv) {
+    if (words.length) {
+      if (_cfgAdvancedBeforeSearch === null) _cfgAdvancedBeforeSearch = adv.open;
+      if (advHit && !adv.open) adv.open = true;
+    } else if (_cfgAdvancedBeforeSearch !== null) {
+      const was = _cfgAdvancedBeforeSearch;
+      adv.open = was;
+      // Cleared after the toggle event this may fire, so it is not saved.
+      setTimeout(() => { _cfgAdvancedBeforeSearch = null; }, 0);
+    }
+  }
+  if (empty) {
+    empty.textContent = !words.length ? ''
+      : shown ? `${shown} setting${shown === 1 ? ' matches' : 's match'}.`
+      : 'No setting matches. Try another word, or clear the box.';
+  }
+  return shown;
 }
 
 function closeSettings() {
@@ -289,6 +401,7 @@ function createCard() {
     lorePrompt: '',
     startingLore: '',
     ragStorybook: '',
+    ragWordsToFire: 1,
     memoryFiles: [],
     greeting: '',
     altGreetingsEnabled: false,
@@ -336,6 +449,8 @@ function editCard(id) {
   document.getElementById('card-starting-lore').value = card.startingLore || '';
   loadLorePromptEditor(card);
   document.getElementById('card-rag-storybook').value = card.ragStorybook || '';
+  const _rw = document.getElementById('card-rag-words');
+  if (_rw) _rw.value = String(ragWordsToFireOf(card));
   updateStorybookReadout();
   // Greeting + alt greetings — mirror the carousel toggle pattern so
   // the body opens/closes cleanly when the user re-edits.
@@ -525,7 +640,29 @@ function removeCardMemoryFile(i) {
   const files = _memoryEditorFiles();
   if (!files[i]) return;
   const gone = files.splice(i, 1)[0];
+  const cardId = editingCardId;
   _memoryEditorSet(files, gone.name + ' removed');
+  // The removal lives in the editor until SAVE. UNDO puts it back wherever it
+  // is now: in the editor if that card is still open, otherwise on the saved
+  // card -- unless Cancel already threw the removal away.
+  undoable({
+    label: 'Removed memory file "' + String(gone.name).slice(0, 40) + '"',
+    undo: () => {
+      if (editingCardId === cardId && document.getElementById('card-memory-files')) {
+        const now = _memoryEditorFiles();
+        if (!now.some(f => f.name === gone.name)) now.splice(Math.min(i, now.length), 0, gone);
+        _memoryEditorSet(now, gone.name + ' restored');
+        return;
+      }
+      const card = state.characterCards.find(c => c.id === cardId);
+      if (!card) return;
+      const saved = Array.isArray(card.memoryFiles) ? card.memoryFiles : [];
+      if (!saved.some(f => f && f.name === gone.name)) {
+        saved.splice(Math.min(i, saved.length), 0, gone);
+        card.memoryFiles = saved;
+      }
+    },
+  });
 }
 
 function downloadCardMemoryFile(i) {
@@ -636,6 +773,8 @@ function saveCard() {
   Object.assign(card, readLorePromptEditor(card));
   const _prevStorybook = card.ragStorybook || '';
   card.ragStorybook = document.getElementById('card-rag-storybook').value;
+  const _rwEl = document.getElementById('card-rag-words');
+  if (_rwEl) card.ragWordsToFire = ragWordsToFireOf({ ragWordsToFire: _rwEl.value });
   // Invalidate the parse cache and, if the storybook text changed, embed its
   // docs now (fire-and-forget) so the first chat turn isn't the one paying the
   // indexing cost. Silently no-ops if the embed server is unavailable.
@@ -685,6 +824,29 @@ function saveCard() {
   document.getElementById('char-close-row').style.display = '';
   renderCardGrid();
   renderPersonaGrid();
+}
+
+/** UNDO for a deleted character (1.7.9). Its code scratch space is not kept:
+ *  that is per-session state, rebuilt when the card is active again. */
+function _offerCardUndo(card, at, wasActive) {
+  undoable({
+    label: 'Deleted character "' + String(card.name || 'Unnamed').slice(0, 40) + '"',
+    undo: () => {
+      if (!state.characterCards.some(c => c.id === card.id)) {
+        state.characterCards.splice(Math.min(at, state.characterCards.length), 0, card);
+      }
+      if (wasActive) state.activeCardId = card.id;
+      try { applyCardCode(); } catch (e) { console.error('[card-code]', e); }
+      renderCardGrid(); renderPersonaGrid();
+      try { renderMessages(); } catch (_) {}
+    },
+    commit: () => {
+      if (state._cardCodeStore && !state.characterCards.some(c => c.id === card.id)) {
+        delete state._cardCodeStore[card.id];
+        saveState();
+      }
+    },
+  });
 }
 
 /**
@@ -753,13 +915,16 @@ function cancelCardEdit() {
 function deleteCard() {
   if (state.characterCards.length <= 1) return;
   const _deletedId = editingCardId;
+  const _at = state.characterCards.findIndex(c => c.id === _deletedId);
+  const _card = state.characterCards[_at];
+  const _wasActive = state.activeCardId === _deletedId;
   state.characterCards = state.characterCards.filter(c => c.id !== editingCardId);
   if (state.activeCardId === editingCardId) state.activeCardId = state.characterCards[0].id;
   editingCardId = null;
-  // Drop the deleted card's code scratch space, then load whatever card
-  // just became active. Without this, a deleted card's hooks would keep
-  // running against a character that no longer exists.
-  if (state._cardCodeStore) delete state._cardCodeStore[_deletedId];
+  // Load whatever card just became active. Without this, a deleted card's
+  // hooks would keep running against a character that no longer exists. Its
+  // code scratch space is dropped when the delete becomes final (1.7.9), so
+  // UNDO brings it back with the card.
   saveState();
   try { applyCardCode(); } catch (e) { console.error('[card-code]', e); }
   charEditorClosed();
@@ -768,6 +933,7 @@ function deleteCard() {
   document.getElementById('char-close-row').style.display = '';
   renderCardGrid();
   renderPersonaGrid();
+  if (_card) _offerCardUndo(_card, _at, _wasActive);
 }
 
 function copyCard(id) {
@@ -781,10 +947,15 @@ function copyCard(id) {
 
 function deleteCardById(id) {
   if (state.characterCards.length <= 1) return;
+  const at = state.characterCards.findIndex(c => c.id === id);
+  if (at < 0) return;
+  const card = state.characterCards[at];
+  const wasActive = state.activeCardId === id;
   state.characterCards = state.characterCards.filter(c => c.id !== id);
-  if (state.activeCardId === id) state.activeCardId = state.characterCards[0].id;
+  if (wasActive) state.activeCardId = state.characterCards[0].id;
   saveState();
   renderCardGrid();
+  _offerCardUndo(card, at, wasActive);
 }
 
 

@@ -1,0 +1,9 @@
+{
+  "name": "Hello Gobbo",
+  "version": "1.0.0",
+  "author": "Elodine",
+  "description": "A test mod: a green underline on the title bar, and a hello in the browser console.",
+  "homepage": "https://goblincorps.com/gobbonet_extras",
+  "adult": false,
+  "files": ["hello.css", "hello.js"]
+}

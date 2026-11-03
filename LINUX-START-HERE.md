@@ -1,6 +1,6 @@
-# GobboNet 1.7.8 — Linux
+# GobboNet 1.7.9 — Linux
 
-Install the Debian package with `sudo apt install ./gobbonet_1.7.8*_amd64.deb`, then run `gobbonet` as your normal user or select GobboNet in the application menu. On Fedora, install the RPM instead: `sudo dnf install ./gobbonet-1.7.8-*.fedora.x86_64.rpm` (see `installer-fedora/FEDORA.md`).
+Install the Debian package with `sudo apt install ./gobbonet_1.7.9*_amd64.deb`, then run `gobbonet` as your normal user or select GobboNet in the application menu. On Fedora, install the RPM instead: `sudo dnf install ./gobbonet-1.7.9-*.fedora.x86_64.rpm` (see `installer-fedora/FEDORA.md`).
 
 For the AppImage, make it executable and run it: `chmod +x GobboNet-*-x86_64.AppImage`, then `./GobboNet-*-x86_64.AppImage`, or double-click it in your file manager. It is the Debian package's files in one file, with nothing to install. It needs x86_64 Linux with glibc 2.34 or newer, Bash, Python 3 for the first-run setup, and `fusermount`, which almost every desktop already has. Without FUSE, run it with `--appimage-extract-and-run`. Your settings, models and conversations go to the same folders the packages use, so you can switch between the AppImage and a package without losing anything. It never checks for updates: to update, download the new AppImage and delete the old one.
 
@@ -19,6 +19,8 @@ Welcome → data/model location → password → web port → firewall explanati
 New in 1.7.7: picking a model that needs more GPU memory than the graphics card has asks before downloading it, as `launch.bat` does on Windows. If the card cannot be read, nothing is asked.
 
 New in 1.7.8: pressing Enter in a field moves to the next step. Mixture-of-Experts models say they also suit an 8 GB card with enough system RAM, and on such a machine the GPU-memory question is not asked. If Python 3 is missing, the first run says so instead of failing.
+
+New in 1.7.9: the model picker lists sixteen models, and the password step asks for the minimum set by `min_password_length` in `config.toml` (8 characters by default, as low as 4). Models you already have in the HuggingFace cache, or in folders listed as `model_dirs`, show up in the chat under CONFIG > Model & Performance > Add a Model > FOUND ON THIS COMPUTER.
 
 The wizard opens in your default browser. The chat opens automatically after the server starts listening. Large models can take several minutes to load. Reopening GobboNet opens the existing chat instead of starting a second server. The terminal remains attached to the server; Ctrl+C stops it and the optional embedding engine.
 
@@ -58,7 +60,7 @@ GOBBONET_RUNTIME_DIR="$PWD/linux-amd64" bash installer-linux/build-deb.sh
 python3 tests/test-linux-onboarding.py
 ```
 
-This explicitly reuses the included runtime. For a newly compiled Go server and freshly fetched pinned engine, use the original build-release.sh / build-deb.sh path instead.
+This explicitly reuses the included runtime. For a newly compiled Go server and freshly fetched pinned engine, use the scripts/build-release.sh / installer-linux/build-deb.sh path instead.
 
 A ZIP without `linux-amd64/llama-cpp` (an update ZIP) has no runtime engine to reuse. Point the builder at the included server instead; it fetches the pinned engine and refuses it unless the hash matches `engine.sha256`:
 

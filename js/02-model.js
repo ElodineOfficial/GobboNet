@@ -794,7 +794,7 @@ let MODEL_CATALOG_ENABLED = true;
 
 /* Live, but not confirmed working. While this is false the box says so under
    the button, and says where to look when a download fails. Set it true once
-   the test matrix in docs/INVESTIGATION-in-app-downloads.md has passed. */
+   the test matrix in docs/archive/INVESTIGATION-in-app-downloads.md has passed. */
 let MODEL_CATALOG_CONFIRMED = false;
 
 /* The step a failed download stopped at, in words. The server reports it
@@ -821,6 +821,7 @@ function openModelCatalog() {
   document.getElementById('model-catalog-swap-row').style.display = 'none';
   _catalogDownloadedFile = null;
   loadModelCatalog();
+  loadLocalModels();
   // A download may already be running -- from another tab, or from before
   // this modal was closed. Show it rather than presenting an idle list.
   pollModelDownload({ silent: true });
@@ -946,11 +947,46 @@ function catalogSizeClass(minVRAM) {
 
 function catalogModelMatches(m, f) {
   if (f.type !== 'all' && !(Array.isArray(m.buckets) && m.buckets.indexOf(f.type) >= 0)) return false;
+  if (f.size === 'moe') return catalogTier(m) === 'moe';
   if (f.size !== 'any') {
     const c = catalogSizeClass(m.minVRAM);
     if (!c || c.key !== f.size) return false;
   }
   return true;
+}
+
+/* ================================================================
+   TIERS (1.7.9, F2)
+
+   The list is grouped under headings, in this order. The server says which
+   tier a model is in (internal/catalog Entry.Tier: the catalogue's own hint,
+   else MoE, else by GPU memory); this works the same thing out for a model
+   that arrives without one. The first three are the SIZE row's own Light /
+   Medium / Heavy, so the window uses one vocabulary; MoE gets its own
+   heading because its size is not the whole story -- it also runs on a
+   smaller card beside system RAM. Within a tier, smallest download first.
+================================================================ */
+const CATALOG_TIERS = [
+  { key: 'small', label: 'LIGHT', blurb: '8 GB of GPU memory or less' },
+  { key: 'mid',   label: 'MEDIUM', blurb: '9 to 16 GB' },
+  { key: 'large', label: 'HEAVY', blurb: 'more than 16 GB' },
+  { key: 'moe',   label: 'MIXTURE OF EXPERTS', blurb: 'big models that also run on a smaller card beside system RAM' },
+];
+function catalogTier(m) {
+  if (m && CATALOG_TIERS.some(t => t.key === m.tier)) return m.tier;
+  if (m && m.moeMinVRAM > 0 && m.minRAM > 0) return 'moe';
+  const gb = Number(m && m.minVRAM);
+  if (!(gb > 16)) return gb > 8 ? 'mid' : 'small';
+  return 'large';
+}
+
+/* An unverified entry (no SHA-256 pinned in the catalogue) needs a second
+   click, here and on the server (internal/server/models.go). The first click
+   arms the button for a few seconds and says why. */
+const CATALOG_ARM_MS = 8000;
+let _catalogArmed = null;   // { index, until }
+function catalogArmed(index) {
+  return !!(_catalogArmed && _catalogArmed.index === index && Date.now() < _catalogArmed.until);
 }
 
 function showCatalogFilters(on) {
@@ -991,7 +1027,29 @@ function renderCatalogList() {
     box.textContent = 'No models match. Choose ALL MODELS or ANY SIZE to see more.';
     return;
   }
-  shown.forEach(m => {
+  const order = CATALOG_TIERS.map(t => t.key);
+  const sorted = shown.slice().sort((a, b) =>
+    (order.indexOf(catalogTier(a)) - order.indexOf(catalogTier(b))) ||
+    ((Number(a.sizeGB) || 0) - (Number(b.sizeGB) || 0)));
+  let lastTier = null;
+  sorted.forEach(m => {
+    const tier = catalogTier(m);
+    if (tier !== lastTier) {
+      lastTier = tier;
+      const t = CATALOG_TIERS.find(x => x.key === tier);
+      const head = document.createElement('div');
+      head.className = 'catalog-tier';
+      head.setAttribute('role', 'heading');
+      head.setAttribute('aria-level', '3');
+      const lab = document.createElement('span');
+      lab.textContent = t.label;
+      const blurb = document.createElement('span');
+      blurb.className = 'catalog-tier-blurb';
+      blurb.textContent = t.blurb;
+      head.appendChild(lab);
+      head.appendChild(blurb);
+      box.appendChild(head);
+    }
     const row = document.createElement('div');
     row.className = 'catalog-entry' + (m.installed ? ' installed' : '');
 
@@ -1017,20 +1075,44 @@ function renderCatalogList() {
     const btn = document.createElement('button');
     btn.className = 'btn btn-sm';
     btn.type = 'button';
+    const unverified = m.verified === false;
     if (m.installed) {
       btn.textContent = 'ALREADY INSTALLED';
       btn.disabled = true;
+    } else if (unverified && catalogArmed(m.index)) {
+      btn.textContent = 'CLICK AGAIN TO DOWNLOAD';
+      btn.classList.add('btn-amber');
+      btn.onclick = () => { _catalogArmed = null; startModelDownload(m.index, m.display, m.file, { confirmUnverified: true }); };
+    } else if (unverified) {
+      btn.textContent = 'DOWNLOAD';
+      btn.onclick = () => {
+        _catalogArmed = { index: m.index, until: Date.now() + CATALOG_ARM_MS };
+        renderCatalogList();
+        setTimeout(() => { if (_catalogArmed && Date.now() >= _catalogArmed.until) { _catalogArmed = null; renderCatalogList(); } },
+                   CATALOG_ARM_MS + 50);
+      };
     } else {
       btn.textContent = 'DOWNLOAD';
       btn.onclick = () => startModelDownload(m.index, m.display, m.file);
     }
     row.appendChild(btn);
 
+    if (unverified && !m.installed) {
+      const note = document.createElement('div');
+      note.className = 'catalog-entry-note';
+      note.textContent = catalogArmed(m.index)
+        ? 'Unverified: no checksum is pinned for this one in the catalogue, so it is checked against ' +
+          'HuggingFace\u2019s own record of the file only. Click again to download it anyway.'
+        : 'Unverified: no checksum pinned in the catalogue.';
+      row.appendChild(note);
+    }
+
     box.appendChild(row);
   });
 }
 
-async function startModelDownload(index, display, file) {
+async function startModelDownload(index, display, file, opts) {
+  const confirmUnverified = !!(opts && opts.confirmUnverified);
   const log = document.getElementById('model-catalog-log');
   document.getElementById('model-catalog-progress').style.display = '';
   document.getElementById('model-catalog-swap-row').style.display = 'none';
@@ -1044,9 +1126,18 @@ async function startModelDownload(index, display, file) {
     const r = await fetch('/model-download', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ index: index })
+      body: JSON.stringify(confirmUnverified ? { index: index, confirmUnverified: true } : { index: index })
     });
     const j = await r.json().catch(() => ({}));
+    if (r.status === 409 && j.needsConfirm) {
+      /* The server wants the second click (the list said verified, but the
+         catalogue it holds now does not). Back to the list, armed. */
+      document.getElementById('model-catalog-progress').style.display = 'none';
+      _catalogDownloadedFile = null;
+      _catalogArmed = { index: index, until: Date.now() + CATALOG_ARM_MS };
+      renderCatalogList();
+      return;
+    }
     if (!r.ok) {
       log.textContent = j.error || ('Could not start the download (HTTP ' + r.status + ').');
       return;
@@ -1068,6 +1159,140 @@ async function startModelDownload(index, display, file) {
   } catch (e) {
     log.textContent = 'Could not reach the server: ' + e.message;
   }
+}
+
+/* ================================================================
+   FOUND ON THIS COMPUTER (1.7.9, issue #12)
+
+   GGUFs already on disk outside the models folder: the HuggingFace cache
+   and any folders in model_dirs (config.toml). USE IT links the file into
+   the models folder -- no copy, no download -- and it is then in the
+   header dropdown like any other model.
+
+     GET  /local-models.json    what was found, each with an id
+     POST /local-models/link    {id}: link that one
+
+   Like the catalogue, the page sends back only an id the server handed it,
+   never a path. createElement + textContent throughout: the names are file
+   names from someone's disk.
+================================================================ */
+let _localModels = [];
+
+async function loadLocalModels() {
+  const box = document.getElementById('model-catalog-local');
+  if (!box || !IS_SERVED) return;
+  box.textContent = '';
+  let data;
+  try {
+    const r = await fetch('/local-models.json', { cache: 'no-store' });
+    if (!r.ok) return;
+    data = await r.json();
+  } catch (e) {
+    return;
+  }
+  _localModels = Array.isArray(data.found) ? data.found : [];
+  renderLocalModels(data);
+}
+
+function renderLocalModels(data) {
+  const box = document.getElementById('model-catalog-local');
+  if (!box) return;
+  box.textContent = '';
+  const head = document.createElement('div');
+  head.className = 'catalog-tier';
+  head.setAttribute('role', 'heading');
+  head.setAttribute('aria-level', '3');
+  const lab = document.createElement('span');
+  lab.textContent = 'FOUND ON THIS COMPUTER';
+  const blurb = document.createElement('span');
+  blurb.className = 'catalog-tier-blurb';
+  const looked = ((data && data.roots) || []).filter(r => r.exists).length;
+  blurb.textContent = _localModels.length
+    ? 'linked into your models folder, not copied'
+    : (looked ? 'nothing new in the HuggingFace cache or model_dirs' : 'no HuggingFace cache here; add folders with model_dirs in config.toml');
+  head.appendChild(lab);
+  head.appendChild(blurb);
+  box.appendChild(head);
+
+  _localModels.forEach(f => {
+    const row = document.createElement('div');
+    row.className = 'catalog-entry local-entry' + (f.state === 'linked' ? ' installed' : '');
+    const name = document.createElement('div');
+    name.className = 'catalog-entry-name';
+    name.textContent = f.repo ? f.repo + ' \u00b7 ' + f.name : f.name;
+    row.appendChild(name);
+    const meta = document.createElement('div');
+    meta.className = 'catalog-entry-meta';
+    meta.textContent = (Number(f.sizeGB) || 0).toFixed(1) + ' GB \u00b7 in ' + (f.where || '?') +
+      (f.kind === 'hf-cache' ? ' (HuggingFace cache)' : '');
+    row.appendChild(meta);
+    const btn = document.createElement('button');
+    btn.className = 'btn btn-sm';
+    btn.type = 'button';
+    if (f.state === 'linked') {
+      btn.textContent = 'IN YOUR MODELS';
+      btn.disabled = true;
+    } else if (f.state === 'name-taken') {
+      btn.textContent = 'NAME IN USE';
+      btn.disabled = true;
+      btn.title = 'A different file called ' + f.file + ' is already in your models folder.';
+    } else {
+      btn.textContent = 'USE IT';
+      btn.onclick = () => linkLocalModel(f.id, f.file, row);
+    }
+    row.appendChild(btn);
+    box.appendChild(row);
+  });
+  ((data && data.notes) || []).forEach(n => {
+    const d = document.createElement('div');
+    d.className = 'form-hint';
+    d.textContent = n;
+    box.appendChild(d);
+  });
+}
+
+async function linkLocalModel(id, file, row) {
+  const btn = row && row.querySelector ? row.querySelector('button') : null;
+  if (btn) { btn.disabled = true; btn.textContent = 'LINKING...'; }
+  try {
+    const r = await fetch('/local-models/link', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: id })
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      if (btn) { btn.disabled = false; btn.textContent = 'USE IT'; }
+      catalogLocalNote(j.error || ('Could not link it (HTTP ' + r.status + ').'));
+      return false;
+    }
+    _catalogDownloadedFile = j.file || file;
+    if (typeof loadModelsList === 'function') { try { loadModelsList(); } catch (e) {} }
+    await loadLocalModels();
+    // The same offer a finished download gets: switch now, or later.
+    document.getElementById('model-catalog-progress').style.display = '';
+    document.getElementById('model-catalog-dl-title').textContent = 'Ready: ' + (j.file || file);
+    document.getElementById('model-catalog-bar').style.width = '100%';
+    document.getElementById('model-catalog-log').textContent =
+      'Linked into your models folder (' + (j.how || 'link') + '). Nothing was copied or downloaded.';
+    document.getElementById('model-catalog-swap-row').style.display = '';
+    catalogNote('It is in the header dropdown now. Switching to it below loads it now; ' +
+                'removing it from your models folder later leaves the original where it is.');
+    return true;
+  } catch (e) {
+    if (btn) { btn.disabled = false; btn.textContent = 'USE IT'; }
+    catalogLocalNote('Could not reach the server: ' + e.message);
+    return false;
+  }
+}
+
+function catalogLocalNote(text) {
+  const box = document.getElementById('model-catalog-local');
+  if (!box) return;
+  const d = document.createElement('div');
+  d.className = 'form-hint catalog-local-error';
+  d.textContent = text;
+  box.appendChild(d);
 }
 
 /* The note line carries anything that must outlive a poll tick. Passing an

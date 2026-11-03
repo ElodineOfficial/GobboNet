@@ -275,6 +275,9 @@ $SessionTtlHours = 12
 # static + proxy fine, but /swap-model will refuse.
 $HotSwapEnabled = ($ServerExe -ne '') -and (Test-Path $ServerExe) -and (Test-Path $ModelDir)
 
+# 1.7.9: deprecated, removed in 1.8. gobbonet.exe replaced this server in 1.7.
+Write-Host "[*] DEPRECATED: fileserver.ps1 is the legacy server and will be removed in GobboNet 1.8." -ForegroundColor Yellow
+Write-Host "    gobbonet.exe replaces it. Re-extract the full package so gobbonet.exe is present." -ForegroundColor Yellow
 Write-Host ("fileserver.ps1 starting (hotswap-v3) pid={0}  root={1}" -f $PID, $Root)
 Write-Host ("  llm-port={0} search-port={1} listen-port={2}" -f $LlmPort, $SearchPort, $ListenPort)
 Write-Host ("  hot-swap={0}" -f $(if ($HotSwapEnabled) { 'enabled' } else { 'disabled (missing server exe or model dir)' }))
@@ -1338,7 +1341,12 @@ function Build-LaunchScript {
         '--parallel',  '1'
     )
     
-    if ($useJinja) { $argList += '--jinja' }
+    # 1.7.9: the engine runs Jinja ON unless told otherwise, and with Jinja on
+    # a built-in NAME is read as Jinja source -- "mistral-v7-tekken" becomes
+    # the whole prompt. A name always goes with --no-jinja, and Jinja's state
+    # is always stated rather than left to the engine default.
+    if ($chatTemplateFile -eq '' -and $chatTemplate) { $useJinja = $false }
+    if ($useJinja) { $argList += '--jinja' } else { $argList += '--no-jinja' }
     
     # A sidecar template is a FILE -> --chat-template-file (loads the file).
     # A built-in name is a STRING -> --chat-template (selects the C++ template).

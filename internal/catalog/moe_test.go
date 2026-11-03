@@ -62,12 +62,13 @@ func TestLoadReadsTheMoEAllowance(t *testing.T) {
 func TestShippedMoEModelsCarryASaneAllowance(t *testing.T) {
 	c, err := Load(bundledINI)
 	if err != nil {
-		t.Skip("installer/models.ini not present")
+		t.Skip("catalog/models.ini not present")
 	}
 	want := map[string]bool{
-		"google_gemma-4-26B-A4B-it-Q4_K_S.gguf": true,
-		"Qwen_Qwen3.6-35B-A3B-Q4_K_M.gguf":      true,
-		"gpt-oss-20b-MXFP4.gguf":                true,
+		"google_gemma-4-26B-A4B-it-Q4_K_S.gguf":    true,
+		"Qwen_Qwen3.6-35B-A3B-Q4_K_M.gguf":         true,
+		"gpt-oss-20b-MXFP4.gguf":                   true,
+		"Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf": true,
 	}
 	got := 0
 	for _, e := range c.Entries {
@@ -112,7 +113,7 @@ func TestParseRemoteReadsTheMoEAllowance(t *testing.T) {
 func TestTheLiveListBorrowsTheMoEAllowance(t *testing.T) {
 	bundled, err := Load(bundledINI)
 	if err != nil {
-		t.Skip("installer/models.ini not present")
+		t.Skip("catalog/models.ini not present")
 	}
 	live := &Catalog{Entries: []Entry{
 		{Index: 5, File: "google_gemma-4-26B-A4B-it-Q4_K_S.gguf", MinVRAM: 16},

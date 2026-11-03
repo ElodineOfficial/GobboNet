@@ -247,8 +247,13 @@ ok(any("recommended pick [4]" in l for l in c.out), "and the hint names the reco
 c = menu(["nope", "1"], rec="0")
 ok(not any("recommended pick" in l for l in c.out), "the hint does not offer ENTER when there is no recommendation")
 
-print("\n=== things that are not 1-11 ===")
-for bad in ["Y", "yes", "n", "0", "12", "3a", " 3", "3 ", "-1", "1.5", "ten", "11 "]:
+print("\n=== the six added in 1.7.9 are answers too ===")
+for good in ["12", "13", "14", "15", "16", "17"]:
+    c = menu([good])
+    ok(c.env.get("MODEL_CHOICE") == good and hints(c) == 0, f"{good!r} is taken first time")
+
+print("\n=== things that are not 1-17 ===")
+for bad in ["Y", "yes", "n", "0", "18", "3a", " 3", "3 ", "-1", "1.5", "ten", "11 "]:
     c = menu([bad, "7"])
     ok(c.env.get("MODEL_CHOICE") == "7" and hints(c) == 1, f"{bad!r} is asked again")
 
@@ -264,7 +269,7 @@ ok(c.env.get("MODEL_CHOICE") == "2", "four bad answers then a good one still get
 
 print("\n=== the block around it ===")
 src_block = "\r\n".join(lines[start:end])
-for i, n in enumerate(range(1, 11), 1):
+for i, n in enumerate(list(range(1, 11)) + list(range(12, 18)), 1):
     ok(re.search(r'^if "!MODEL_CHOICE!"=="%d" \(\r?$' % n, RAW, re.M) is not None,
        f"[{n}] still has its download branch")
 ok(re.search(r'^if "!MODEL_CHOICE!"=="11"', RAW, re.M) is None,

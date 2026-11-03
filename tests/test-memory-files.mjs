@@ -207,12 +207,14 @@ const budget = () => ({ token_limit: 8192, budget: 7000 });
   ok(r.injections.length === 0 && r.record.candidates.some(x => x.eviction_reason === 'budget'),
      'no room in the budget: nothing injected, and the candidate is recorded as evicted for budget');
 
-  // The storybook is exactly as it was: its prose does not take the keyword path.
+  // Storybook plain text has its own path without embeddings since 1.7.9
+  // (names and distinctive words; tests/test-rag-storybook.mjs). It is not
+  // the memory-file fallback, which stays for memory files only.
   c = ragContext({ embed: 'down' });
   const book = 'Bram the blacksmith owes a favour since the winter storm.';
   r = await c.runRetrieval(thread('Bram the blacksmith and the winter storm favour'), card({ memoryFiles: [], ragStorybook: book }), 4000, budget());
-  ok(r.injections.length === 0 && !r.record.config.memory_keyword_fallback,
-     'a storybook-only card without embeddings behaves as before: no keyword path for storybook prose');
+  ok(r.injections.length === 1 && !r.record.config.memory_keyword_fallback,
+     'a storybook-only card without embeddings: its plain text fires on its own path, not the memory fallback');
   c = ragContext({ embed: 'down' });
   r = await c.runRetrieval(thread('anything'), card({ memoryFiles: [] }), 4000, budget());
   ok(r.injections.length === 0 && r.record.cards_in_play[0].memory_chunks === 0, 'a card with nothing authored and no memory: nothing to do');
@@ -274,6 +276,7 @@ function editorContext() {
     confirm: () => c._confirmAnswer !== false,
     saveState: () => { c.saves = (c.saves || 0) + 1; },
     ragIngestCard: () => { c.ingests = (c.ingests || 0) + 1; },
+    undoable: (o) => { c.lastUndo = o; },   // js/18-utils.js UNDO (1.7.9)
     editingCardId: null,
   });
   vm.runInContext(between(CARDS, '/* ================================================================\n   MEMORY FILES in the editor', 'function saveCard() {', 'js/15-cards.js'), c);
@@ -303,6 +306,12 @@ const fileOf = (name, text, size) => ({ name, size: size ?? text.length, text: a
 
   c.removeCardMemoryFile(0);
   ok(!c._memoryEditorFiles().some(f => f.name === 'Notes.MD') && /Notes\.MD removed/.test(c.els['card-memory-readout'].textContent), 'remove takes it off the pending list');
+  // 1.7.9: and offers UNDO, which puts it back in the editor, in its place.
+  ok(c.lastUndo && /Removed memory file "Notes\.MD"/.test(c.lastUndo.label), 'remove offers UNDO, naming the file', c.lastUndo && c.lastUndo.label);
+  c.lastUndo.undo();
+  ok(c._memoryEditorFiles()[0] && c._memoryEditorFiles()[0].name === 'Notes.MD' && /Notes\.MD restored/.test(c.els['card-memory-readout'].textContent),
+     'UNDO puts it back first in the list, and says so');
+  c.removeCardMemoryFile(0);
   c.downloadCardMemoryFile(0);
   eq(c.downloads[0], ['lore.md', '# Lore\nOld kings.'], 'download hands back the file as it is stored');
 

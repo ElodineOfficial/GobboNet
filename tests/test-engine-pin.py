@@ -1,7 +1,7 @@
 """One llama.cpp pin: launch.bat reads engine.sha256 like everything else (#63).
 
 engine.sha256 says it is "the build BOTH installers bundle", and build-deb.sh,
-build-rpm.sh, installer/build-installer.sh and `gobbonet engine install`
+build-rpm.sh, and `gobbonet engine install` (installer/build-installer.sh until 1.7.9)
 (internal/engine) all read it. launch.bat carried its own pin instead, and the
 two drifted: Linux shipped b10456 while every Windows first run downloaded
 b9294. The Windows installer did not even install engine.sha256, so on an
@@ -95,17 +95,16 @@ print("\n=== every reader agrees on the Windows asset ===")
 want = f"llama-{BUILD}-bin-win-vulkan-x64.zip"
 la = re.search(r'set "LLAMA_ASSET=llama-!LLAMA_PIN_TAG!(-bin-win-vulkan-x64\.zip)"', LAUNCH)
 go = (ROOT / "internal" / "engine" / "engine.go").read_text()
-bi = (ROOT / "installer" / "build-installer.sh").read_text()
 ok(la and f"llama-{BUILD}{la.group(1)}" == want, f"launch.bat downloads {want}")
 ok('"llama-"+build+"-bin-win-vulkan-x64.zip", "WIN_GPU_SHA256"' in go, "gobbonet engine install fetches the same asset with the same key")
-ok('LLAMA_ASSET="llama-${LLAMA_BUILD}-bin-win-vulkan-x64.zip"' in bi, "installer/build-installer.sh names the same asset")
+ok(not (ROOT / "installer").exists(), "the retired installer/ design is gone (1.7.9), so it cannot name a different asset")
 
 print("\n=== engine.sha256 reaches every Windows copy ===")
 nsi = (ROOT / "installer-win" / "gobbonet.nsi").read_text()
 ok('File "${APPSRC}\\engine.sha256"' in nsi, "the Windows installer installs it beside launch.bat and gobbonet.exe")
 ok('Delete "$INSTDIR\\engine.sha256"' in nsi, "and its uninstaller removes it")
 ok("`engine.sha256`" in (ROOT / "installer-win" / "README.md").read_text(), "installer-win/README.md lists it for staging")
-mz = (ROOT / "make-zip.sh").read_text()
+mz = (ROOT / "scripts" / "make-zip.sh").read_text()
 ok(re.search(r"^engine\.sha256$", mz, re.M) is not None, "make-zip.sh requires it in the ZIP")
 
 print(f"\n{passed} passed, {failed} failed")

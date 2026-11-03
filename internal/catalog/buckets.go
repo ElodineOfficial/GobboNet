@@ -7,7 +7,7 @@ import (
 
 // Buckets are the Add a Model window's types (roadmap 1.7.7): a model is
 // tagged with any of them in the catalogue's `tags`, and the window filters on
-// them. installer/gen-catalog.py holds the same list, and
+// them. catalog/gen-catalog.py holds the same list, and
 // tests/test-catalog-buckets.py keeps the two equal.
 //
 // "jack-of-all-trades" is its own tag rather than the existing "general"

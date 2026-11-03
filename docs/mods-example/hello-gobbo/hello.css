@@ -1,0 +1,3 @@
+/* Hello Gobbo: proves a mod's stylesheet loaded. Switch the mod off and the
+   underline goes at once. */
+.chat-header { box-shadow: inset 0 -2px 0 var(--green-neon, #00ff73); }

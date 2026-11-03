@@ -89,6 +89,11 @@ const DEFAULT_CARD = {
   // ON DEMAND — only the entity/subtree a scene needs enters context. See
   // parseStorybook() and the RAG ENGINE block for the full grammar.
   ragStorybook: '',
+  // How many of a plain-text storybook entry's distinctive words must appear
+  // in the chat to pull it in (1.7.9). 1 by default, the way lorebooks
+  // usually behave; 2 or 3 for a large world bible that fires too easily.
+  // A name in the entry always pulls it in, whatever this is.
+  ragWordsToFire: 1,
   // Memory files (issue #41): [{ name, text, updated }] -- .md notes the
   // character reads back through retrieval, imported in the editor or saved
   // from a ```file:name.md block it wrote. Read via cardMemoryFiles()
@@ -305,6 +310,10 @@ const DEFAULT_SETTINGS = {
   // images are unaffected and always work.
   allowRemoteImages: false,
   remoteImageNoticeSeen: false,   // one-time notice bookkeeping; see 24-boot.js
+  // The first-run tour (js/25-tutorial.js) was offered and answered, or taken.
+  // A setting rather than device storage so it syncs, and so `tour_seen = true`
+  // in config.toml's [ui] table can turn the offer off for every new device.
+  tourSeen: false,
   // The character modal refuses casual dismissal (single backdrop click,
   // Escape) while an editor is open, because closeCharacters() saves nothing
   // and openCharacters() rebuilds the list -- a half-written character is
@@ -436,7 +445,10 @@ const DEFAULT_PERSONA = {
 // as a count form (the chain trigger); listing the prefix only catches the
 // bare one but the chain pattern doesn't go through the custom-macro list
 // anyway — it's handled in sendMessage.
-const RESERVED_MACROS = new Set(['char', 'user', 'current_dat', 'auto_continue']);
+// input and input1..input9 are the placeholders for text passed to a macro
+// (1.7.9), so no macro may be named after them.
+const RESERVED_MACROS = new Set(['char', 'user', 'current_dat', 'auto_continue',
+  'input', 'input1', 'input2', 'input3', 'input4', 'input5', 'input6', 'input7', 'input8', 'input9']);
 
 // Default macros pre-seeded on first load (serve as working examples).
 // New entries here are also seeded onto existing users via the migration
@@ -456,6 +468,12 @@ const DEFAULT_MACROS = [
   {
     trigger: 'fast_forward',
     text: 'Please fast-forward to a new scene that continues the storyline naturally and appropriately.'
+  },
+  // 1.7.9: an out-of-character note, {{SYSTEM: ...}} or {{SYSTEM:}} ... --
+  // the text passed to it goes on the line after this one.
+  {
+    trigger: 'SYSTEM',
+    text: 'The following is an out of character directive. Do not acknowledge or respond to this in the scene:'
   }
 ];
 

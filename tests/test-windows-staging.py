@@ -7,7 +7,7 @@ reads its file list from gobbonet.nsi's File "${APPSRC}\\..." lines, so this
 runs it against the repo with a stand-in gobbonet.exe and checks:
 
   - every file the script installs is staged, from where README.md says
-    (PURGE.md from docs/, models.ini from installer/), byte for byte;
+    (PURGE.md from docs/, models.ini from catalog/), byte for byte;
   - nothing else is staged;
   - with no gobbonet.exe it refuses, rather than staging a payload without the
     server.
@@ -25,7 +25,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 NSI = (ROOT / 'installer-win' / 'gobbonet.nsi').read_text(encoding='utf-8', errors='replace')
-SOURCES = {'PURGE.md': 'docs/PURGE.md', 'models.ini': 'installer/models.ini'}
+SOURCES = {'PURGE.md': 'docs/PURGE.md', 'models.ini': 'catalog/models.ini'}
 
 
 def installed():

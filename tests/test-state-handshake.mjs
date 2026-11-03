@@ -8,7 +8,7 @@ const apply = persistence.slice(persistence.indexOf('function applyLoadedState('
 const cardCode = read('23-card-code.js');
 const neutralize = cardCode.slice(cardCode.indexOf('function neutralizeUntrustedCode('), cardCode.indexOf('/**\n * Strip code off'));
 const snapshot = () => ({threads: [], characterCards: [{id:'a',name:'One',customCodeEnabled:true},{id:'b',name:'Two'}], activeCardId:'b', personaCards:[{id:'p',name:'Reader'}], activePersonaId:'p', settings:{remoteImageNoticeSeen:true}, extensions:{enabled:true}});
-function harness({storage='denied', remote=snapshot(), status=200, delayed=false}={}) {
+function harness({storage='denied', remote=snapshot(), status=200, delayed=false, withNeutralize=true}={}) {
   let release, fail=status;
   const gate = delayed ? new Promise(resolve => {release=resolve;}) : Promise.resolve();
   const calls=[], paints=[], cache=new Map();
@@ -36,7 +36,7 @@ function harness({storage='denied', remote=snapshot(), status=200, delayed=false
         json:async()=>url.includes('/info')?{size:500,mtime:42}:structuredClone(remote),text:async()=>JSON.stringify(remote)};
     }};
   vm.createContext(ctx);
-  vm.runInContext(apply+'\n'+neutralize+'\n'+read('06-state-sync.js'),ctx);
+  vm.runInContext(apply+'\n'+(withNeutralize?neutralize:'')+'\n'+read('06-state-sync.js'),ctx);
   // UI and ledger persistence are not the subject of this harness.
   vm.runInContext('updateSyncIndicator = () => {}; persistSyncMeta = () => {};',ctx);
   return {ctx,calls,paints,cache,release,setStatus:v=>{fail=v;},get:e=>vm.runInContext(e,ctx),boot(){vm.runInContext('ensureSyncLedger=async()=>true; reconcileWithServer=async()=>{};',ctx);vm.runInContext(read('24-boot.js'),ctx);return ctx.window.GobboNet.ready;}};
@@ -111,3 +111,20 @@ for(const remote of [[],null,{threads:'bad'},{threads:[{id:'x',messages:'bad'}]}
  assert.equal(result.ok,false);assert.match(result.error,/Network unavailable/);
 }
 console.log('State restore and integration handshake regressions passed');
+
+// 1.7.9 step 5 (PR #5 review): the restore path used to call the quarantine
+// behind `typeof neutralizeUntrustedCode === 'function'`, so a missing function
+// silently skipped it and synced code arrived switched ON. It must fail closed:
+// no quarantine, no restore.
+for (const inPlace of [false, true]) {
+  const h=harness({storage:'working', withNeutralize:false});
+  let threw=false, result;
+  try { result = await h.ctx.restoreFromServer({inPlace, silent:true}); } catch(e) { threw=true; }
+  // restoreFromServer reports failure by returning false (it alerts when not silent).
+  threw = threw || result === false;
+  const armed=(h.ctx.state.characterCards||[]).some(c=>c.customCodeEnabled) || !!(h.ctx.state.extensions&&h.ctx.state.extensions.enabled);
+  assert.ok(threw, 'restore without the quarantine must fail (inPlace='+inPlace+')');
+  assert.ok(!armed, 'no code may arrive switched on when the quarantine is missing (inPlace='+inPlace+')');
+  assert.ok(!h.cache.has('state'), 'nothing is written to storage when the quarantine is missing (inPlace='+inPlace+')');
+}
+console.log('restore fails closed when the code quarantine is missing');

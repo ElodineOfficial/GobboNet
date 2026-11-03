@@ -52,6 +52,12 @@ $min = @{
     8 = 14     # gpt-oss 20B               ~12 GB
     9 = 9      # Command R 7B              ~6.6 GB
     10 = 24    # Command R 35B             ~19 GB
+    12 = 4     # Llama 3.2 1B Instruct     ~1.3 GB  (smallest in the catalogue)
+    13 = 10    # Mistral Nemo 12B          ~7.5 GB
+    14 = 12    # Phi-4 14B                 ~9.1 GB
+    15 = 18    # Mistral Small 3.2 24B     ~14.3 GB
+    16 = 24    # Gemma 4 31B IT            ~19.6 GB
+    17 = 22    # Qwen3-Coder 30B-A3B MoE   ~18.6 GB
 }
 
 # Mixture-of-Experts models also fit a smaller card, when system RAM can hold
@@ -74,6 +80,7 @@ $moeRam = @{
     5 = 24     # Gemma 4 26B-A4B MoE       ~16 GB
     6 = 32     # Qwen3.6 35B-A3B MoE       ~22 GB
     8 = 16     # gpt-oss 20B               ~12 GB
+    17 = 24    # Qwen3-Coder 30B-A3B MoE   ~18.6 GB
 }
 
 $hwPath = Join-Path $PSScriptRoot 'hardware.json'
@@ -95,7 +102,7 @@ if (-not $h) {
     'HW_VRAM=0'
     'HW_RAM=0'
     'HW_DISK=0'
-    foreach ($i in 1..10) { 'MK_' + $i + '=' }
+    foreach ($i in (1..10 + 12..17)) { 'MK_' + $i + '=' }
     exit 0
 }
 
@@ -140,7 +147,7 @@ else                       { $rec = 2 }
 'HW_DISK=' + $disk
 'REC=' + $rec
 
-foreach ($i in 1..10) {
+foreach ($i in (1..10 + 12..17)) {
     if ($i -eq $rec) {
         $m = '[ RECOMMENDED FOR YOUR PC ]'
     } elseif ($t -eq 'cpu_only') {

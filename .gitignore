@@ -56,21 +56,30 @@ hardware.ini
 # stale the moment upstream touches one of the 40 files, and serves the stale
 # copy without complaining.
 /web/
+# And the copy a running server writes beside itself so the page it serves can
+# be read on disk (internal/webui Export). Running linux-amd64/gobbonet from a
+# checkout -- tests/test-linux-onboarding.py does -- leaves one here; make-zip.sh
+# deletes it, and it must never ride along in a commit.
+/linux-amd64/web/
 
 # Release bundles from build-release.sh
 /dist/
 
-# Installer build artifacts. models.ini IS committed -- it is generated, but
-# committing it means makensis works without running the generator first.
-/installer/payload/
-/installer/GobboNetSetup-*.exe
+# catalog/models.ini IS committed -- it is generated from launch.bat by
+# catalog/gen-catalog.py, but committing it means every builder works without
+# running the generator first. (installer/, the retired design, went in 1.7.9.)
 
-# Bundled llama.cpp for the installer payload. Fetched and hash-checked by
-# build-installer.sh against the pin in /engine.sha256, the same one the deb
-# and rpm builds read -- it used to be placed here by hand with no pin at all.
-# NOT /vendor/ -- that path at the module root is reserved by the Go
-# toolchain, and a non-Go directory there breaks `go build`.
-/installer/vendor/
+# Release-only files. make-zip.sh writes them into the archive; they are not
+# source, and committing them is how a stale 1.7.6 START-HERE.md and
+# SHA256SUMS.txt sat at the root for two releases.
+/NO-ENGINE-IN-THIS-ZIP.txt
+/PATCH-README.txt
+/SHA256SUMS.txt
+/START-HERE.md
+
+# installer-win/stage-payload.sh's output, and what makensis builds from it.
+/staging/
+/installer-win/GobboNetSetup-*.exe
 
 # Runtime state written next to the config on a portable install
 /config.toml
@@ -138,3 +147,6 @@ hardware.ini.tmp
 legacy-import.json
 # launch.bat's "first-run setup not finished" mark (cmd/gobbonet/launch.go)
 .gobbonet-setup-pending
+
+# Bundled Linux engine binaries
+/linux-amd64/llama-cpp/

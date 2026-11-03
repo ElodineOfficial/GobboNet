@@ -58,8 +58,9 @@ def scratch_tree(runtime=None):
     nothing into the real installer-linux/."""
     d = Path(tempfile.mkdtemp())
     atexit.register(shutil.rmtree, d, True)
+    (d / 'scripts').mkdir()
     for name in ('verify-payload.sh', 'payload.manifest'):
-        shutil.copy(ROOT / name, d / name)
+        shutil.copy(ROOT / 'scripts' / name, d / 'scripts' / name)
     (d / 'installer-linux').mkdir()
     for name in ('build-appimage.sh', 'AppRun'):
         shutil.copy(LINUX / name, d / 'installer-linux' / name)

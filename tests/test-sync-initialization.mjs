@@ -77,4 +77,15 @@ h.ctx.invalidateLedger(undefined,true);
 await assert.rejects(h.ctx.ensureSyncLedger(),/412/);
 assert.equal(h.remote().threads[0].id,'racing-device');
 assert.equal(h.get("overwriteSyncTargets.has('shared')"),false,'conflict must not arm a blind retry');
-console.log('7 sync initialization regression scenarios passed');
+// A brand-new profile: no chats here, nothing on the server. Nothing is sent,
+// and the indicator says idle instead of "syncing..." for good (1.7.9).
+h=harness({remote:null});
+h.ctx.state.threads=[];
+vm.runInContext("stateSync.status='syncing'",h.ctx);
+assert.equal(await h.ctx.ensureSyncLedger(),false);
+assert.equal(h.calls.filter(c=>c.method==='PUT').length,0,'an empty device does not create the backup');
+assert.equal(h.get('stateSync.status'),'idle','and it does not claim to be syncing');
+vm.runInContext("stateSync.status='error'",h.ctx);
+await h.ctx.ensureSyncLedger();
+assert.equal(h.get('stateSync.status'),'error','a real error is left showing');
+console.log('8 sync initialization regression scenarios passed');

@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>GobboNet setup</title>
 <style>
-  /* Palette lifted from installer/gobbonet.nsi so the Linux first run and the
+  /* Palette lifted from the old installer/gobbonet.nsi so the Linux first run and the
      Windows wizard read as the same product: MUI_BGCOLOR, MUI_TEXTCOLOR,
      GN_CHECKCOLOR, GN_BRANDCOLOR, and the InstallColors green. */
   :root {
@@ -100,7 +100,7 @@
       <input type="password" id="pw1" autocomplete="new-password" autofocus>
       <label for="pw2">Confirm</label>
       <input type="password" id="pw2" autocomplete="new-password">
-      <p class="note" style="margin-top:14px">Six characters minimum. You will type
+      <p class="note" style="margin-top:14px"><span id="pw-min">8</span> characters minimum. You will type
          this once in your browser, and once on your phone the first time it connects.</p>
       <div class="row"><button id="b1">Continue</button></div>
     </form>
@@ -187,6 +187,7 @@
 <script>
 (function () {
   var state = {}, mode = "local", lan = "off", auto = "off", pick = null, poll = null;
+  var pwMin = 8;   // until /api/state says otherwise; the server has the last word
 
   function $(id) { return document.getElementById(id); }
   // Enter in a field submits its step (issue #63). Each step with inputs is a
@@ -259,6 +260,8 @@
 
   fetch("/api/state").then(function (r) { return r.json(); }).then(function (s) {
     state = s;
+    // min_password_length from config.toml, as the server enforces it (1.7.9).
+    if (s.min_password > 0) { pwMin = s.min_password; $("pw-min").textContent = String(pwMin); }
     if (!s.has_engine) {
       $("c-local").querySelector(".d").textContent =
         "This install has no bundled engine.";
@@ -295,7 +298,7 @@
   $("b1").onclick = function () {
     var p1 = $("pw1").value, p2 = $("pw2").value;
     if (p1 !== p2) return fail("The two passwords do not match.");
-    if (p1.length < 6) return fail("Use at least six characters.");
+    if (p1.length < pwMin) return fail("Use at least " + pwMin + " characters.");
     post("/api/password", { password: p1, confirm: p2 })
       .then(function () { step("port"); }).catch(function (e) { fail(e.message); });
   };

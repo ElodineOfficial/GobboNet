@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "min_client": "1.7.0",
+  "generated": "2026-10-27T19:05:16Z",
+  "mods": [
+    {
+      "id": "hello-gobbo",
+      "type": "mod",
+      "name": "Hello Gobbo",
+      "version": "1.0.0",
+      "author": "Elodine",
+      "description": "A test mod: a green underline on the title bar, and a hello in the browser console.",
+      "homepage": "https://goblincorps.com/gobbonet_extras",
+      "adult": false,
+      "files": [
+        {
+          "path": "hello.css",
+          "url": "https://goblincorps.com/gobbonet_mods/hello-gobbo/hello.css",
+          "sha256": "b2690e30b7fd7703e105017af5a961dd44396b649e5221425831507873818df0",
+          "size": 179
+        },
+        {
+          "path": "hello.js",
+          "url": "https://goblincorps.com/gobbonet_mods/hello-gobbo/hello.js.txt",
+          "sha256": "20cf22f392e01e867133e7ccca973efc528fb43fe6bef9ff21edfae01d3d4339",
+          "size": 285
+        }
+      ]
+    }
+  ]
+}

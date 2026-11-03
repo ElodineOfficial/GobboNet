@@ -16,7 +16,7 @@ against the tree as it ships except where marked.
 `build-release.sh` produces the binaries the other two package. Run it first.
 
 ```sh
-./build-release.sh                    # Go binaries, stamped from VERSION
+./scripts/build-release.sh                    # Go binaries, stamped from VERSION
 # Windows: installer-win/ -- stage the payload, then makensis (installer-win/README.md)
 cd installer-linux && ./build-deb.sh  # gobbonet_<VERSION>+go.<sha>-1_amd64.deb
 ./build-appimage.sh                   # GobboNet-<deb version>-x86_64.AppImage, from that .deb
@@ -30,17 +30,17 @@ in the script, like the engine, and the build checks the result embeds no
 update address. It does not use appimagetool. Set `SOURCE_DATE_EPOCH` for a
 reproducible image. Background: `docs/changelog/CHANGELOG-1.7.8-appimage.md`.
 
-**The Windows installer is `installer-win/`, not `installer/`.** It is the dark
+**The Windows installer is `installer-win/`.** It is the dark
 installer: Welcome, Destination, Password, Port, Install, the Defender notice,
 then Finish with *Launch GobboNet* and *Set up phone access*. The first launch
 opens `launch.bat` in a console window, which fetches llama.cpp, detects the
 hardware and offers the model list. It is the Windows installer from 1.7.0 on,
 1.7.4 apart (below).
 
-`installer/` is a separate design that was never meant to ship. It chooses a
-backend and downloads a model during setup. It was built by mistake for 1.7.4,
-and again for the first 1.7.7 test build, and both times it was the wrong
-installer. Do not build it for a release.
+Until 1.7.9 there was also an `installer/` directory: a separate design that
+chose a backend and downloaded a model during setup. It was never meant to
+ship, was built by mistake for 1.7.4 and the first 1.7.7 test build, and was
+removed in 1.7.9. Its model catalogue lives on in `catalog/`.
 
 The Debian revision — the `-1` — counts PACKAGING-only changes to one upstream
 version and resets when `VERSION` moves. `build-deb.sh` defaults it to 1 so a
@@ -55,8 +55,8 @@ It used to be the literal `-3`, left over from 1.7.3's three packaging repairs,
 which meant 1.7.4 shipped claiming two earlier Debian revisions that never
 existed.
 
-`VERSION` is the single input to all three. Tag `v` + `VERSION` (for 1.7.8,
-`v1.7.8`) before building, or `TestVersionFileMatchesUpstreamRelease` will fail:
+`VERSION` is the single input to all three. Tag `v` + `VERSION` (for 1.7.9,
+`v1.7.9`) before building, or `TestVersionFileMatchesUpstreamRelease` will fail:
 it compares `VERSION` against the nearest git tag, on purpose.
 
 Two places carry the number as a literal and move with `VERSION`. A test fails
@@ -72,68 +72,28 @@ if either is left behind:
 
 | Need | Check | Status here |
 |---|---|---|
-| Go ≥ 1.25 | `go version` | **unavailable in the authoring sandbox** — see below |
-| NSIS 3.12, large strings | `makensis -VERSION`; `-HDRINFO` says sections are 32792 bytes | what built 1.7.7's installer-win; see installer-win/README.md |
-| NSIS 3.09 | `makensis -VERSION` | only for the unreleased `installer/` below |
+| Go ≥ 1.25 | `go version` | required by every builder |
+| NSIS 3.12, large strings | `makensis -VERSION`; `-HDRINFO` says sections are 32792 bytes | what built every installer-win release since 1.7.7; how to build it on Linux is in installer-win/README.md |
 | `dpkg-deb`, `zstd`, `fakeroot` | for the deb | |
 | Network to GitHub releases | `build-deb.sh` fetches the engine; `build-appimage.sh` the runtime, once | |
 | `mksquashfs` with zstd (squashfs-tools) | for the AppImage | |
 
-`build-installer.sh` warns if NSIS is not 3.09, because Elodine's 1.3 build used
-it and a version match keeps the output byte-comparable for review. 3.09 is what
-this was compiled against.
-
 ---
 
-## The one thing not done here
+## Toolchain
 
-**The Go binaries are not built, so no `.deb` and no `.exe` are in the zip.**
-
-The sandbox has Go 1.22.2 from apt against a `go 1.25.0` module, and both the
-toolchain download and `proxy.golang.org` are blocked:
-
-```
-$ go build ./cmd/gobbonet
-go: downloading go1.25.0 (linux/amd64)
-go: download go1.25.0 for linux/amd64: toolchain not available
-
-$ GOTOOLCHAIN=local go build ./cmd/gobbonet
-go: go.mod requires go >= 1.25.0 (running go 1.22.2; GOTOOLCHAIN=local)
-
-$ curl -o /dev/null -w '%{http_code}' https://proxy.golang.org/...   403
-$ curl -o /dev/null -w '%{http_code}' https://go.googlesource.com/crypto   403
-```
-
-`GOOS=windows` fails at the same line, so there is no `.exe` either — the
-installer is compile-verified but has no binary to wrap.
-
-Working around that would mean building Go from source through a two-stage
-bootstrap and then hand-redirecting every module to a GitHub mirror, because
-`golang.org/x/...` resolves through a blocked host. The result would not verify
-against `go.sum`. For a project that pins a SHA-256 on the engine, on the embed
-model and on every catalogue entry, a binary assembled from unverified
-dependency sources is not something to hand over — it would be the one
-unpinned thing in the build.
-
-**The alternative was worse.** Repacking the 1.7 binary out of the uploaded
-`.deb` and relabelling it 1.7.4 would produce packages that pass every
-smoke test and contain none of this release: no upstream `/v1/models`, so #47,
-#48 and #27 still broken; no ranked LAN addresses; no `doctor` firewall section.
-The version string would name a release it was not built from — exactly what
-`TestVersionFileMatchesUpstreamRelease` exists to catch.
-
-So: run the three commands above on a machine with a real toolchain. The
-packaging inputs are all verified and waiting.
+Go 1.25 or newer, no cgo, to build at all. A release is never built with an
+older Go than the release before it: `scripts/go-floor.sh`, which
+`make-zip.sh` and `build-release.sh` call first, refuses anything older than
+`GO_FLOOR` (go1.25.14, what built 1.7.8 and 1.7.9). Raise it when a release
+moves to a newer Go. Go's patch releases are mostly security fixes. Through 1.7.4 the authoring sandbox could not reach
+the Go module proxy, so that release's zip shipped without binaries; that
+history is in `docs/changelog/`. Every builder since builds both binaries, and
+`scripts/make-zip.sh` refuses to produce an archive with a platform missing.
 
 ---
 
 ## What *was* verified
-
-**`installer/gobbonet.nsi`** — compiled clean with NSIS 3.09, 0 errors,
-0 warnings, producing a 772,678-byte installer, against a payload built from the
-real `stage-web.sh` output and the real `.bat` / `.ps1` files. Only
-`gobbonet.exe` and the `llama-cpp/` contents were stubbed, and neither is parsed
-at compile time — they are `File` directives.
 
 **`stage-web.sh`** — runs clean; `chat.html`'s 24 js and 17 css references match
 the tree, and all five JS modules changed this release reach the payload.
@@ -142,11 +102,9 @@ the tree, and all five JS modules changed this release reach the payload.
 `gobbonet_1_7_go_9051875-1_amd64.deb`: same paths, same `usr/lib/gobbonet/`
 layout, same `usr/bin/gobbonet` shim, same `web/` placement.
 
-**`VERSION`** — read by `build-release.sh`, `build-installer.sh` and
-`build-deb.sh`; `installer/gobbonet.nsi` takes it as a `-D` define and hardcodes
-nothing. (This section was verified for 1.7.4. Since then `installer-win/`'s
-script and the page stamp carry literals of their own; see "Order matters"
-above.)
+**`VERSION`** — read by `build-release.sh` and `build-deb.sh`.
+`installer-win/`'s script and the page stamp carry literals of their own; see
+"Order matters" above.
 
 ---
 
@@ -158,7 +116,7 @@ updating every hash in the same commit.
 
 It moved here from `installer-linux/` in 1.7.4. Before that only the deb build
 pinned anything — the Windows installer bundled whatever was sitting in
-`installer/vendor/`, with a look for `ggml-vulkan.dll` as the only check. An
+the old `installer/vendor/`, with a look for `ggml-vulkan.dll` as the only check. An
 `.exe` and a `.deb` carrying the same version number could therefore contain
 different engines, with nothing recording which. That is precisely the question
 you want answered when one platform reproduces a bug and the other does not.
@@ -171,8 +129,6 @@ still identifiable after installation. To reuse an engine you already have:
 SKIP_ENGINE_FETCH=1 ./build-deb.sh          # uses installer-linux/vendor/
 BUNDLE_CPU_ENGINE=1  ./build-deb.sh         # also ship the CPU-only archive
 
-SKIP_ENGINE_FETCH=1 ./build-installer.sh    # installer/ only, which does not ship
-LLAMA_CPP=/path/to/llama-cpp ./build-installer.sh   # bypasses the pin
 ```
 
 The Windows installer (`installer-win/`) bundles no engine. `launch.bat`

@@ -39,16 +39,24 @@ import (
 	"github.com/ElodineOfficial/GobboNet/internal/config"
 	"github.com/ElodineOfficial/GobboNet/internal/engine"
 	"github.com/ElodineOfficial/GobboNet/internal/modelfetch"
+	"github.com/ElodineOfficial/GobboNet/internal/procjob"
 )
 
-// MinPasswordLength matches the console path and the NSIS wizard's own rule.
-const MinPasswordLength = 6
+// minPasswordLength is min_password_length from the config being set up: 8
+// unless the user set it, never below the floor (1.7.9). The wizard pages are
+// told it through /api/state, so they cannot drift from what this enforces.
+func (s *server) minPasswordLength() int {
+	if s.cfg == nil || s.cfg.MinPasswordLen < config.MinPasswordFloor {
+		return config.DefaultMinPasswordLength
+	}
+	return s.cfg.MinPasswordLen
+}
 
 // Options configures a wizard run. The launcher supplies all of these so the
 // packaged paths are used rather than whatever the discovery order finds.
 type Options struct {
 	ConfigPath  string // --config
-	CatalogPath string // --catalog: installer/models.ini, shipped beside the binary
+	CatalogPath string // --catalog: catalog/models.ini, shipped beside the binary
 	ServerExe   string // --server-exe: the packaged llama-server the launcher picked
 	NoBrowser   bool   // --no-browser: print the URL instead of opening it
 	Force       bool   // --force: re-run even if setup already completed
@@ -260,6 +268,7 @@ func (s *server) handleIndex(w http.ResponseWriter, r *http.Request) {
 
 type stateResponse struct {
 	PasswordSet bool               `json:"password_set"`
+	MinPassword int                `json:"min_password"`
 	BackendMode string             `json:"backend_mode"`
 	Models      []catalogModel     `json:"models"`
 	Default     int                `json:"default"`
@@ -286,6 +295,7 @@ func (s *server) handleState(w http.ResponseWriter, r *http.Request) {
 
 	resp := stateResponse{
 		PasswordSet: s.passwordSet,
+		MinPassword: s.minPasswordLength(),
 		BackendMode: s.backendMode,
 		Default:     s.cat.Default,
 		CPUOnly:     s.cat.CPUOnly,
@@ -315,9 +325,9 @@ func (s *server) handlePassword(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &req) {
 		return
 	}
-	if len(req.Password) < MinPasswordLength {
+	if min := s.minPasswordLength(); len(req.Password) < min {
 		writeErr(w, http.StatusBadRequest,
-			fmt.Sprintf("Use at least %d characters.", MinPasswordLength))
+			fmt.Sprintf("Use at least %d characters.", min))
 		return
 	}
 	if req.Confirm != "" && req.Password != req.Confirm {
@@ -676,7 +686,11 @@ func OpenBrowser(url string) {
 	}
 	// Best effort by design: if no browser opens, the URL is already on stdout
 	// and in the launcher's log.
-	_ = cmd.Start()
+	//
+	// Detached: on Windows `gobbonet launch` runs setup inside a kill-on-close
+	// job (1.7.9, PR #15). A browser started from inside it, when none was
+	// already running, would be ended along with GobboNet.
+	_ = procjob.StartDetached(cmd)
 }
 
 func decode(w http.ResponseWriter, r *http.Request, v any) bool {

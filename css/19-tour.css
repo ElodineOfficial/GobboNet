@@ -1,0 +1,77 @@
+/* @gobbonet-split css/19-tour.css
+   The optional first-run tour (1.7.9, F4; js/25-tutorial.js). A spotlight on
+   the real control and a card beside it. Colours come from 01-tokens.css.
+   @end-split-header */
+
+.tour-root {
+  position: fixed;
+  inset: 0;
+  z-index: 9600;           /* over panels (100-300) and the UNDO toast (9500) */
+}
+.tour-root[hidden] { display: none; }
+
+/* Room for CONFIG's pinned search row when a stop scrolls a box to the top. */
+[data-tour] { scroll-margin-top: 72px; }
+
+/* The shade is the spotlight's own shadow, so the hole is always exactly
+   where the control is. With nothing to point at it collapses to a point in
+   the middle and shades the whole window. */
+.tour-spot {
+  position: fixed;
+  pointer-events: none;
+  border: 2px solid var(--cyan-bright);
+  border-radius: var(--radius);
+  box-shadow: 0 0 0 200vmax rgba(0, 0, 0, 0.66), var(--glow-cyan);
+  transition: left 0.18s ease, top 0.18s ease, width 0.18s ease, height 0.18s ease;
+}
+.tour-spot.tour-spot-none {
+  left: 50% !important; top: 50% !important;
+  width: 0 !important; height: 0 !important;
+  border-width: 0;
+}
+
+.tour-card {
+  position: fixed;
+  width: min(360px, calc(100vw - 32px));
+  box-sizing: border-box;
+  padding: 16px 18px 14px;
+  background: var(--surface);
+  border: 1px solid var(--cyan-dim);
+  border-radius: var(--radius);
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6), var(--glow-cyan);
+  font-family: var(--font);
+  color: var(--white);
+}
+.tour-count {
+  font-size: 11px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--cyan-mid);
+}
+.tour-count:empty { display: none; }
+.tour-title {
+  margin: 4px 0 8px;
+  font-size: 15px;
+  letter-spacing: 1px;
+  color: var(--magenta);
+}
+.tour-text { margin: 0; font-size: 13px; line-height: 1.55; }
+.tour-note { margin: 8px 0 0; font-size: 12px; color: rgba(255, 255, 255, 0.5); }
+.tour-note:empty { display: none; }
+.tour-actions { display: flex; align-items: center; gap: 8px; margin-top: 14px; }
+.tour-spacer { flex: 1; }
+.tour-back[hidden] { display: none; }
+.tour-card button:focus-visible { outline: 1px solid var(--cyan-bright); outline-offset: 2px; }
+
+/* Screen readers only. */
+.tour-live {
+  position: absolute;
+  width: 1px; height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tour-spot { transition: none; }
+}

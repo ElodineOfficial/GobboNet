@@ -27,17 +27,19 @@ class PackagePermissions(unittest.TestCase):
                 root = Path(tmp)
                 # The inputs stage-web.sh itself requires, read from it so the
                 # two lists cannot drift (1.7.8 added the home-screen files).
-                stage = (ROOT / 'stage-web.sh').read_text()
+                stage = (ROOT / 'scripts' / 'stage-web.sh').read_text()
                 files = re.search(r'^REQUIRED_FILES="([^"]*)"', stage, re.M).group(1).split()
                 dirs = re.search(r'^REQUIRED_DIRS="([^"]*)"', stage, re.M).group(1).split()
-                for name in ['stage-web.sh', *files]:
+                (root / 'scripts').mkdir()
+                shutil.copyfile(ROOT / 'scripts' / 'stage-web.sh', root / 'scripts' / 'stage-web.sh')
+                for name in files:
                     shutil.copyfile(ROOT / name, root / name)
                 for name in dirs:
                     shutil.copytree(ROOT / name, root / name)
                 # Private source assets must still become public release assets.
                 for f in root.rglob('*'):
                     f.chmod(0o700 if f.is_dir() else 0o600)
-                subprocess.run(['bash', str(root / 'stage-web.sh')], check=True, umask=mask)
+                subprocess.run(['bash', str(root / 'scripts' / 'stage-web.sh')], check=True, umask=mask)
                 out = root / 'internal/webui/assets'
                 self.assertTrue((out / 'chat.html').is_file(), 'stage-web.sh produced no chat.html')
                 for f in [out, *out.rglob('*')]:

@@ -3,11 +3,11 @@
 # installer-linux
 
 Builds `gobbonet.deb` for Ubuntu, Mint, Pop!_OS and Debian. Sibling of
-`installer/`, which builds the Windows `.exe`. **Neither touches the codebase** —
-both wrap a finished binary produced by `../build-release.sh`.
+`installer-win/`, which builds the Windows `.exe`. **Neither touches the codebase** —
+both wrap a finished binary produced by `../scripts/build-release.sh`.
 
 ```sh
-../build-release.sh          # produces dist/<version>/…-linux-amd64.tar.gz
+../scripts/build-release.sh          # produces dist/<version>/…-linux-amd64.tar.gz
 ./build-deb.sh               # produces dist/gobbonet_<version>_amd64.deb
 ```
 

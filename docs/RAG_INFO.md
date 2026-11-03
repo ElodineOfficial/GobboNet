@@ -12,18 +12,68 @@ from is an engineering spec; this is just the part you actually touch.)
 
 ## The short version
 
-You write your whole character/world bible into **one field** called **RAG Storybook**.
-You don't choose a retriever or a format — the parser looks at the *shape* of each line
-and routes it automatically:
+You write your whole character/world bible into **one field** called **RAG Storybook**,
+in either of two ways — or both, in the same field. Only the entries the current scene
+touches go into the prompt, so a 40KB cast costs you only the slice a scene needs.
 
-- **Plain prose** → gets embedded and pulled in when the scene is *about* something
-  related, even if no exact keyword appears (semantic retrieval).
-- **Structured lines with tags** (e.g. `selah_tags: angel [1.0], divine [0.8]`) →
-  pulled in when those tags **fire** (weighted-tag retrieval).
+**1. Just write it.** Plain text works, with nothing else to learn:
 
-Only the slice the current scene actually needs gets injected into the prompt. So you
-can write a 40KB cast once and never pay 40KB of budget per turn — you pay only for the
-entity or sub-thread the scene touches.
+```
+Selah is an angel wandering the world as a human. He sometimes holds a light ethereal
+glow to him, but he never would simply show his wings. He is relatively indifferent to
+most things and tries not to get involved in human affairs. Some of his friends in town
+call him ‘Neighbor’.
+```
+
+Every **four sentences** is an entry (a blank line also starts a new one). An entry is
+pulled in when the conversation:
+
+- **names someone or something in it** — *Selah*, *Neighbor*. A name is any word written
+  with a capital letter that is not just starting a sentence; or
+- **mentions one of its distinctive words** — *angel*, *light*, *wing* above — the way
+  lorebooks usually behave. Common words (*never*, *things*, *people*) never count, and
+  a word that several entries share counts for less (two entries sharing *angel*: it
+  takes another of their words as well).
+
+Want it more specific? Under the field, **Plain text fires on** asks for **2** or **3** of
+an entry's words instead of 1. A name still pulls its entry in by itself. This is per
+character, so a small companion can stay at 1 while a big world bible asks for 2.
+
+This works **without the embedding model**. When the embedding model is running, entries
+are also matched by meaning, so a scene about a winged stranger can pull Selah in
+without naming him.
+
+**2. Label it.** For control over exactly what fires an entry:
+
+```
+# Selah, [.7 wing, .3 light, 1.0 angel]
+Sometimes called ‘Neighbor’ by his friends in town, Selah is secretly an angel walking
+the mortal realm. He is relatively indifferent to most things and tries not to get
+involved in human affairs.
+```
+
+- **The header (`# Selah`) is the entry's name and its primary trigger.** Saying "Selah"
+  fires it.
+- **The bracket holds weighted tags,** each weight between 0.0 and 1.0. The entry also
+  fires when the tags found in the conversation **add up to 1.0**:
+  - *angel* (1.0) fires it alone;
+  - *wing* + *light* (0.7 + 0.3) fire it together;
+  - *wing* alone (0.7) does not.
+- **Everything under the header, up to the next header or a `---` line, is the entry.**
+  Keep it to about four sentences.
+- **The model never sees the header line, the tags or the weights.**
+
+Weights can be written either way round — `.7 wing` or `wing [0.7]` — and a tag with no
+number is 1.0. `# Selah [wing (0.7), angel]` and `# Selah: [.7 wing, 1.0 angel]` work
+too. Matching ignores plurals and simple endings: *wing* matches *wings*, *Selah*
+matches *Selah's*.
+
+The line under the field shows how your text was read, for example **read as → 1 named
+entry: Selah (3 tags) · 4 plain-text entries**. If a header did not take, it is not in
+that list.
+
+The rest of this page is the power-user layer: more control lines under a header,
+relations between entries, and the global knobs.
 
 ---
 
@@ -41,10 +91,9 @@ Rule of thumb: if the model needs it *every* turn, it's Starting Lore. If it's a
 reference body where only the relevant bit matters at any given moment, it's the
 Storybook.
 
-As you type into the Storybook, a live readout shows **"parsed N entities · M tags ·
-K prose chunks"** so you can see how your text was interpreted — i.e. which lines were
-read as structured tags vs. which were treated as prose. Use it to confirm your
-structured lines actually parsed.
+As you type into the Storybook, a live readout shows how your text was read — **read as →
+2 named entries: Selah (3 tags), reinhard · 5 plain-text entries** — so you can see which
+lines became named entries with tags, and how much was taken as plain text.
 
 ---
 
@@ -214,8 +263,9 @@ the threshold is your coarse one.
    shouldn't, lower its weight (`divine [1.0]` → `divine [0.5]`). The weighted-tag Pareto
    view (fire frequency × weight per tag) is where you spot which terms to re-tune.
 4. **Remember the reliable path.** If the embedding server is ever down, semantic
-   retrieval quietly switches off but **weighted-tag retrieval keeps working**. Tags are
-   your dependable trigger; prose-only entities depend on embeddings being available.
+   retrieval quietly switches off, but names, weighted tags and plain-text entries'
+   words keep working. Since 1.7.9, plain text does not depend on the
+   embedding model being available.
 
 ---
 
@@ -249,7 +299,7 @@ character wrote itself.
 - **Without the retrieval model.** When the embedding model isn't running (or
   Retriever A is switched off), memory files are matched by shared words instead —
   a part needs at least two distinct words in common with the conversation. Storybook
-  prose doesn't take this path; it works exactly as before.
+  plain text has its own version of this: names, and two distinctive words.
 - **Limits.** Up to 20 files per character, 100,000 characters each, 400,000 in total.
 - **Where they go.** With the card: its PNG/JPG exports and imports, character and full
   backups, and device sync. A shared card's files are checked on the way in (names
@@ -260,11 +310,16 @@ character wrote itself.
 
 ## One-page cheat sheet
 
-- **One input:** RAG Storybook. Prose → semantic; `*_tags` lines → weighted trigger.
+- **One input:** RAG Storybook, written two ways:
+  - **plain text**: every four sentences is an entry; it fires on a name in it or one
+    of its words (2 or 3 if you set **Plain text fires on**), and on meaning with the
+    embedding model;
+  - **labelled**: `# Selah, [.7 wing, .3 light, 1.0 angel]` then the entry. The name
+    fires it, and so do tags adding up to 1.0.
 - **Always-on vs. on-demand:** Starting Lore is always present; the Storybook is pulled
   only when relevant.
-- **Tag syntax:** `name_tags: term [weight], term, term [weight]` — default weight is
-  `1.0`, bare terms = `1.0`.
+- **Tag syntax:** `# Name, [.7 term, 1.0 term]` on the header, or
+  `name_tags: term [weight], term, term [weight]` — weight first or last, default `1.0`.
 - **Firing:** sum of matched tag weights ≥ `fire_threshold` (default `1.0`).
 - **Identity:** any single tag at weight ≥ threshold fires on its own.
 - **Suppress:** `name_offscreen_default: true` blocks passing-theme pulls; subtrees can

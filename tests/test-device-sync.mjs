@@ -80,6 +80,14 @@ function stateServer() {
         return ok(200, { etag: cur.etag, messages: cur.body.messages.length, mtime: doc.mtime });
       }
       m = path.match(/^\/state\/threads\/([^/]+)$/);
+      if (m && method === 'DELETE') {
+        if (srv.hangDeletes) return new Promise(() => {});   // the page is gone: no answer ever arrives
+        const id = decodeURIComponent(m[1]); const cur = doc && doc.threads.get(id);
+        if (!cur) return ok(404, {});
+        if (h['If-Match'] && h['If-Match'] !== cur.etag) return ok(412, { etag: cur.etag });
+        doc.threads.delete(id); doc.etag = etag(); doc.mtime = ++mtime;
+        return ok(200, { status: 'ok', mtime: doc.mtime });
+      }
       if (m && method === 'GET') {
         const cur = doc && doc.threads.get(decodeURIComponent(m[1]));
         return cur ? ok(200, cur.body, { ETag: cur.etag }) : ok(404, {});
@@ -172,6 +180,31 @@ await check('an index holding a conversation we did not send is not adopted', as
   c.get('invalidateLedger()');
   await c.ctx.pushChangedConversations();
   assert.equal(c.get('seededIndexMatches({ threads: [{ id: "a", etag: "e", messages: 1 }, { id: "x", etag: "e", messages: 1 }] }, new Map([["a", { n: 1, hash: "h" }]]))'), false);
+});
+
+console.log('\n=== A2. leaving the page sends every deletion at once ===');
+await check('closing the tab after deleting three chats: all three DELETEs are sent, not just the first', async () => {
+  const srv = stateServer();
+  const c = client(srv, [chat('a', 1), chat('b', 1), chat('c', 1)]);
+  c.get('invalidateLedger()');
+  await c.ctx.pushChangedConversations();
+  assert.deepEqual([...srv.doc.threads.keys()].sort(), ['a', 'b', 'c']);
+  c.ctx.state.threads = [];
+  srv.hangDeletes = true;                  // the page is torn down: no reply ever comes back
+  const before = srv.calls.length;
+  c.ctx.pushChangedConversations({ keepalive: true });
+  for (let i = 0; i < 5; i++) await Promise.resolve();
+  const deletes = srv.calls.slice(before).filter(x => x.startsWith('DELETE'));
+  assert.equal(deletes.length, 3, 'deletes sent before teardown: ' + JSON.stringify(deletes));
+});
+await check('while the page stays, deletions still go one at a time (and all arrive)', async () => {
+  const srv = stateServer();
+  const c = client(srv, [chat('a', 1), chat('b', 1)]);
+  c.get('invalidateLedger()');
+  await c.ctx.pushChangedConversations();
+  c.ctx.state.threads = [];
+  await c.ctx.pushChangedConversations();
+  assert.equal(srv.doc.threads.size, 0);
 });
 
 console.log('\n=== B. load-time defaults are not a change ===');

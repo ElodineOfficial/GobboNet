@@ -132,14 +132,14 @@ class WhatIsPublic(unittest.TestCase):
 
 class Build(unittest.TestCase):
     def test_built_into_the_binary(self):
-        stage = (ROOT / 'stage-web.sh').read_text(encoding='utf-8')
+        stage = (ROOT / 'scripts' / 'stage-web.sh').read_text(encoding='utf-8')
         files = re.search(r'^REQUIRED_FILES="([^"]*)"', stage, re.M).group(1).split()
         dirs = re.search(r'^REQUIRED_DIRS="([^"]*)"', stage, re.M).group(1).split()
         self.assertIn('manifest.webmanifest', files)
         self.assertIn('icons', dirs)
 
     def test_source_ships_in_the_zip(self):
-        mz = (ROOT / 'make-zip.sh').read_text(encoding='utf-8')
+        mz = (ROOT / 'scripts' / 'make-zip.sh').read_text(encoding='utf-8')
         listing = mz.split('for rel in \\', 1)[1].split('\ndo\n', 1)[0].split()
         self.assertIn('manifest.webmanifest', listing)
         self.assertIn('icons', listing)

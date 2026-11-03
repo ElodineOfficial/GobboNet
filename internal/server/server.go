@@ -45,6 +45,7 @@ import (
 	"github.com/ElodineOfficial/GobboNet/internal/jobs"
 	"github.com/ElodineOfficial/GobboNet/internal/keyring"
 	"github.com/ElodineOfficial/GobboNet/internal/models"
+	"github.com/ElodineOfficial/GobboNet/internal/mods"
 	"github.com/ElodineOfficial/GobboNet/internal/proxy"
 	"github.com/ElodineOfficial/GobboNet/internal/state"
 	"github.com/ElodineOfficial/GobboNet/internal/static"
@@ -123,6 +124,17 @@ type Server struct {
 	catForced time.Time
 	catForce  bool
 
+	// The endorsed mod list (1.7.9, F6), held for modListHold; modlist.go.
+	// modHTTP is nil in use (the default client) and a test server's client
+	// in tests.
+	mods         *mods.Store
+	modsOnce     sync.Once
+	modListMu    sync.Mutex
+	modListGot   *mods.List
+	modListAt    time.Time
+	modListNotes []string
+	modHTTP      *http.Client
+
 	// downloads enforces one model download at a time, the wizard's policy.
 	downloads downloads
 
@@ -166,6 +178,10 @@ func New(cfg config.Config, mode config.Mode, sup *supervisor.Supervisor) (*Serv
 		secret:       cfg.AccessSecret,
 		tuning:       newTuning(cfg),
 	}
+
+	// Mods removed last run were kept only so UNDO could bring them back; no
+	// page can be offering that UNDO any more (1.7.9).
+	s.modStore().PurgeRemoved()
 
 	s.info = models.NewInfo(cfg.LLMURL, cfg.LLMAPIKey, cfg.ModelDir, mode == config.ModeLocal)
 	if sup != nil {
@@ -338,6 +354,21 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	case path == "/model-download":
 		s.handleModelDownload(w, r)
+
+	// Add a Model's "Found on this computer" (1.7.9, issue #12): the HF cache
+	// and model_dirs, read only when asked; see localmodels.go.
+	case path == "/local-models.json":
+		s.handleLocalModels(w, r)
+	case path == "/local-models/link":
+		s.handleLocalModelLink(w, r)
+
+	// Mods (1.7.9, F1); see mods.go for who may do what.
+	case path == "/mods" || strings.HasPrefix(path, "/mods/"):
+		s.handleMods(w, r, path)
+	case path == "/mod-list.json":
+		s.handleModList(w, r)
+	case path == "/mod-list/install":
+		s.handleModInstall(w, r)
 
 	case path == "/ui-defaults.json":
 		// The [ui] table from the config file, handed to the chat page as-is.

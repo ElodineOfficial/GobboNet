@@ -50,7 +50,7 @@ class ThePackage(unittest.TestCase):
         build = code(BUILD)
         for line in ('install -m 0644 gobbonet-setup.py wizard.html "$STAGE/usr/lib/gobbonet/"',
                      'install -m 0755 gobbonet-launch        "$STAGE/usr/lib/gobbonet/gobbonet-launch"',
-                     'install -m 0644 "$ROOT/installer/models.ini" "$STAGE/usr/lib/gobbonet/models.ini"',
+                     'install -m 0644 "$ROOT/catalog/models.ini" "$STAGE/usr/lib/gobbonet/models.ini"',
                      'cp -r "$VENDOR/llama-cpp"              "$STAGE/usr/lib/gobbonet/llama-cpp"'):
             self.assertIn(line, build)
         self.assertIn('-bin-ubuntu-vulkan-x64.tar.gz', BUILD)

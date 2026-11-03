@@ -63,6 +63,9 @@ type wireEntry struct {
 	UseJinja     bool     `json:"use_jinja"`
 	Tags         []string `json:"tags"`
 	Notes        string   `json:"notes"`
+	// Tier is optional (1.7.9): small, mid, large or moe. Anything else, or
+	// absent, and Entry.Tier works it out.
+	Tier string `json:"tier"`
 }
 
 // ParseRemote validates and converts the remote catalogue.
@@ -129,6 +132,7 @@ func ParseRemote(body []byte, clientVersion string) (*Catalog, error) {
 			UseJinja:   m.UseJinja,
 			Tags:       m.Tags,
 			Notes:      m.Notes,
+			TierHint:   strings.ToLower(strings.TrimSpace(m.Tier)),
 		}
 		if m.SHA256 != nil {
 			// Normalised and length-checked here so a malformed hash is dropped
@@ -245,3 +249,7 @@ func parseVersion(s string) ([]int, bool) {
 	}
 	return out, true
 }
+
+// VersionAtLeast is versionAtLeast for other packages: the endorsed-mod list
+// (internal/mods) gates entries on min_client the same way this file does.
+func VersionAtLeast(have, want string) bool { return versionAtLeast(have, want) }

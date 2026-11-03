@@ -304,7 +304,7 @@ function stopGeneration(opts = {}) {
   if (currentJob && !currentJob.cancelSent) {
     currentJob.cancelSent = true;
     // Tiny JSON body: some HTTP stacks 411 a bodyless POST; '{}' is universal.
-    privacyFetch(`${JOBS_URL}/${currentJob.id}/cancel`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }).catch(() => {});
+    privacyFetch(`${JOBS_URL}/${encodeURIComponent(currentJob.id)}/cancel`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }).catch(() => {});
   }
   // Legacy direct stream: same in-page abort as before.
   if (abortController) abortController.abort();
@@ -470,11 +470,19 @@ function saveEdit(index) {
 
 function deleteMessage(index) {
   const thread = getActiveThread();
-  if (!thread) return;
-  thread.messages.splice(index, 1);
+  if (!thread || !thread.messages[index]) return;
+  const gone = thread.messages.splice(index, 1)[0];
   saveState();
   renderMessages();
   updateContextInfo();
+  const who = gone.role === 'user' ? 'your message' : 'the reply';
+  undoable({
+    label: 'Deleted ' + who,
+    undo: () => {
+      thread.messages.splice(Math.min(index, thread.messages.length), 0, gone);
+      if (getActiveThread() === thread) { renderMessages(); updateContextInfo(); }
+    },
+  });
 }
 
 /* ----------------------------------------------------------------
@@ -1004,7 +1012,7 @@ async function finalizeJobIntoThread(thread, jobId, { live = false } = {}) {
 // One cheap status peek (no transcript bytes). null = couldn't reach server.
 async function _peekJob(jobId) {
   try {
-    const r = await privacyFetch(`${JOBS_URL}/${jobId}?from=0&max=0`, { cache: 'no-store' });
+    const r = await privacyFetch(`${JOBS_URL}/${encodeURIComponent(jobId)}?from=0&max=0`, { cache: 'no-store' });
     if (r.status === 404) return { status: 'lost' };
     if (!r.ok) return null;
     return await r.json();

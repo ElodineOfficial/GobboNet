@@ -47,6 +47,7 @@ shell below line 1394 stayed in `chat.html`).
 | `js/22-scheduler.js` | 11916–12143 | 233 |
 | `js/23-card-code.js` | — | 313 |
 | `js/24-boot.js` | 12144–12289 | 154 |
+| `js/25-tutorial.js` | — (1.7.9) | 444 |
 
 ## Stylesheets
 
@@ -60,8 +61,10 @@ properties every later sheet reads.
 ## Load-order hazards
 
 - `js/01-config.js` must load first (globals every other module reads) and
-  `js/24-boot.js` last (it wires listeners and kicks off the first render).
-- `js/23-card-code.js` is the only hand-written module — the other 23 were
+  `js/24-boot.js` after every module it calls (it wires listeners and kicks
+  off the first render). `js/25-tutorial.js`, the first-run tour, comes after
+  boot and waits on `window.GobboNet.ready` rather than running at load.
+- `js/23-card-code.js` and `js/25-tutorial.js` are the hand-written modules — the other 23 were
   mechanically extracted, which is why their headers carry line ranges.
 - Adding a module means editing `chat.html`'s `<script>` list. `stage-web.sh`
   refuses to stage a frontend whose file count disagrees with what `chat.html`

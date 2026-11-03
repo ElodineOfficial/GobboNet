@@ -64,7 +64,16 @@ const passwordIntro = `
  ====================================================
 `
 
-const minPasswordLength = 6
+// minPasswordLength is min_password_length from config.toml: 8 unless the
+// user set it, never below config.MinPasswordFloor (1.7.9). It applies where a
+// password is chosen. Sign-in never checks length, so an existing shorter
+// password keeps working.
+func minPasswordLength(cfg *config.Config) int {
+	if cfg == nil || cfg.MinPasswordLen < config.MinPasswordFloor {
+		return config.DefaultMinPasswordLength
+	}
+	return cfg.MinPasswordLen
+}
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -187,7 +196,8 @@ func usage() {
   gobbonet [serve] [--config PATH] [--no-auth] [--host H] [--port N] [--open]
                    [--model FILE.gguf]
   gobbonet set-password [--config PATH] [--stdin]
-  gobbonet launch [--config PATH]  (desktop launch; opens the browser)
+  gobbonet launch [--config PATH] [--setup]  (desktop launch; opens the browser.
+                   --setup: Windows engine and model setup)
   gobbonet setup [--config PATH] [--catalog PATH] [--server-exe PATH]
                  [--no-browser] [--force]
   gobbonet autostart [--enable] [--disable]
@@ -767,8 +777,8 @@ func resealPassword(cfg *config.Config, fromStdin bool) error {
 		}
 	}
 
-	if len(next) < minPasswordLength {
-		return fmt.Errorf("the password must be at least %d characters", minPasswordLength)
+	if len(next) < minPasswordLength(cfg) {
+		return fmt.Errorf("the password must be at least %d characters", minPasswordLength(cfg))
 	}
 
 	k, err := keyring.UnlockPassword(cfg.KeyringPath(), current)
@@ -811,8 +821,8 @@ func storePasswordFromStdin(cfg *config.Config) error {
 	// One trailing newline is what `echo` and a here-string both add; anything
 	// else the caller typed is theirs to keep.
 	password := strings.TrimRight(string(raw), "\r\n")
-	if len(password) < minPasswordLength {
-		return fmt.Errorf("the password must be at least %d characters", minPasswordLength)
+	if len(password) < minPasswordLength(cfg) {
+		return fmt.Errorf("the password must be at least %d characters", minPasswordLength(cfg))
 	}
 
 	secret, err := auth.NewSecret(password)
@@ -861,8 +871,8 @@ func promptAndStorePassword(cfg *config.Config) error {
 		if err != nil {
 			return err
 		}
-		if len(first) < minPasswordLength {
-			fmt.Printf("  Too short -- use at least %d characters.\n", minPasswordLength)
+		if len(first) < minPasswordLength(cfg) {
+			fmt.Printf("  Too short -- use at least %d characters.\n", minPasswordLength(cfg))
 			continue
 		}
 		second, err := readPassword("  Confirm password: ")

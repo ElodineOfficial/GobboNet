@@ -17,7 +17,7 @@
 #                                        sign the package (off by default)
 #
 # What this does NOT do is compile anything. The Go binary comes from
-# ../build-release.sh, exactly as the .deb expects, because a package that
+# ../scripts/build-release.sh, exactly as the .deb expects, because a package that
 # silently rebuilds its own payload can ship something the maintainer never
 # tested. What it DOES do, before and after rpmbuild, is check: the engine
 # against its pin, the binary against VERSION, the staged tree against
@@ -96,7 +96,7 @@ BUNDLE_CPU="${BUNDLE_CPU_ENGINE:-0}"
 REUSE_DEB="${REUSE_DEB:-}"
 
 # ---------------------------------------------------------------------------
-# The Go binary. Built by ../build-release.sh, never here.
+# The Go binary. Built by ../scripts/build-release.sh, never here.
 #
 # Looked for in this order: GOBBONET_BIN; this release's linux/amd64 build in
 # ../dist; the release binary the ZIP ships at linux-amd64/gobbonet. Whichever
@@ -113,7 +113,7 @@ if [ -z "$GOBBONET_BIN" ] && [ -f "$ROOT/linux-amd64/gobbonet" ]; then
 fi
 [ -n "$GOBBONET_BIN" ] && [ -f "$GOBBONET_BIN" ] || fail \
 "no linux/amd64 gobbonet binary found.
-       Run ../build-release.sh first, or set GOBBONET_BIN=/path/to/gobbonet"
+       Run ../scripts/build-release.sh first, or set GOBBONET_BIN=/path/to/gobbonet"
 
 case "$(file -b "$GOBBONET_BIN" 2>/dev/null)" in
     *"ELF 64-bit"*x86-64*) ;;
@@ -129,7 +129,7 @@ BIN_VERSION="$("$GOBBONET_BIN" version 2>/dev/null | awk 'NR == 1 { print $1 }' 
 case "$BIN_VERSION" in
     "$RELEASE-go-"?*) ;;
     *) fail "$GOBBONET_BIN reports $BIN_VERSION, but VERSION says $RELEASE.
-       Rebuild it with ../build-release.sh, or point GOBBONET_BIN at the right one." ;;
+       Rebuild it with ../scripts/build-release.sh, or point GOBBONET_BIN at the right one." ;;
 esac
 say "binary: $GOBBONET_BIN ($BIN_VERSION)"
 
@@ -316,7 +316,7 @@ install -m 0755 "$GOBBONET_BIN" "$STAGE/usr/lib/gobbonet/gobbonet"
 install -m 0755 "$ROOT/installer-linux/gobbonet-launch"   "$STAGE/usr/lib/gobbonet/gobbonet-launch"
 install -m 0644 "$ROOT/installer-linux/gobbonet-setup.py" "$STAGE/usr/lib/gobbonet/gobbonet-setup.py"
 install -m 0644 "$ROOT/installer-linux/wizard.html"       "$STAGE/usr/lib/gobbonet/wizard.html"
-install -m 0644 "$ROOT/installer/models.ini"              "$STAGE/usr/lib/gobbonet/models.ini"
+install -m 0644 "$ROOT/catalog/models.ini"              "$STAGE/usr/lib/gobbonet/models.ini"
 cp -a "$VENDOR/llama-cpp" "$STAGE/usr/lib/gobbonet/llama-cpp"
 if [ "$BUNDLE_CPU" = "1" ]; then
     cp -a "$VENDOR/llama-cpp-cpu" "$STAGE/usr/lib/gobbonet/llama-cpp-cpu"
@@ -360,7 +360,7 @@ chmod 0755 "$STAGE/usr/lib/gobbonet/gobbonet" "$STAGE/usr/lib/gobbonet/gobbonet-
 # and not work, and finding that out at build time costs nothing.
 # Through bash, not as a path -- the executable bit does not survive a commit
 # made from Windows. tests/test-build-scripts.py holds every call to this.
-bash "$ROOT/verify-payload.sh" "$STAGE/usr/lib/gobbonet" "rpm payload"
+bash "$ROOT/scripts/verify-payload.sh" "$STAGE/usr/lib/gobbonet" "rpm payload"
 
 # ---------------------------------------------------------------------------
 # Build

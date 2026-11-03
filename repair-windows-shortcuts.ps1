@@ -20,6 +20,7 @@ function Set-GobboNetLink($path, $target, $arguments) {
 Set-GobboNetLink (Join-Path $menu 'GobboNet.lnk') $exe 'launch'
 Set-GobboNetLink (Join-Path $menu 'Launch GobboNet.lnk') $exe 'launch'
 Set-GobboNetLink (Join-Path ([Environment]::GetFolderPath('DesktopDirectory')) 'GobboNet.lnk') $exe 'launch'
-Set-GobboNetLink (Join-Path $menu 'Setup or add a model.lnk') (Join-Path $installDir 'launch.bat') ''
+# Through gobbonet.exe so setup runs in a kill-on-close job (1.7.9, PR #15).
+Set-GobboNetLink (Join-Path $menu 'Setup or add a model.lnk') $exe 'launch --setup'
 Write-Host 'Shortcuts repaired. Open Launch GobboNet from the Start menu.'
 Write-Host 'If a taskbar pin still opens the old launcher, unpin it and pin the repaired shortcut.'

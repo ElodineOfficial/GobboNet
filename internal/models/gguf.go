@@ -1,11 +1,13 @@
 package models
 
 import (
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	gguf "github.com/gpustack/gguf-parser-go"
@@ -20,6 +22,10 @@ type GGUFMeta struct {
 	// ExpertCount is <arch>.expert_count: non-zero for Mixture-of-Experts
 	// models (qwen3moe, gpt-oss, gemma4 A4B, ...), zero for dense ones.
 	ExpertCount int
+	// TokenizerPre is tokenizer.ggml.pre, the pre-tokenizer llama.cpp picked
+	// at conversion. "tekken" marks every Mistral Tekken model whatever its
+	// filename says, which is what lets a renamed merge be recognised.
+	TokenizerPre string
 }
 
 // ReadGGUFMeta pulls general.architecture, tokenizer.chat_template and
@@ -44,6 +50,9 @@ func ReadGGUFMeta(path string) (*GGUFMeta, error) {
 	}
 	if kv, ok := f.Header.MetadataKV.Get("tokenizer.chat_template"); ok {
 		meta.ChatTemplate = kv.ValueString()
+	}
+	if kv, ok := f.Header.MetadataKV.Get("tokenizer.ggml.pre"); ok {
+		meta.TokenizerPre = strings.ToLower(strings.TrimSpace(kv.ValueString()))
 	}
 	return meta, nil
 }
@@ -152,6 +161,7 @@ func identifyFrom(path string, meta *GGUFMeta, err error) Record {
 		Architecture:  meta.Architecture,
 		ContextLength: meta.ContextLength,
 		ExpertCount:   meta.ExpertCount,
+		TokenizerPre:  meta.TokenizerPre,
 		SidecarFile:   sidecar,
 	})
 }
@@ -239,6 +249,17 @@ func ScanDir(dir string) []Record {
 		if e.IsDir() || !ggufGlobRe.MatchString(e.Name()) {
 			continue
 		}
+		// A split model is loaded from its first part; llama.cpp finds the
+		// rest beside it. Listing part 2 of 3 offers a choice that cannot
+		// load (1.7.9).
+		if _, part, _, split := SplitPart(e.Name()); split && part != 1 {
+			continue
+		}
+		// A link whose target has gone -- a cleaned HuggingFace cache, an
+		// unplugged drive -- is not a model any more (1.7.9).
+		if st, err := os.Stat(filepath.Join(dir, e.Name())); err != nil || !st.Mode().IsRegular() {
+			continue
+		}
 		names = append(names, e.Name())
 	}
 	sort.Strings(names)
@@ -295,4 +316,36 @@ func ForgetWarningsForTest() {
 	warnedMu.Lock()
 	warnedFiles = map[string]bool{}
 	warnedMu.Unlock()
+}
+
+// splitRe matches llama.cpp's split-GGUF naming: name-00001-of-00003.gguf.
+var splitRe = regexp.MustCompile(`(?i)^(.*)-(\d{5})-of-(\d{5})\.gguf$`)
+
+// SplitPart reports whether name is one part of a split GGUF, and which:
+// the shared prefix, this part's number and the number of parts.
+func SplitPart(name string) (prefix string, part, total int, ok bool) {
+	m := splitRe.FindStringSubmatch(name)
+	if m == nil {
+		return "", 0, 0, false
+	}
+	part, _ = strconv.Atoi(m[2])
+	total, _ = strconv.Atoi(m[3])
+	if part < 1 || total < 1 || part > total {
+		return "", 0, 0, false
+	}
+	return m[1], part, total, true
+}
+
+// SplitName is the file name of part `part` of `total` for a split prefix.
+func SplitName(prefix string, part, total int) string {
+	return fmt.Sprintf("%s-%05d-of-%05d.gguf", prefix, part, total)
+}
+
+// ChatCapable reports whether a GGUF is something you can talk to: not a
+// multimodal projector and not an embedding model -- the same test ScanDir
+// applies to the models folder, for files found elsewhere (internal/localmodels).
+func ChatCapable(path string) bool {
+	meta, err := ReadGGUFMeta(path)
+	name := filepath.Base(path)
+	return !isProjector(name, meta, err) && !isEmbeddingOnly(name, meta, err)
 }

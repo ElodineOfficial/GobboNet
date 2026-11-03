@@ -39,13 +39,6 @@ class VersionStrings(unittest.TestCase):
         stale = sorted(set(re.findall(r'GobboNetSetup-(\d+_\d+_\d+)\.exe', nsi)) - {VERSION.replace('.', '_')})
         self.assertEqual(stale, [], 'another release named in an installer filename')
 
-    def test_installer_nsi_takes_the_define(self):
-        nsi = (ROOT / 'installer' / 'gobbonet.nsi').read_text(encoding='utf-8', errors='replace')
-        self.assertTrue('OutFile "GobboNetSetup-${VERSION}.exe"' in nsi, 'OutFile should use the define')
-        self.assertTrue('VIProductVersion "${VERSION_QUAD}"' in nsi, 'VIProductVersion should use the define')
-        self.assertNotRegex(nsi, r'(?m)^\s*(OutFile|VIProductVersion|!define\s+VERSION)\s+"?\d+\.\d+',
-                            'installer/gobbonet.nsi grew a version literal')
-
     def test_fedora_package_docs_follow_version(self):
         # FEDORA.md ships inside the .rpm as its doc, and its dnf command names
         # the package; the spec's changelog is what `rpm -q --changelog` shows.

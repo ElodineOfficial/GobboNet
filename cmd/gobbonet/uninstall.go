@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -43,14 +44,31 @@ func cmdUninstall(argv []string) error {
 		return fmt.Errorf("--keep-models and --remove-models contradict each other")
 	}
 
-	// A missing or unreadable config is not a reason to refuse: the whole point
-	// is to clean up, and the default locations are known without it.
+	// A missing config is not a reason to refuse: the whole point is to clean
+	// up, and the default locations are known without it.
 	dataDir := config.DataDir()
 	configDir := config.ConfigDir()
 	configFile := ""
 	modelDir := filepath.Join(dataDir, "models")
 
-	if cfg, err := config.Load(*configPath); err == nil {
+	// Found the way every other command finds it (1.7.9). This read
+	// config.Load(*configPath) straight, and with no --config that path is
+	// empty: the user's config was never read, so a data_dir chosen in the
+	// Linux setup wizard (it always asks) was never looked in. The command
+	// removed the config, left every conversation where it was, and said
+	// "GobboNet's data is gone, and so are your conversations."
+	path, _ := config.Discover(*configPath)
+	cfg, err := config.Load(path)
+	switch {
+	case err == nil, errors.Is(err, config.ErrNotFound):
+	default:
+		// A config that exists but cannot be read may name a data_dir this
+		// command cannot see. Guessing the defaults and reporting success is
+		// the mistake above again, so stop and say what to fix.
+		return fmt.Errorf("cannot read %s, so the folder your conversations are in is unknown: %v\n"+
+			"       Fix that file (gobbonet doctor shows what is wrong), or remove the folder by hand", path, err)
+	}
+	if err == nil {
 		if cfg.DataDir != "" {
 			dataDir = cfg.DataDir
 			modelDir = filepath.Join(dataDir, "models")
@@ -156,6 +174,12 @@ func cmdUninstall(argv []string) error {
 	// Only removes the directory if it is genuinely empty, so a kept models
 	// folder survives intact.
 	_ = os.Remove(dataDir)
+	// The Linux launcher logs to the default data folder whatever data_dir
+	// says. With data_dir elsewhere, that log and its folder are left over.
+	if def := config.DataDir(); !samePath(def, dataDir) {
+		_ = os.Remove(filepath.Join(def, "launch.log"))
+		_ = os.Remove(def)
+	}
 
 	fmt.Println()
 	fmt.Println("  GobboNet's data is gone, and so are your conversations.")

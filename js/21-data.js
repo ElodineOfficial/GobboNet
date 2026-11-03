@@ -323,9 +323,7 @@ function _mergeBundledCast(data) {
     const have = new Set(state.characterCards.map(c => c.id));
     const add = data.characterCards.filter(c => c && !have.has(c.id));
     if (add.length) {
-      const neutralized = (typeof neutralizeUntrustedCode === 'function')
-        ? neutralizeUntrustedCode({ characterCards: add })
-        : { cards: 0 };
+      const neutralized = neutralizeUntrustedCode({ characterCards: add });   // no typeof guard: fail closed
       state.characterCards = [...state.characterCards, ...add];
       parts.push(`${add.length} character(s)`);
       if (neutralized.cards) {
@@ -450,9 +448,7 @@ function importData(fileInput, type) {
       // from a file someone sent you does not get to arrive pre-armed. Wrapped
       // in a bare object because neutralizeUntrustedCode works on a state-shaped
       // blob; only the cards being merged are touched.
-      const neutralizedCards = (typeof neutralizeUntrustedCode === 'function')
-        ? neutralizeUntrustedCode({ characterCards: newCards })
-        : { cards: 0, extensions: false };
+      const neutralizedCards = neutralizeUntrustedCode({ characterCards: newCards });   // no typeof guard: fail closed
       state.characterCards = [...state.characterCards, ...newCards];
       saveState(); render();
       const cardCodeNote = neutralizedCards.cards
@@ -515,9 +511,7 @@ function importData(fileInput, type) {
       // the character-card import: the content is kept, the run flags are not.
       // state.characterCards was assigned earlier in this function, so the cards
       // are present by the time this runs.
-      const neutralized = (typeof neutralizeUntrustedCode === 'function')
-        ? neutralizeUntrustedCode(state)
-        : { cards: 0, extensions: false };
+      const neutralized = neutralizeUntrustedCode(state);   // no typeof guard: fail closed
       state.macros         = Array.isArray(data.macros) ? data.macros : DEFAULT_MACROS.map(m => ({ ...m }));
       state.searchEnabled  = data.searchEnabled  || false;
       saveState();
@@ -535,9 +529,43 @@ function importData(fileInput, type) {
   reader.readAsText(file);
 }
 
+/* PURGE (1.7.9): it still asks first, because it wipes a whole kind of data
+   at once, and then offers UNDO for 10 seconds like every other delete in
+   DATA.
+
+   The wipe itself happens AT ONCE, exactly as before -- the stored records
+   are destroyed, not merely hidden -- so a purge cannot be half-done by the
+   page closing during the UNDO window. UNDO puts the previous state back in
+   memory and saves it in full, which rewrites every conversation record.
+   Meanwhile nothing is pushed to the server or other devices
+   (undoHoldsSync): they learn of the purge only when it is final. */
+const _PURGE_FIELDS = ['threads', 'activeThreadId', 'settings', 'characterCards', 'activeCardId',
+  'personaCards', 'activePersonaId', 'schedules', 'folders', 'extensions', 'searchEnabled',
+  'macros', 'seededDefaultMacros', 'sidebarOpen', '_cardCodeStore'];
+
+function _purgeSnapshot(fields) {
+  const snap = {};
+  for (const f of fields) snap[f] = state[f];
+  return snap;
+}
+
+function _offerPurgeUndo(label, snap, extra) {
+  undoable({
+    label,
+    undo: () => {
+      for (const f of Object.keys(snap)) state[f] = snap[f];
+      if (extra && extra.undo) { try { extra.undo(); } catch (e) { console.warn('[purge] undo', e); } }
+      saveState();
+      try { if (snap.extensions) applyExtensions(); } catch (_) {}
+      render();
+    },
+  });
+}
+
 async function purgeData(type) {
   if (type === 'threads') {
-    if (!confirm(`Delete ALL ${state.threads.length} thread(s)? This cannot be undone.`)) return;
+    if (!confirm(`Delete ALL ${state.threads.length} thread(s)? UNDO is offered for 10 seconds afterwards.`)) return;
+    const snap = _purgeSnapshot(['threads', 'activeThreadId']);
     state.threads = [];
     state.activeThreadId = null;
     // Destroy first, then write the clean baseline. Saving an empty array does
@@ -545,18 +573,29 @@ async function purgeData(type) {
     // thread survives. See wipeLocalStorageAll.
     try { await idbClearStore('threads'); } catch (e) { console.warn('[purge] threads', e); }
     saveState(); render();
+    _offerPurgeUndo('Purged ' + snap.threads.length + ' thread(s)', snap);
   } else if (type === 'cards') {
-    if (!confirm('Reset all character cards to the built-in default? This cannot be undone.')) return;
+    if (!confirm('Reset all character cards to the built-in default? UNDO is offered for 10 seconds afterwards.')) return;
+    const snap = _purgeSnapshot(['characterCards', 'activeCardId']);
     state.characterCards = [{ ...DEFAULT_CARD }];
     state.activeCardId = 'default';
     saveState(); render();
+    _offerPurgeUndo('Reset all characters', snap);
   } else if (type === 'personas') {
-    if (!confirm('Reset all personas to the built-in Anonymous default? This cannot be undone.')) return;
+    if (!confirm('Reset all personas to the built-in Anonymous default? UNDO is offered for 10 seconds afterwards.')) return;
+    const snap = _purgeSnapshot(['personaCards', 'activePersonaId']);
     state.personaCards = [{ ...DEFAULT_PERSONA }];
     state.activePersonaId = 'default-persona';
     saveState(); render();
+    _offerPurgeUndo('Reset all personas', snap);
   } else if (type === 'all') {
-    if (!confirm('PURGE ALL DATA? This will delete every thread, character, persona, schedule, folder, setting, and extension. Full factory reset. Cannot be undone.\n\nAre you absolutely sure?')) return;
+    if (!confirm('PURGE ALL DATA? This will delete every thread, character, persona, schedule, folder, setting, and extension. Full factory reset. UNDO is offered for 10 seconds afterwards.\n\nAre you absolutely sure?')) return;
+    const snap = _purgeSnapshot(_PURGE_FIELDS);
+    // What wipeLocalStorageAll clears outside state, so UNDO can put it back.
+    const kept = { ls: {}, recovery: legacyBrowserRecovery, recoveryMsg: storageRecoveryMessage };
+    for (const k of ['gobbonet_chat_state', 'gemma4_chat_state', 'gobbonet_sync_meta', 'gobbonet_before_upgrade_recovery']) {
+      try { const v = localStorage.getItem(k); if (v !== null) kept.ls[k] = v; } catch (_) {}
+    }
     state.threads        = [];
     state.activeThreadId = null;
     state.settings       = { ...DEFAULT_SETTINGS };
@@ -620,8 +659,16 @@ async function purgeData(type) {
     }
     // Close modal after full purge so the user sees the clean state
     closeDataManager();
+    _offerPurgeUndo('Purged all data', snap, {
+      undo: () => {
+        for (const k of Object.keys(kept.ls)) { try { localStorage.setItem(k, kept.ls[k]); } catch (_) {} }
+        legacyBrowserRecovery = kept.recovery;
+        storageRecoveryMessage = kept.recoveryMsg;
+      },
+    });
   }
 }
+
 
 /* ================================================================
    DATA MANAGER MODAL
@@ -886,6 +933,7 @@ async function refreshSyncProfileList() {
   list.innerHTML = '';
   for (const p of profiles) {
     const label = p.shared ? 'shared' : p.name;
+    if (_syncProfilesPendingDelete.has(label)) continue;   // waiting out UNDO
     const isCurrent = !syncIsOff() && label === syncTargetLabel();
 
     const row = document.createElement('div');
@@ -920,21 +968,35 @@ async function refreshSyncProfileList() {
   }
 }
 
+// Backups whose DELETE is waiting out its UNDO window, hidden from the list.
+const _syncProfilesPendingDelete = new Set();
+
 async function onDeleteSyncProfile(name, label, isCurrent) {
-  // Deleting the backup this device is using does not delete the chats on this
-  // device -- and the next save would immediately recreate it. Say both, or
-  // the button reads as far more destructive than it is.
-  const extra = isCurrent
-    ? '\n\nThis is the backup this device uses. Your chats on this device are not affected, ' +
-      'and the backup will be recreated the next time this device saves.'
-    : '';
-  if (!confirm('Delete the "' + label + '" backup from the server?' + extra +
-               '\n\nThis cannot be undone.')) return;
-  const ok = await deleteSyncProfile(name);
-  _syncStatusLine(ok ? 'Deleted the "' + label + '" backup from the server.'
-                     : 'Could not delete that backup.',
-                  ok ? 'ok' : 'err');
+  // 1.7.9: no confirm. The server DELETE is not sent until the UNDO window
+  // closes; until then the backup only disappears from this list. Deleting the
+  // backup this device uses does not touch the chats here, and the next save
+  // recreates it -- the status line says so, since the confirm no longer does.
+  _syncProfilesPendingDelete.add(label);
   refreshSyncProfileList();
+  _syncStatusLine('The "' + label + '" backup will be deleted from the server.' +
+                  (isCurrent ? ' Your chats on this device are not affected.' : ''), 'ok');
+  undoable({
+    label: 'Deleted backup "' + String(label).slice(0, 40) + '"',
+    undo: () => {
+      _syncProfilesPendingDelete.delete(label);
+      _syncStatusLine('Kept the "' + label + '" backup.', 'ok');
+      refreshSyncProfileList();
+    },
+    commit: async () => {
+      const ok = await deleteSyncProfile(name);
+      _syncProfilesPendingDelete.delete(label);
+      _syncStatusLine(ok ? 'Deleted the "' + label + '" backup from the server.' +
+                           (isCurrent ? ' It is recreated the next time this device saves.' : '')
+                         : 'Could not delete that backup.',
+                      ok ? 'ok' : 'err');
+      refreshSyncProfileList();
+    },
+  });
 }
 
 function closeDataManager() {
@@ -1049,7 +1111,7 @@ async function recoverUpgradeHistory(kind) {
       if (!legacyBrowserRecovery) throw new Error('The older browser copy is unavailable.');
       const blob = JSON.parse(legacyBrowserRecovery.raw);
       validateServerSnapshot(blob);
-      if (typeof neutralizeUntrustedCode === 'function') neutralizeUntrustedCode(blob);
+      neutralizeUntrustedCode(blob);   // no typeof guard: fail closed
       // Restore locally first; never let recovery replace a shared server copy.
       syncTarget = { mode: 'off', profile: '' }; persistSyncTarget();
       if (!applyLoadedState(blob)) throw new Error('Could not read the older history.');

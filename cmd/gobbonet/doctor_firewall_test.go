@@ -228,3 +228,37 @@ func TestFirewalldAllowsPort(t *testing.T) {
 		t.Error("empty list reported as open")
 	}
 }
+
+// 1.7.9 (PR #7): the rule no longer covers Public networks unless asked, and
+// Windows often calls a home network Public. doctor must say so, because
+// every other line it prints would read as a working firewall.
+func TestReportNetworkProfile(t *testing.T) {
+	const privOnly = "Rule Name: GobboNet-Web\r\nEnabled: Yes\r\nProfiles: Domain,Private\r\nLocalPort: 9066\r\n"
+	const withPub = "Rule Name: GobboNet-Web\r\nEnabled: Yes\r\nProfiles: Domain,Private,Public\r\nLocalPort: 9066\r\n"
+	cats := func(s string) func() (string, error) { return func() (string, error) { return s, nil } }
+	cases := []struct {
+		name, rule, cats string
+		want             []string
+		wantNone         bool
+	}{
+		{"public network, rule without public", privOnly, "Public\r\n", []string{"marked PUBLIC", "Private network", "setup-lan.bat /public"}, false},
+		{"public network among several", privOnly, "Private\r\nPublic\r\n", []string{"marked PUBLIC"}, false},
+		{"public network, rule with public", withPub, "Public\r\n", []string{"covers Public", "/public"}, false},
+		{"private network", privOnly, "Private\r\n", nil, true},
+		{"domain network", privOnly, "DomainAuthenticated\r\n", nil, true},
+		{"no rule at all", "", "Public\r\n", nil, true},
+	}
+	for _, c := range cases {
+		var b strings.Builder
+		reportNetworkProfile(&b, c.rule, cats(c.cats))
+		got := b.String()
+		if c.wantNone && got != "" {
+			t.Errorf("%s: want nothing, got %q", c.name, got)
+		}
+		for _, w := range c.want {
+			if !strings.Contains(got, w) {
+				t.Errorf("%s: missing %q in %q", c.name, w, got)
+			}
+		}
+	}
+}

@@ -28,7 +28,7 @@ when a directory that used to matter no longer does.
 func requireStaged(t *testing.T) {
 	t.Helper()
 	if !webui.Staged() {
-		t.Skip("built without staged assets; run ./stage-web.sh")
+		t.Skip("built without staged assets; run ./scripts/stage-web.sh")
 	}
 }
 

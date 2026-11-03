@@ -156,6 +156,9 @@ type ClassifyInput struct {
 	Architecture  string
 	ContextLength int
 	ExpertCount   int
+	// TokenizerPre is tokenizer.ggml.pre from the header ("tekken", "llama-bpe",
+	// ...). Empty when the caller had no header to read.
+	TokenizerPre string
 	// SidecarFile is a validated .jinja next to the GGUF, filename only.
 	SidecarFile string
 	// SidecarPrefix is prepended to SidecarFile in the emitted record so the
@@ -276,6 +279,29 @@ func Classify(in ClassifyInput) Record {
 		if reMistralNemo.MatchString(nameLC) {
 			rec.Family, rec.ID = "mistral", "mistral-nemo"
 			rec.UseJinja, rec.ChatTemplate = 0, "mistral-v3-tekken"
+			return rec
+		}
+		// Any other Tekken model, found by its tokenizer rather than its name:
+		// Magistral, Ministral, Devstral, a merge someone renamed. The filename
+		// rules above only know the names they list, and a Tekken model that
+		// misses them would otherwise be launched like a generic llama.
+		//
+		// Same rule as Mistral Small: the model's own template when it has a
+		// real one. Without one, the built-in has to be guessed. v7-tekken
+		// frames the system prompt with [SYSTEM_PROMPT] tokens that Nemo-era
+		// vocabularies do not have, so it is chosen only when the template
+		// shows the model knows them; v3-tekken otherwise, which both eras
+		// tokenize correctly.
+		if in.TokenizerPre == "tekken" {
+			rec.Family, rec.ID = "mistral", "mistral-tekken"
+			switch {
+			case usableEmbeddedTemplate(in.ChatTemplate):
+				rec.UseJinja, rec.ChatTemplate = 1, ""
+			case strings.Contains(in.ChatTemplate, "[SYSTEM_PROMPT]"):
+				rec.UseJinja, rec.ChatTemplate = 0, "mistral-v7-tekken"
+			default:
+				rec.UseJinja, rec.ChatTemplate = 0, "mistral-v3-tekken"
+			}
 			return rec
 		}
 		// Granite: the embedded template crashes the loader AND the built-in

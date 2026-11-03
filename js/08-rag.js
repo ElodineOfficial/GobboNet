@@ -41,22 +41,27 @@ function ragHash(str) {
   return ('00000000' + h.toString(16)).slice(-8);
 }
 
-/* Parse one *_tags value into [{term, weight}]. Bare terms default to
-   weight 1.0; "divine [0.8]" tunes a noisy term down. This grammar lives
-   ONLY in tag fields — it is retrieval control data, parsed at load and
+/* Parse a tag list into [{term, weight}]. Bare terms default to weight
+   1.0. Every way people write a weight is read:
+     divine [0.8]   divine (0.8)   divine: 0.8     (weight after the term)
+     .8 divine      0.8 divine     1.0 angel       (weight first, 1.7.9)
+   A leading number counts as a weight only when it looks like one (0, 1, or
+   a decimal), so "7 seas" stays a term. The whole list may itself be in
+   [brackets]. This grammar is retrieval control data: parsed at load and
    never sent to the model as prose. */
+const RAG_WEIGHT_NUM = '(?:\\d*\\.\\d+|\\d+(?:\\.\\d*)?)';
 function parseWeightedTags(value) {
   if (!value) return [];
-  return value.split(',').map(raw => {
+  let v = String(value).trim();
+  if (/^\[[\s\S]*\]$/.test(v)) v = v.slice(1, -1);
+  const num = w => { const f = parseFloat(w); return isFinite(f) && f >= 0 ? f : 1.0; };
+  return v.split(',').map(raw => {
     const s = raw.trim();
     if (!s) return null;
-    const m = s.match(/^(.*?)\s*\[\s*([\d.]+)\s*\]\s*$/);
-    if (m) {
-      const term = m[1].trim();
-      const w = parseFloat(m[2]);
-      if (!term) return null;
-      return { term, weight: (isFinite(w) ? w : 1.0) };
-    }
+    let m = s.match(new RegExp('^(.*?)\\s*(?:\\[\\s*(' + RAG_WEIGHT_NUM + ')\\s*\\]|\\(\\s*(' + RAG_WEIGHT_NUM + ')\\s*\\)|:\\s*(' + RAG_WEIGHT_NUM + '))\\s*$'));
+    if (m && m[1].trim()) return { term: m[1].trim(), weight: num(m[2] || m[3] || m[4]) };
+    m = s.match(/^(0|1|\d*\.\d+|1\.0*)\s+(\S[\s\S]*)$/);
+    if (m) return { term: m[2].trim(), weight: num(m[1]) };
     return { term: s, weight: 1.0 };
   }).filter(Boolean);
 }
@@ -68,8 +73,37 @@ function parseWeightedTags(value) {
 const RAG_DIRECTIVE_RE = /^([A-Za-z0-9][A-Za-z0-9_.\- ]*?)_(tags|relation(?:_[A-Za-z0-9]+)?|role_in_arcs|use(?:_[A-Za-z0-9]+)?|offscreen_default)\s*:\s*(.*)$/i;
 // Bare directive (inside a "# entity" section): "tags: ...", "relation: ...".
 const RAG_BARE_DIRECTIVE_RE = /^(tags|relation(?:_[A-Za-z0-9]+)?|role_in_arcs|use(?:_[A-Za-z0-9]+)?|offscreen_default)\s*:\s*(.*)$/i;
-// Section header forms: "# selah", "== selah ==", "[selah]". "##"/"." = subtree.
+// Section header forms: "# selah", "== selah ==", "[selah]". "." = subtree.
 const RAG_HEADER_RE = /^(?:#{1,3}\s*|\=\=\s*|\[)\s*([A-Za-z0-9][A-Za-z0-9_.\- ]*?)\s*(?:\=\=|\])?\s*$/;
+// A header name: letters (any language), digits, spaces, ' . - _ ; at most 60
+// characters. "# Chapter 1: The Fall" is not one (the colon), so a Markdown
+// heading in pasted notes is not mistaken for an entry unless it is a name.
+const RAG_HEADER_NAME_RE = /^[\p{L}\p{N}][\p{L}\p{N}_.'\u2019 \-]{0,59}$/u;
+
+/* A header line, with its tags on the same line if it has them (1.7.9):
+     # Selah                              an entry named Selah
+     # Selah, [.7 wing, .3 light, 1.0 angel]
+     # Selah [wing (0.7), light (0.3), angel]
+     # Selah: [.7 wing, .3 light, 1.0 angel]
+   plus the older "== selah ==" and "[selah]". Returns { name, tags } or null. */
+function ragParseHeaderLine(line) {
+  const t = line.trim();
+  let m = t.match(/^#{1,3}\s*(.+)$/);
+  if (m) {
+    let rest = m[1].trim(), tags = [];
+    const open = rest.indexOf('[');
+    if (open > 0 && rest.endsWith(']')) {
+      tags = parseWeightedTags(rest.slice(open + 1, -1));
+      rest = rest.slice(0, open).replace(/[\s,:;\u2014\u2013-]+$/, '').trim();
+    }
+    rest = rest.replace(/\s*#+$/, '').trim();   // "# Selah #" (closing hashes)
+    if (!RAG_HEADER_NAME_RE.test(rest)) return null;
+    return { name: rest, tags };
+  }
+  if (t.includes(':')) return null;
+  m = t.match(RAG_HEADER_RE);
+  return m ? { name: m[1].trim(), tags: [] } : null;
+}
 
 function ragNewEntity(id) {
   return {
@@ -89,7 +123,12 @@ function parseStorybook(raw) {
                    counts: { entities: 0, subtrees: 0, tags: 0, proseChunks: 0 } };
   if (!raw || !raw.trim()) return result;
 
-  const ensure = (id) => {
+  // One entry per name whatever its case: "# Selah" and "selah_tags:" are the
+  // same entry. The first spelling seen is the one shown.
+  const byLower = {};
+  const ensure = (name) => {
+    const key = name.toLowerCase();
+    const id = byLower[key] || (byLower[key] = name);
     if (!result.entities[id]) { result.entities[id] = ragNewEntity(id); result.order.push(id); }
     return result.entities[id];
   };
@@ -105,9 +144,14 @@ function parseStorybook(raw) {
 
   let current = null;          // active section entity id
   let proseBuf = [];           // un-attributed prose accumulating into a chunk
+  // Plain text becomes entries of up to RAG_ENTRY_SENTENCES sentences, so a
+  // text dump with no blank lines is still many small entries, and only the
+  // ones a scene touches are sent.
   const flushProse = () => {
     const text = proseBuf.join('\n').trim();
-    if (text) result.proseChunks.push({ id: 'doc:' + result.proseChunks.length, text });
+    for (const part of ragSplitEntries(text)) {
+      result.proseChunks.push({ id: 'doc:' + result.proseChunks.length, text: part });
+    }
     proseBuf = [];
   };
 
@@ -136,9 +180,12 @@ function parseStorybook(raw) {
       applyDirective(result.entities[current], m[1], m[2]);
       continue;
     }
-    if ((m = line.match(RAG_HEADER_RE)) && !line.includes(':')) {
+    const header = ragParseHeaderLine(line);
+    if (header) {
       if (!current) flushProse();
-      current = ensure(m[1].trim()).id;
+      const ent = ensure(header.name);
+      if (header.tags.length) ent.tags = ent.tags.concat(header.tags);
+      current = ent.id;
       continue;
     }
     // Plain prose. Attributed to the current section entity, else a doc chunk.
@@ -158,7 +205,144 @@ function parseStorybook(raw) {
   }
   result.counts.proseChunks = result.proseChunks.length
     + result.order.filter(id => result.entities[id].prose).length;
+  result.counts.plainEntries = result.proseChunks.length;
+  ragAutoTriggers(result);
   return result;
+}
+
+/* ---- Plain-text entries (1.7.9) ----------------------------------------
+   A storybook that is just prose has to work with nothing else running:
+   the embedding model is optional. Each plain entry gets triggers of its own,
+   worked out from its text the way a power user would write them:
+     - names (Selah, 'Neighbor') fire it on their own, like a header does;
+     - its distinctive words are tags too. By default one of them in the
+       conversation fires it, the way lorebooks usually behave; a character
+       can ask for two or three (card.ragWordsToFire) to be more specific.
+       A word other entries share counts for less.
+   Common words never count. With the embedding model running, entries are
+   also matched by meaning, as before. */
+const RAG_ENTRY_SENTENCES = 4;
+const RAG_WORDS_TO_FIRE_MAX = 5;
+
+/** How many distinctive words a card's plain entries need: 1 (default) to 5. */
+function ragWordsToFireOf(card) {
+  const n = Math.round(Number(card && card.ragWordsToFire));
+  return isFinite(n) && n >= 1 ? Math.min(n, RAG_WORDS_TO_FIRE_MAX) : 1;
+}
+const RAG_ABBREV_RE = /\b(?:Mr|Mrs|Ms|Dr|St|Mt|Jr|Sr|Prof|Capt|Lt|Col|Gen|Sgt|vs|etc|e\.g|i\.e)\.$/i;
+
+function ragSentences(text) {
+  const out = [];
+  let buf = '';
+  const parts = String(text || '').split(/(?<=[.!?\u2026]["'\u2019\u201d)\]]*)\s+/);
+  for (const p of parts) {
+    buf = buf ? buf + ' ' + p : p;
+    if (RAG_ABBREV_RE.test(buf.trim())) continue;   // "Dr. Vale" is one sentence
+    out.push(buf.trim());
+    buf = '';
+  }
+  if (buf.trim()) out.push(buf.trim());
+  return out.filter(Boolean);
+}
+
+function ragSplitEntries(text) {
+  const out = [];
+  for (const para of String(text || '').split(/\n\s*\n/)) {
+    const s = ragSentences(para.replace(/\s*\n\s*/g, ' ').trim());
+    for (let i = 0; i < s.length; i += RAG_ENTRY_SENTENCES) out.push(s.slice(i, i + RAG_ENTRY_SENTENCES).join(' '));
+  }
+  return out.filter(x => x.trim());
+}
+
+/* Light stemming, so a tag or name matches the forms people write:
+   wing/wings, angel/angels, glow/glowing/glowed, Selah/Selah's. Applied to
+   tags, names and the conversation alike. */
+function ragStem(w) {
+  let t = String(w).toLowerCase().replace(/[\u2019']s$/, '').replace(/[\u2019']/g, '');
+  if (t.length > 4 && t.endsWith('ies')) return t.slice(0, -3) + 'y';
+  if (t.length > 4 && /(?:ss|x|z|ch|sh)es$/.test(t)) return t.slice(0, -2);
+  if (t.length > 5 && t.endsWith('ing')) return t.slice(0, -3);
+  if (t.length > 4 && t.endsWith('ed') && !t.endsWith('eed')) return t.slice(0, -2);
+  if (t.length > 3 && t.endsWith('s') && !t.endsWith('ss') && !t.endsWith('us') && !t.endsWith('is')) return t.slice(0, -1);
+  return t;
+}
+function ragTokens(text) {
+  return (String(text || '').match(/[\p{L}\p{N}][\p{L}\p{N}_'\u2019\-]*/gu) || []).map(ragStem);
+}
+/* " a b c " form, so a phrase is found only on whole (stemmed) words. */
+function ragNormText(text) { return ' ' + ragTokens(text).join(' ') + ' '; }
+function ragPhraseHit(normText, phrase) {
+  const p = ragTokens(phrase).join(' ');
+  return !!p && normText.includes(' ' + p + ' ');
+}
+
+// Words too common to say what an entry is about. A plain entry's word tags
+// skip these (and RAG_STOPWORDS, and anything under four letters).
+const RAG_WEAK_WORDS = new Set(('always never sometime sometimes often usually really simply mostly almost '
+  + 'quite rather relatively little large small great good bad thing something nothing everything anything '
+  + 'people person time day year way make take give come goe look seem feel tri call find keep hold tell '
+  + 'ask show turn leave put mean become begin help talk around away across through toward towards within '
+  + 'without behind beside between among another every enough whole part place world life hand head eye '
+  + 'first last long high right left next sure true real able need use used know also though although '
+  + 'however perhap maybe instead together alone himself herself itself themselve yourself myself').split(' '));
+const RAG_OPENERS = new Set(('the a an and but or so yet for nor he she it they we you i his her its their '
+  + 'our your my this that these those there here then when while after before since because although if '
+  + 'though once some sometimes often usually always never many most few all each every one no not '
+  + 'as at by in on of to with from into over under upon during until unless whether what which who whom '
+  + 'whose where why how even still just only also perhaps maybe however instead later now today '
+  + 'yesterday tomorrow meanwhile soon long being').split(' '));
+
+/* Names in plain text: words written with a capital in the middle of a
+   sentence anywhere in the storybook (Neighbor, Velmora), and capitalised
+   words that open a sentence, are not common openers, and are never written
+   in lower case anywhere (Selah). */
+function ragBookNames(book) {
+  const texts = book.proseChunks.map(c => c.text).concat(book.order.map(id => book.entities[id].prose || ''));
+  const lowerSeen = new Set(), mid = new Set(), initial = new Set();
+  for (const text of texts) {
+    for (const sentence of ragSentences(text)) {
+      const words = sentence.match(/[\p{L}][\p{L}'\u2019\-]*/gu) || [];
+      words.forEach((w, i) => {
+        const bare = w.replace(/[\u2019'\-]+$/, '').replace(/[\u2019']s$/, '');
+        if (/^\p{Ll}/u.test(bare)) { lowerSeen.add(bare.toLowerCase()); return; }
+        if (!/^\p{Lu}/u.test(bare) || bare.length < 3 || /^\p{Lu}+$/u.test(bare) && bare.length < 4) return;
+        (i === 0 ? initial : mid).add(bare);
+      });
+    }
+  }
+  const names = new Set();
+  for (const w of mid) if (!RAG_OPENERS.has(w.toLowerCase()) && !RAG_STOPWORDS.has(w.toLowerCase())) names.add(w);
+  for (const w of initial) {
+    const l = w.toLowerCase();
+    if (!RAG_OPENERS.has(l) && !RAG_STOPWORDS.has(l) && !lowerSeen.has(l)) names.add(w);
+  }
+  return names;
+}
+
+function ragAutoTriggers(book) {
+  const names = ragBookNames(book);
+  const df = new Map();
+  const wordsOf = book.proseChunks.map(c => {
+    const set = new Set();
+    for (const t of ragTokens(c.text)) {
+      if (t.length >= 4 && !RAG_STOPWORDS.has(t) && !RAG_WEAK_WORDS.has(t) && !/^\d+$/.test(t)) set.add(t);
+    }
+    for (const t of set) df.set(t, (df.get(t) || 0) + 1);
+    return set;
+  });
+  book.proseChunks.forEach((c, i) => {
+    const own = [], norm = ragNormText(c.text);
+    for (const n of names) if (ragPhraseHit(norm, n)) own.push(n);
+    c.names = own;
+    const nameStems = new Set(own.map(n => ragTokens(n).join(' ')));
+    c.words = [];
+    for (const w of wordsOf[i]) {
+      if (nameStems.has(w)) continue;
+      // 1 for a word only this entry has, 1/2 for one two entries share...
+      // divided again at retrieval by the words the card asks for.
+      c.words.push({ term: w, weight: 1 / (df.get(w) || 1) });
+    }
+  });
 }
 
 /* Parse-and-cache on the card. Re-parses only when the raw text changes
@@ -604,31 +788,69 @@ async function runRetrieval(thread, card, freeForRetrieval, budgetSnapshot) {
     const weightSums = {}; // id -> { sum, matched:[{term,weight}], identityHit:bool, nameHit:bool }
 
     // ---- Retriever B: weighted-tag firing ----
+    // Matching is on whole, lightly stemmed words (ragNormText), so "wing"
+    // finds "wings" and "Selah" finds "Selah's". A sum of exactly the
+    // threshold fires: .7 + .3 is 1.0, whatever floating point says.
+    const thr = cfg.fireThreshold - 1e-9;
+    const windowNorm = ragNormText(windowText);
     if (cfg.retrieverB) {
       for (const id of book.order) {
         const e = book.entities[id];
-        if (!e.tags.length) continue;
         let sum = 0; const matched = []; let identityHit = false;
         for (const t of e.tags) {
-          const re = new RegExp('\\b' + t.term.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b');
-          if (re.test(windowLower)) {
+          if (ragPhraseHit(windowNorm, t.term)) {
             matched.push({ term: t.term, weight: t.weight });
             sum += t.weight;
-            if (t.weight >= cfg.fireThreshold) identityHit = true;
+            if (t.weight >= thr) identityHit = true;
           }
         }
-        // explicit name mention (entity id or its leaf name) bypasses suppression
-        const leaf = id.split('.').pop();
-        const nameHit = new RegExp('\\b' + leaf.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b').test(windowLower);
+        // The entry's name -- its header, or the id of a flat entry -- is its
+        // primary trigger (1.7.9): saying it fires the entry, tags or no tags,
+        // and also lifts offscreen suppression.
+        const leaf = id.split('.').pop().replace(/_/g, ' ');
+        const nameHit = ragPhraseHit(windowNorm, leaf);
         weightSums[id] = { sum, matched, identityHit, nameHit };
 
-        if (sum >= cfg.fireThreshold) {
+        if (sum >= thr || nameHit) {
           const c = touch(id);
           c.matched_tags = matched;
           c.weight_sum = sum;
-          c.triggers.add(identityHit ? 'identity' : 'thematic_cluster');
+          if (sum >= thr) c.triggers.add(identityHit ? 'identity' : 'thematic_cluster');
+          if (nameHit) c.triggers.add('name');
           c._nameHit = nameHit;
         }
+      }
+
+      // Plain-text entries: a name in them fires one outright; otherwise its
+      // word tags add up like any other tags, each worth 1/N of the threshold
+      // where N is the words the card asks for (ragWordsToFire, default 1).
+      // Word-only fires are capped at top-k, strongest first, so a long reply
+      // cannot pull in everything.
+      const wordsNeeded = ragWordsToFireOf(card);
+      const wordFires = [];
+      for (const ch of book.proseChunks) {
+        const names = (ch.names || []).filter(n => ragPhraseHit(windowNorm, n));
+        let sum = 0; const matched = [];
+        for (const t of (ch.words || [])) {
+          if (windowNorm.includes(' ' + t.term + ' ')) {
+            const w = t.weight * cfg.fireThreshold / wordsNeeded;   // unrounded: 3 x 1/3 must reach 1
+            matched.push({ term: t.term, weight: +w.toFixed(3) }); sum += w;
+          }
+        }
+        if (names.length) {
+          const c = touch(ch.id);
+          c.prose = ch.text; c.triggers.add('name'); c._nameHit = true;
+          c.matched_tags = names.map(n => ({ term: n, weight: 1 })).concat(matched);
+          c.weight_sum = sum;
+        } else if (sum >= thr) {
+          wordFires.push({ ch, sum, matched });
+        }
+      }
+      wordFires.sort((a, b) => b.sum - a.sum);
+      for (const f of wordFires.slice(0, cfg.topKA || 5)) {
+        const c = touch(f.ch.id);
+        c.prose = f.ch.text; c.triggers.add('keyword');
+        c.matched_tags = f.matched; c.weight_sum = f.sum;
       }
     }
 
@@ -723,6 +945,7 @@ async function runRetrieval(thread, card, freeForRetrieval, budgetSnapshot) {
     const roleBoost = (role) => role && role.trim() ? 1.15 : 1.0;
     const triggerType = (c) => {
       if (c.triggers.has('identity')) return 'identity';
+      if (c.triggers.has('name')) return 'name';
       if (c.triggers.has('thematic_cluster')) return 'thematic_cluster';
       if (c.triggers.has('relational')) return 'relational';
       if (c.triggers.has('semantic')) return 'semantic';
@@ -737,7 +960,9 @@ async function runRetrieval(thread, card, freeForRetrieval, budgetSnapshot) {
       const tt = triggerType(c);
       // base score: blend normalized weight-sum and semantic similarity
       const wScore = c.weight_sum > 0 ? Math.min(1, c.weight_sum / (cfg.fireThreshold * 2)) : 0;
-      let base = Math.max(wScore, c.semScore);
+      // Named outright: as sure a pull as there is.
+      const nScore = c.triggers.has('name') ? 1 : 0;
+      let base = Math.max(wScore, c.semScore, nScore);
       if (tt === 'warmth' || tt === 'relational') base *= 0.6; // dampen sticky/expanded pulls
       const score = +(base * roleBoost(c.role)).toFixed(4);
 
@@ -789,7 +1014,7 @@ async function runRetrieval(thread, card, freeForRetrieval, budgetSnapshot) {
       injections.push({ entityId: r.id, text: injectText, tokenCost, label: r.c.label || null });
       record.candidates.push(_ragCandRow(r, tokenCost, true, null, !!usePrinciples));
       // re-light warmth for anything actually included via a real fire
-      if (r.tt === 'identity' || r.tt === 'thematic_cluster' || r.tt === 'semantic') {
+      if (r.tt === 'identity' || r.tt === 'name' || r.tt === 'thematic_cluster' || r.tt === 'semantic') {
         warmth[r.id] = cfg.warmthTurns;
       }
     }
@@ -1227,7 +1452,7 @@ async function buildContextMessages(thread, card, opts) {
         const scrubbed = ragScrubWeightAnnotations(inj.text, allTerms);
         ragMsgs.push({
           role: 'system',
-          content: '[' + (inj.label || ('Storybook: ' + inj.entityId)) + ']\n' + translateTemplates(scrubbed, charName, userName)
+          content: '[' + (inj.label || (/^doc:/.test(inj.entityId) ? 'Storybook' : 'Storybook: ' + inj.entityId)) + ']\n' + translateTemplates(scrubbed, charName, userName)
         });
       }
     } catch (e) {

@@ -1,0 +1,70 @@
+/* @gobbonet-split css/18-config-sections.css
+   CONFIG sections and search (1.7.9, F3). The settings themselves keep their
+   own boxes; this only adds the headings that group them, the search row, and
+   what search hides. Colours come from 01-tokens.css.
+   @end-split-header */
+
+.cfg-search-row {
+  position: sticky;
+  top: -1px;               /* stays reachable while the panel scrolls */
+  z-index: 2;
+  margin: 4px 0 6px;
+  padding: 8px 0;
+  background: var(--surface);
+}
+.cfg-search {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 9px 12px;
+  font-family: var(--font);
+  font-size: 13px;
+  color: var(--white);
+  background: var(--black);
+  border: 1px solid var(--cyan-dim);
+  border-radius: var(--radius);
+}
+.cfg-search:focus { outline: none; border-color: var(--cyan-bright); box-shadow: var(--glow-cyan); }
+.cfg-search-empty { margin-top: 8px; font-size: 12px; color: var(--cyan-mid); }
+.cfg-search-empty:empty { display: none; }
+
+.cfg-section { margin: 22px 0 6px; }
+.cfg-section:first-of-type { margin-top: 10px; }
+
+.cfg-section-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  margin: 0 0 4px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+  font-family: var(--font);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  color: var(--magenta);
+}
+.cfg-section-blurb {
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+/* Advanced is a <details>: closed until asked for. */
+.cfg-advanced > summary { cursor: pointer; list-style: none; }
+.cfg-advanced > summary::-webkit-details-marker { display: none; }
+.cfg-advanced > summary::before {
+  content: "\25B8";        /* ▸ closed, ▾ open */
+  display: inline-block;
+  width: 1em;
+  color: var(--cyan-mid);
+}
+.cfg-advanced[open] > summary::before { content: "\25BE"; }
+.cfg-advanced > summary:focus-visible { outline: 1px solid var(--cyan-bright); outline-offset: 3px; }
+
+/* Search hides with a class, never with style.display, so it cannot fight the
+   panels that show or hide themselves (Config File, Add a Model, ...). */
+.cfg-hide { display: none !important; }

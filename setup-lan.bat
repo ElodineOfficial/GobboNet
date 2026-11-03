@@ -61,6 +61,9 @@ echo.
 echo   NOTE: if you re-run this after an earlier version, it
 echo   will UPDATE the existing rules to the current scope.
 echo.
+echo   Home and work networks only. To allow Public networks
+echo   ^(cafes, hotels^) as well, run:  setup-lan.bat /public
+echo.
 echo   It must be run ONCE as Administrator.
 echo   You do NOT need to run this again after the first
 echo   time, even after reboots.
@@ -161,6 +164,68 @@ echo  [OK] llama.cpp port: !LLM_PORT!
 echo.
 
 :: ---------------------------------------------------------------
+:: NETWORK PROFILES (1.7.9, PR #7)
+::
+:: Rules used to be written for the Domain, Private AND Public profiles.
+:: Public is what Windows calls a cafe, airport or hotel network, and an
+:: unencrypted chat has no business being reachable there just because the
+:: laptop joined one. So the rules now cover Domain and Private only.
+::
+:: The catch is that Windows often labels a HOME network Public too, and on
+:: such a network the phone would now be refused with no explanation. So if
+:: the network this PC is on right now is Public, we say so and ask:
+::
+::   [P] make this network Private   -- the right fix for a home network
+::   [A] allow Public networks too   -- the old behaviour, now a choice
+::   [S] skip                        -- leave it; phones can't reach it here
+::
+:: `setup-lan.bat /public` chooses [A] without asking. The question times out
+:: to [S] after 60 seconds, so an unattended run never widens anything.
+::
+:: No pipes in the PowerShell below, on purpose: a pipe inside a quoted
+:: command needs escaping rules that differ between `for /f` and a plain
+:: line, and a wrong guess makes the check fail silently.
+:: ---------------------------------------------------------------
+set "GN_PROFILES=domain,private"
+set "GN_PROFILE_LIST=domain private"
+if /i "%~1"=="/public" goto :profiles_public
+set "GN_NETCAT="
+for /f "usebackq delims=" %%C in (`powershell -NoProfile -Command "$ErrorActionPreference='SilentlyContinue'; if (@(Get-NetConnectionProfile).NetworkCategory -contains 'Public') { 'public' }" 2^>nul`) do set "GN_NETCAT=%%C"
+if /i not "!GN_NETCAT!"=="public" goto :profiles_done
+echo  [!] Windows has marked the network this PC is on as PUBLIC.
+echo      GobboNet's firewall rules cover Private and work networks only,
+echo      so a phone on THIS network will not be able to connect yet.
+echo.
+echo      If this is your home network, make it Private. That is what
+echo      Windows means it to be, and it changes nothing else here.
+echo.
+choice /c PAS /n /t 60 /d S /m "     [P] make this network Private   [A] allow Public networks too   [S] skip: "
+if errorlevel 3 goto :profiles_skip
+if errorlevel 2 goto :profiles_public
+powershell -NoProfile -Command "$ErrorActionPreference='Stop'; foreach ($p in @(Get-NetConnectionProfile)) { if ($p.NetworkCategory -eq 'Public') { Set-NetConnectionProfile -InterfaceIndex $p.InterfaceIndex -NetworkCategory Private } }" >nul 2>&1
+if errorlevel 1 goto :profiles_private_failed
+echo  [OK] This network is now Private. Phones on it can connect.
+goto :profiles_done
+:profiles_private_failed
+echo  [!] Windows would not change the network to Private. Do it by hand:
+echo      Settings ^> Network ^& internet ^> your network ^> Private network.
+echo      Or run:  setup-lan.bat /public
+goto :profiles_done
+:profiles_skip
+echo  [*] Skipped. Phones can connect once this network is Private, or after
+echo      running:  setup-lan.bat /public
+goto :profiles_done
+:profiles_public
+set "GN_PROFILES=domain,private,public"
+set "GN_PROFILE_LIST=domain private public"
+echo  [!] Opening GobboNet on PUBLIC networks too ^(cafes, hotels, airports^).
+echo      Still local subnet only and still behind your password, but the chat
+echo      is not encrypted. Anyone on such a network can see the traffic.
+:profiles_done
+echo  [OK] Firewall profiles: !GN_PROFILES!
+echo.
+
+:: ---------------------------------------------------------------
 :: FIREWALL RULES
 :: ---------------------------------------------------------------
 echo  [..] Adding firewall rules...
@@ -196,14 +261,16 @@ if not errorlevel 1 (
 :: one -- got no rule at all and no message saying so. The scope is still
 :: LocalSubnet on every profile, so this widens nothing: a domain network the
 :: user is actually on is as much "their LAN" as a home one.
+:: Public is included only by choice; see NETWORK PROFILES above (1.7.9).
+:: Re-running repairs an older rule that covered Public without being asked.
 netsh advfirewall firewall show rule name="GobboNet-Web" >nul 2>&1
 if errorlevel 1 (
-    netsh advfirewall firewall add rule name="GobboNet-Web" dir=in action=allow protocol=TCP localport=!WEB_PORT! profile=domain,private,public remoteip=LocalSubnet >nul
-    echo  [OK] Firewall rule added: GobboNet-Web (port !WEB_PORT!, file server, local subnet only)
+    netsh advfirewall firewall add rule name="GobboNet-Web" dir=in action=allow protocol=TCP localport=!WEB_PORT! profile=!GN_PROFILES! remoteip=LocalSubnet >nul
+    echo  [OK] Firewall rule added: GobboNet-Web ^(port !WEB_PORT!, local subnet only, !GN_PROFILES!^)
 ) else (
     rem Repair any pre-existing (possibly wide-open) rule from an older run.
-    netsh advfirewall firewall set rule name="GobboNet-Web" new dir=in action=allow protocol=TCP localport=!WEB_PORT! profile=domain,private,public remoteip=LocalSubnet >nul
-    echo  [OK] Firewall rule updated: GobboNet-Web (re-scoped to local subnet only)
+    netsh advfirewall firewall set rule name="GobboNet-Web" new dir=in action=allow protocol=TCP localport=!WEB_PORT! profile=!GN_PROFILES! remoteip=LocalSubnet >nul
+    echo  [OK] Firewall rule updated: GobboNet-Web ^(re-scoped: local subnet only, !GN_PROFILES!^)
 )
 
 :: Until 1.7.8 the rule above was named Gemma4-Web, after the model the project
@@ -242,13 +309,13 @@ if not errorlevel 1 (
 :: ---------------------------------------------------------------
 echo  [..] Checking for blocking rules on gobbonet.exe...
 set "GN_BLOCKED="
-for /f "usebackq delims=" %%B in (`powershell -NoProfile -Command "$ErrorActionPreference='SilentlyContinue'; @(Get-NetFirewallRule -Direction Inbound -Action Block ^| Where-Object { ($_ ^| Get-NetFirewallApplicationFilter).Program -like '*gobbonet.exe' }).Count" 2^>nul`) do set "GN_BLOCKED=%%B"
+for /f "usebackq delims=" %%B in (`powershell -NoProfile -Command "$ErrorActionPreference='SilentlyContinue'; $n = 0; foreach ($r in @(Get-NetFirewallRule -Direction Inbound -Action Block)) { if ((Get-NetFirewallApplicationFilter -AssociatedNetFirewallRule $r).Program -like '*gobbonet.exe') { $n++ } }; $n" 2^>nul`) do set "GN_BLOCKED=%%B"
 if not defined GN_BLOCKED set "GN_BLOCKED=0"
 if !GN_BLOCKED! gtr 0 (
     echo  [!] Found !GN_BLOCKED! rule^(s^) blocking gobbonet.exe. Removing them --
     echo      a Block rule overrides the allow rule above, which is why phone
     echo      access can fail on a machine where this script reported success.
-    powershell -NoProfile -Command "$ErrorActionPreference='SilentlyContinue'; Get-NetFirewallRule -Direction Inbound -Action Block | Where-Object { ($_ | Get-NetFirewallApplicationFilter).Program -like '*gobbonet.exe' } | Remove-NetFirewallRule" >nul 2>&1
+    powershell -NoProfile -Command "$ErrorActionPreference='SilentlyContinue'; foreach ($r in @(Get-NetFirewallRule -Direction Inbound -Action Block)) { if ((Get-NetFirewallApplicationFilter -AssociatedNetFirewallRule $r).Program -like '*gobbonet.exe') { Remove-NetFirewallRule -InputObject $r } }" >nul 2>&1
     echo  [OK] Blocking rules removed.
 ) else (
     echo  [OK] No blocking rules for gobbonet.exe.
@@ -268,20 +335,25 @@ if !GN_BLOCKED! gtr 0 (
 :: ---------------------------------------------------------------
 if exist "%~dp0gobbonet.exe" (
     netsh advfirewall firewall delete rule name="GobboNet" program="%~dp0gobbonet.exe" >nul 2>&1
-    netsh advfirewall firewall add rule name="GobboNet" dir=in action=allow program="%~dp0gobbonet.exe" enable=yes profile=domain,private,public remoteip=LocalSubnet >nul
-    echo  [OK] Firewall rule added: GobboNet ^(gobbonet.exe, local subnet only^)
+    netsh advfirewall firewall add rule name="GobboNet" dir=in action=allow program="%~dp0gobbonet.exe" enable=yes profile=!GN_PROFILES! remoteip=LocalSubnet >nul
+    echo  [OK] Firewall rule added: GobboNet ^(gobbonet.exe, local subnet only, !GN_PROFILES!^)
 )
 
 echo.
 
 :: ---------------------------------------------------------------
-:: mDNS (.local hostname) -- enable on every profile, local subnet only
+:: mDNS (.local hostname) -- for the same profiles as the rules above
 ::
-:: Windows ships with built-in 'mDNS (UDP-In)' rules. We enable the
-:: rule on Private AND Public profiles, scoped to the local subnet,
-:: so phones can resolve <PC>.local on a home network regardless of
-:: how Windows auto-classified it (home Wi-Fi is often tagged Public,
-:: which would otherwise block .local resolution).
+:: Windows ships built-in 'mDNS (UDP-In)' rules, one per profile. Until
+:: 1.7.9 this script re-scoped ALL of them to every profile, Public
+:: included -- a change to a Windows rule that other programs rely on,
+:: made on networks the user never chose (PR #7). Now it only switches
+:: on the built-in rule for each profile in GN_PROFILES, and leaves the
+:: networks each rule covers exactly as Windows set them.
+::
+:: If none matches (older builds without the built-in rules), a
+:: GobboNet-mDNS rule is added instead, for GN_PROFILES and the local
+:: subnet only.
 ::
 :: Access is still bounded two ways: remoteip=LocalSubnet keeps the
 :: wider internet out, and the file server itself requires a password
@@ -294,26 +366,30 @@ echo.
 :: IP rotations (same hostname = same origin). No more lost chats
 :: when DHCP hands out a new lease.
 :: ---------------------------------------------------------------
-echo  [..] Enabling mDNS (.local hostname) on Private + Public profiles...
+echo  [..] Enabling mDNS ^(.local hostname^) for: !GN_PROFILES!
 
 set "GN_MDNS_OK="
-netsh advfirewall firewall set rule name="mDNS (UDP-In)" new enable=yes profile=domain,private,public >nul 2>&1
-if errorlevel 1 (
+set "GN_MDNS_ANY="
+for %%F in (!GN_PROFILE_LIST!) do (
+    netsh advfirewall firewall set rule name="mDNS (UDP-In)" profile=%%F new enable=yes >nul 2>&1
+    if not errorlevel 1 set "GN_MDNS_ANY=1"
+)
+if not defined GN_MDNS_ANY (
     rem Older builds may not have the canonical rule name. Add a fresh
     rem one as a fallback so the .local hostname still works -- scoped
     rem to private + local subnet to match the service rules.
     netsh advfirewall firewall show rule name="GobboNet-mDNS" >nul 2>&1
     if errorlevel 1 (
-        netsh advfirewall firewall add rule name="GobboNet-mDNS" dir=in action=allow protocol=UDP localport=5353 profile=domain,private,public remoteip=LocalSubnet >nul
+        netsh advfirewall firewall add rule name="GobboNet-mDNS" dir=in action=allow protocol=UDP localport=5353 profile=!GN_PROFILES! remoteip=LocalSubnet >nul
         if not errorlevel 1 set "GN_MDNS_OK=1"
-        echo  [OK] Firewall rule added: GobboNet-mDNS (UDP 5353, .local resolution, local subnet only)
+        echo  [OK] Firewall rule added: GobboNet-mDNS ^(UDP 5353, local subnet only, !GN_PROFILES!^)
     ) else (
         set "GN_MDNS_OK=1"
         echo  [OK] Firewall rule already exists: GobboNet-mDNS
     )
 ) else (
     set "GN_MDNS_OK=1"
-    echo  [OK] Built-in 'mDNS (UDP-In)' rule enabled on all profiles.
+    echo  [OK] Built-in 'mDNS ^(UDP-In^)' rule enabled for: !GN_PROFILES!
 )
 
 :: The fallback rule was named Gemma4-mDNS until 1.7.8 (issue #63). Once mDNS
@@ -378,6 +454,40 @@ echo  [..] Adding URL ACL reservations...
 :: was being treated as proof the ACL existed, which sent diagnosis of
 :: the web-port failures down the wrong path.
 :: ---------------------------------------------------------------
+
+:: WHO GETS THE RESERVATION (1.7.9, PR #7)
+::
+:: It used to be granted to Everyone (SID WD). That let ANY account on this
+:: PC claim the chat's address through HTTP.SYS and serve its own page there
+:: -- a fake sign-in page, say -- to every phone on the network. It is now
+:: granted to one account: the person signed in at this PC's console, which
+:: is who runs GobboNet. If this window was elevated with a different admin
+:: account, that admin is NOT who gets it -- which is the mistake the old
+:: printout could not show. If no console user can be found (a remote
+:: desktop session, say), the account running this script is used.
+::
+:: Who that is gets printed, so a wrong guess is visible. The SID form keeps
+:: the locale fix described above: no account name goes through netsh.
+::
+:: gobbonet.exe does not need the reservation at all: it binds with Winsock,
+:: not HTTP.SYS. Only the legacy PowerShell server (deprecated, gone in 1.8)
+:: uses it. So when no account can be determined the reservation is skipped
+:: rather than handed to Everyone again.
+set "GN_ACL_SID="
+set "GN_ACL_USER="
+for /f "usebackq delims=" %%S in (`powershell -NoProfile -Command "$ErrorActionPreference='SilentlyContinue'; $u = (Get-CimInstance Win32_ComputerSystem).UserName; if (-not $u) { $u = [Security.Principal.WindowsIdentity]::GetCurrent().Name }; (New-Object Security.Principal.NTAccount($u)).Translate([Security.Principal.SecurityIdentifier]).Value" 2^>nul`) do set "GN_ACL_SID=%%S"
+for /f "usebackq delims=" %%U in (`powershell -NoProfile -Command "$ErrorActionPreference='SilentlyContinue'; $u = (Get-CimInstance Win32_ComputerSystem).UserName; if (-not $u) { $u = [Security.Principal.WindowsIdentity]::GetCurrent().Name }; $u" 2^>nul`) do set "GN_ACL_USER=%%U"
+if defined GN_ACL_SID (
+    echo !GN_ACL_SID!| findstr /r "^S-1-[0-9][0-9-]*$" >nul 2>&1
+    if errorlevel 1 set "GN_ACL_SID="
+)
+if defined GN_ACL_SID (
+    echo  [OK] The reservation will belong to: !GN_ACL_USER!
+) else (
+    echo  [!] Could not work out which account runs GobboNet, so no URL
+    echo      reservation is made. gobbonet.exe does not need one; only the
+    echo      deprecated legacy PowerShell server does.
+)
 
 :: (no search proxy ACL -- nothing binds that port now)
 call :add_urlacl !WEB_PORT! "file server"
@@ -484,28 +594,36 @@ setlocal EnableDelayedExpansion
 set "_PORT=%~1"
 set "_LABEL=%~2"
 
+if not defined GN_ACL_SID endlocal & goto :eof
+
 :: Match the URL, not the header. netsh translates its headers; it does
 :: not translate the reservation it is printing.
+::
+:: An existing reservation is REPLACED, not kept (1.7.9): one made by an
+:: older version of this script belongs to Everyone, and keeping it would
+:: keep the hole. Deleting and re-adding is idempotent for a reservation
+:: that is already right.
 netsh http show urlacl url=http://+:!_PORT!/ 2>nul | findstr /i ":!_PORT!/" >nul 2>&1
 if not errorlevel 1 (
-    echo  [OK] URL ACL already exists: http://+:!_PORT!/ ^(!_LABEL!^)
-    endlocal & goto :eof
+    netsh http delete urlacl url=http://+:!_PORT!/ >nul 2>&1
+    echo  [OK] Replacing the existing URL reservation for http://+:!_PORT!/
 )
 
-:: SDDL form. WD is the Everyone SID; GX is the generic-execute right
+:: SDDL form, with the SID found above; GX is the generic-execute right
 :: HTTP.SYS checks when handing out a prefix reservation.
-netsh http add urlacl url=http://+:!_PORT!/ sddl=D:(A;;GX;;;WD) >nul 2>&1
+netsh http add urlacl url=http://+:!_PORT!/ sddl=D:(A;;GX;;;!GN_ACL_SID!) >nul 2>&1
 
 :: Verify instead of assuming. This is the entire point of the rewrite.
 netsh http show urlacl url=http://+:!_PORT!/ 2>nul | findstr /i ":!_PORT!/" >nul 2>&1
 if errorlevel 1 (
     echo  [ERROR] Could not add a URL ACL for http://+:!_PORT!/ ^(!_LABEL!^)
     echo          Run this by hand in this window and paste the output:
-    echo            netsh http add urlacl url=http://+:!_PORT!/ sddl=D:^(A;;GX;;;WD^)
-    echo          Without it, GobboNet falls back to this PC only -- the
-    echo          chat still works locally, but phones will not reach it.
+    echo            netsh http add urlacl url=http://+:!_PORT!/ sddl=D:^(A;;GX;;;!GN_ACL_SID!^)
+    echo          gobbonet.exe does not need it. Only the deprecated legacy
+    echo          PowerShell server does, and without it that falls back to
+    echo          this PC only.
 ) else (
-    echo  [OK] URL ACL added: http://+:!_PORT!/ ^(!_LABEL!^)
+    echo  [OK] URL reservation added: http://+:!_PORT!/ ^(!_LABEL!, for !GN_ACL_USER! only^)
 )
 endlocal & goto :eof
 

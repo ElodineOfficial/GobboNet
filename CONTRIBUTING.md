@@ -46,7 +46,8 @@ merged, however useful they are otherwise.
   anything else: off by default, clearly labelled, and it sends only the
   search and the user's own search key.
 - **Every download is pinned by SHA-256**: the engine (`engine.sha256`), the
-  model catalogue and the embedding model. A new download needs a pin.
+  model catalogue, the embedding model and every file of an endorsed mod. A
+  new download needs a pin.
 - **A new dependency or network destination needs a reason in the PR.**
 - **The code stays legible.** No obfuscation, encoded commands or hidden
   windows. [SECURITY.md](SECURITY.md) explains why this matters for this
@@ -62,11 +63,11 @@ merged, however useful they are otherwise.
    ```sh
    for f in tests/*.mjs; do node "$f" || echo "FAILED: $f"; done
    for f in tests/*.py;  do python3 "$f" || echo "FAILED: $f"; done
-   bash ./stage-web.sh && go test ./...
+   bash ./scripts/stage-web.sh && go test ./...
    ```
 
    `tests/test-linux-onboarding.py` needs a built `linux-amd64/gobbonet` and an
-   engine; `./make-zip.sh` builds both. See [tests/README.md](tests/README.md).
+   engine; `./scripts/make-zip.sh` builds both. See [tests/README.md](tests/README.md).
 
 2. **Keep the house rules the tests can't always catch:**
    - Batch files stay CRLF. Inside a `( )` block, escape parentheses in

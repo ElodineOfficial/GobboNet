@@ -299,24 +299,38 @@ function deleteThread(id, event) {
   // collects the spool either way.)
   const doomed = state.threads.find(t => t.id === id);
   if (doomed && doomed.pendingJob && doomed.pendingJob.id) {
-    privacyFetch(`${JOBS_URL}/${doomed.pendingJob.id}/cancel`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }).catch(() => {});
+    privacyFetch(`${JOBS_URL}/${encodeURIComponent(doomed.pendingJob.id)}/cancel`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }).catch(() => {});
     if (currentJob && currentJob.id === doomed.pendingJob.id) currentJob.cancelSent = true;
   }
+  const at = state.threads.findIndex(t => t.id === id);
+  if (at < 0) return;
+  const wasActive = state.activeThreadId === id;
   state.threads = state.threads.filter(t => t.id !== id);
-  if (state.activeThreadId === id) {
+  if (wasActive) {
     state.activeThreadId = state.threads.length > 0 ? state.threads[0].id : null;
-  }
-  // The IndexedDB record has to go explicitly. A full save only ever PUTs the
-  // threads that still exist (writeFullToIdb -> idbWriteSnapshot), so nothing
-  // in the save path removes a record -- the same gap wipeLocalStorageAll()
-  // documents for PURGE ALL. Left behind, the record is read straight back
-  // into state by the next boot and the deleted chat reappears.
-  if (STORAGE_BACKEND === 'idb') {
-    idbDelete('threads', id).catch(e =>
-      console.warn('[storage] could not remove thread record', id, e && e.message));
   }
   saveState();
   render();
+  // UNDO (1.7.9). The IndexedDB record has to go explicitly -- a full save only
+  // ever PUTs the threads that still exist (writeFullToIdb -> idbWriteSnapshot),
+  // the same gap wipeLocalStorageAll() documents for PURGE ALL -- and that is
+  // the one thing that cannot be taken back, so it waits for the window to
+  // close. Until then the record is still there, which is also why a tab that
+  // dies mid-window simply brings the chat back.
+  undoable({
+    label: 'Deleted chat "' + String(doomed.name || 'Untitled').slice(0, 40) + '"',
+    undo: () => {
+      if (!state.threads.some(t => t.id === id)) state.threads.splice(Math.min(at, state.threads.length), 0, doomed);
+      if (wasActive) state.activeThreadId = id;
+      render();
+    },
+    commit: () => {
+      if (STORAGE_BACKEND === 'idb') {
+        idbDelete('threads', id).catch(e =>
+          console.warn('[storage] could not remove thread record', id, e && e.message));
+      }
+    },
+  });
 }
 
 function switchThread(id) {

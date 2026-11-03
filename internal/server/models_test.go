@@ -12,6 +12,7 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -204,7 +205,7 @@ func TestModelDownloadOneAtATime(t *testing.T) {
 
 	// Ask for entry 2 as well: small enough to clear the disk guard anywhere, so
 	// what this test observes is the concurrency policy and not a space refusal.
-	rec := do(t, srv, http.MethodPost, "/model-download", strings.NewReader(`{"index":2}`))
+	rec := do(t, srv, http.MethodPost, "/model-download", strings.NewReader(`{"index":2,"confirmUnverified":true}`))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("got %d, want 200: %s", rec.Code, rec.Body.String())
 	}
@@ -245,7 +246,7 @@ func TestModelDownloadRefusesWhenDiskIsTooSmall(t *testing.T) {
 		t.Skip("this disk has room for the 16 GB entry, so the guard should not fire")
 	}
 
-	rec := do(t, srv, http.MethodPost, "/model-download", strings.NewReader(`{"index":1}`))
+	rec := do(t, srv, http.MethodPost, "/model-download", strings.NewReader(`{"index":1,"confirmUnverified":true}`))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("got %d, want 400: %s", rec.Code, rec.Body.String())
 	}
@@ -275,7 +276,7 @@ func TestModelDownloadReportsRunningBeforeDiskSpace(t *testing.T) {
 		t.Skip("needs a disk too small for the 16 GB entry for the two answers to differ")
 	}
 
-	rec := do(t, srv, http.MethodPost, "/model-download", strings.NewReader(`{"index":1}`))
+	rec := do(t, srv, http.MethodPost, "/model-download", strings.NewReader(`{"index":1,"confirmUnverified":true}`))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("got %d, want 200 — a running download should be reported, not a disk error: %s",
 			rec.Code, rec.Body.String())
@@ -485,7 +486,7 @@ func TestStartingADownloadDoesNotTouchTheRunningModelsSettings(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	rec := do(t, srv, http.MethodPost, "/model-download", strings.NewReader(`{"index":2}`))
+	rec := do(t, srv, http.MethodPost, "/model-download", strings.NewReader(`{"index":2,"confirmUnverified":true}`))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("got %d, want 200: %s", rec.Code, rec.Body.String())
 	}
@@ -665,5 +666,99 @@ func TestCatalogJSONCarriesTheMoEAllowance(t *testing.T) {
 	}
 	if _, ok := dense["minRAM"]; ok {
 		t.Errorf("dense model carries minRAM: %v", dense)
+	}
+}
+
+// --- Tiers and the unverified second click (1.7.9, F2) ----------------------
+
+func TestCatalogJSONCarriesTierAndVerified(t *testing.T) {
+	srv, _ := newTestServer(t)
+	path := filepath.Join(t.TempDir(), "models.ini")
+	pinned := strings.Replace(testCatalog, "file=small.gguf\r\n",
+		"file=small.gguf\r\nsha256="+strings.Repeat("ab", 32)+"\r\n", 1)
+	if err := os.WriteFile(path, []byte(pinned), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cat, err := catalog.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.catMu.Lock()
+	srv.cat, srv.catErr = cat, nil
+	srv.catMu.Unlock()
+
+	rec := do(t, srv, http.MethodGet, "/catalog.json", nil)
+	var body struct {
+		Models []struct {
+			Index    int    `json:"index"`
+			Tier     string `json:"tier"`
+			Verified bool   `json:"verified"`
+		} `json:"models"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	got := map[int]string{}
+	for _, m := range body.Models {
+		got[m.Index] = fmt.Sprintf("%s/%v", m.Tier, m.Verified)
+	}
+	if got[1] != "mid/false" || got[2] != "small/true" {
+		t.Errorf("tier/verified = %v, want 1:mid/false 2:small/true", got)
+	}
+}
+
+// nowhereToWrite points the models folder somewhere it cannot be created, so a
+// download these tests start fails at its first step and writes nothing.
+func nowhereToWrite(t *testing.T, srv *Server) {
+	t.Helper()
+	blocked := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(blocked, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	srv.cfg.ModelDir = filepath.Join(blocked, "models")
+}
+
+func TestUnverifiedDownloadNeedsASecondYes(t *testing.T) {
+	srv, _ := newTestServer(t)
+	withCatalog(t, srv)
+	nowhereToWrite(t, srv)
+
+	rec := do(t, srv, http.MethodPost, "/model-download", strings.NewReader(`{"index":2}`))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("got %d, want 409: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"needsConfirm":true`) || !strings.Contains(rec.Body.String(), "Click again") {
+		t.Errorf("the refusal should say a second click is needed: %s", rec.Body.String())
+	}
+	if srv.downloads.status().State != "idle" {
+		t.Fatal("the first click started a download")
+	}
+
+	rec = do(t, srv, http.MethodPost, "/model-download", strings.NewReader(`{"index":2,"confirmUnverified":true}`))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"started":true`) {
+		t.Fatalf("the second click should start it: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestPinnedDownloadStartsOnTheFirstClick(t *testing.T) {
+	srv, _ := newTestServer(t)
+	path := filepath.Join(t.TempDir(), "models.ini")
+	pinned := strings.Replace(testCatalog, "file=small.gguf\r\n",
+		"file=small.gguf\r\nsha256="+strings.Repeat("cd", 32)+"\r\n", 1)
+	if err := os.WriteFile(path, []byte(pinned), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cat, err := catalog.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.catMu.Lock()
+	srv.cat, srv.catErr = cat, nil
+	srv.catMu.Unlock()
+	nowhereToWrite(t, srv)
+
+	rec := do(t, srv, http.MethodPost, "/model-download", strings.NewReader(`{"index":2}`))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"started":true`) {
+		t.Fatalf("a pinned entry needs no confirmation: %d %s", rec.Code, rec.Body.String())
 	}
 }

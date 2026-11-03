@@ -23,6 +23,6 @@ LLAMA_BUILD=b10456
 GPU_SHA256=856fcfe9b273e6e813c8d5745396693080ce1cca8134b1180f0e8e2f22b21772
 CPU_SHA256=d07b3f80f3a1ed1de46bfba5671b4af40a87417e1dbf35d0603ad2d623ddc577
 
-# Windows (installer/build-installer.sh)
+# Windows (`gobbonet engine install`; launch.bat carries its own pin)
 # llama-b10456-bin-win-vulkan-x64.zip
 WIN_GPU_SHA256=60f3d31cc7c2fe62de8f34f8d75ffd06655b4de83bcc5aa6f08df56be42ebb91

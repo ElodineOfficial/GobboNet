@@ -3,6 +3,8 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/ElodineOfficial/GobboNet/internal/config"
@@ -86,5 +88,40 @@ func TestLaunchSetupUnfinished(t *testing.T) {
 func TestLaunchHelp(t *testing.T) {
 	if err := cmdLaunch([]string{"--help"}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// 1.7.9 (PR #15): launch.bat runs as a fixed relative command with the legacy
+// switch stripped, whichever door starts it -- first run or --setup.
+func TestSetupBatchCommand(t *testing.T) {
+	dir := t.TempDir()
+	cmd := setupBatchCommand(dir, []string{"PATH=/bin", "GOBBONET_LEGACY_SERVER=1", "gobbonet_legacy_server=1", "KEEP=yes"})
+	if got := strings.Join(cmd.Args, " "); got != "cmd.exe /d /c launch.bat" {
+		t.Errorf("args = %q, want a fixed relative launch.bat", got)
+	}
+	if cmd.Dir != dir {
+		t.Errorf("dir = %q, want %q", cmd.Dir, dir)
+	}
+	for _, e := range cmd.Env {
+		if strings.HasPrefix(strings.ToUpper(e), "GOBBONET_LEGACY_SERVER=") {
+			t.Errorf("legacy switch leaked into launch.bat's environment: %q", e)
+		}
+	}
+	if len(cmd.Env) != 2 {
+		t.Errorf("env = %v, want PATH and KEEP only", cmd.Env)
+	}
+}
+
+// --setup is the Windows questionnaire; elsewhere it says where setup lives
+// instead of failing obscurely.
+func TestLaunchSetupFlag(t *testing.T) {
+	err := cmdLaunch([]string{"--setup"})
+	if runtime.GOOS != "windows" {
+		if err == nil || !strings.Contains(err.Error(), "gobbonet setup") {
+			t.Errorf("--setup off Windows: got %v, want a pointer to gobbonet setup", err)
+		}
+	}
+	if err := cmdLaunch([]string{"extra"}); err == nil || !strings.Contains(err.Error(), "--setup") {
+		t.Errorf("stray argument: got %v, want the usage to name --setup", err)
 	}
 }

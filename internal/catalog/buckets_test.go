@@ -23,9 +23,16 @@ var agreedBuckets = map[string][]string{
 	"gpt-oss-20b-MXFP4.gguf":                          {"coding", "jack-of-all-trades"},
 	"c4ai-command-r7b-12-2024-Q6_K.gguf":              {"jack-of-all-trades"},
 	"c4ai-command-r-08-2024-Q4_K_S.gguf":              {"roleplay"},
+	// Added in 1.7.9 (F2), one per gap in the tiers.
+	"Llama-3.2-1B-Instruct-Q8_0.gguf":                           {"jack-of-all-trades"},
+	"Mistral-Nemo-Instruct-2407-Q4_K_M.gguf":                    {"roleplay"},
+	"phi-4-Q4_K_M.gguf":                                         {"coding", "jack-of-all-trades"},
+	"mistralai_Mistral-Small-3.2-24B-Instruct-2506-Q4_K_M.gguf": {"roleplay", "jack-of-all-trades"},
+	"google_gemma-4-31B-it-Q4_K_M.gguf":                         {"roleplay", "jack-of-all-trades"},
+	"Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf":                  {"coding"},
 }
 
-var bundledINI = filepath.Join("..", "..", "installer", "models.ini")
+var bundledINI = filepath.Join("..", "..", "catalog", "models.ini")
 
 func TestParseTags(t *testing.T) {
 	got := parseTags(" Coding, roleplay ,,coding, JACK-of-all-trades ")

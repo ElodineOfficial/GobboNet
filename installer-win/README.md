@@ -8,7 +8,7 @@ it. It installs the batch/PowerShell path — `launch.bat` and `fileserver.ps1` 
 and, since 1.7.6, the Go binary.
 
 ```sh
-./make-zip.sh                                  # dist/GobboNet-<ver>.zip
+./scripts/make-zip.sh                                  # dist/GobboNet-<ver>.zip
 unzip -q dist/GobboNet-*.zip -d /tmp/gn
 installer-win/stage-payload.sh /tmp/gn/GobboNet   # -> ../staging, from the ZIP
 cd installer-win && makensis gobbonet.nsi      # NSIS 3.12, large strings
@@ -39,11 +39,35 @@ strings. Done for 1.7.8 against the official 1.7.7, as recorded in
 lists of the installer and the uninstaller differ by exactly this script's
 diff since `v1.7.7`, and nothing else.
 
-On Linux, makensis and the Windows stubs build from the NSIS source with SCons
-and an llvm-mingw cross compiler. Three small build-only patches are needed;
-lld has no linker scripts or `--exclude-libs`, and clang needs C linkage on
-NSIS's own `memset`/`memcpy` and has no `.func`. The changelog has them, and
-how the result was checked against the official 1.7.7.
+Done again for 1.7.9 against 1.7.8, compiled with the same makensis: the
+instruction lists differ in the title, the password label and its minimum (8),
+the "Setup or add a model" shortcut, and three new payload files; the
+uninstaller's list is identical. See
+`docs/changelog/CHANGELOG-1.7.9-windows-installer.md`.
+
+On Linux, makensis and the Windows stubs build from the NSIS source (tag
+`v312`) with SCons, either way:
+
+- **MinGW-w64 GCC** (`gcc-mingw-w64-i686`, NSIS's own documented cross
+  toolchain), no patches. This built 1.7.9's installer:
+
+  ```sh
+  scons -j1 XGCC_W32_PREFIX=i686-w64-mingw32- NSIS_MAX_STRLEN=8192 \
+    NSIS_CONFIG_CONST_DATA_PATH=no VERSION=3.12 SKIPTESTS=all \
+    SKIPUTILS="Library/RegTool,MakeLangId,Makensisw,NSIS Menu,SubStart,VPatch/Source/GenPat,zip2exe" \
+    PREFIX=$HOME/nsis install
+  NSISDIR=$HOME/nsis $HOME/nsis/makensis gobbonet.nsi
+  ```
+
+  Use `-j1`: a parallel build races on the docs directory. Keep the UIs
+  (don't `SKIPUTILS=all`), or `modern.exe` is missing.
+- **llvm-mingw** (clang), with `nsis-3.12-llvm-mingw.patch`, which built 1.7.8:
+  lld has no linker scripts or `--exclude-libs`, and clang needs C linkage on
+  NSIS's own `memset`/`memcpy` and has no `.func`. The 1.7.8 changelog has
+  how that result was checked against the official 1.7.7.
+
+Both give NSIS 3.12's installer engine with 8192-character strings; only the
+compiler of the stub differs.
 
 ## 1.7.6: the same installer, plus gobbonet.exe
 
@@ -70,7 +94,7 @@ Staging for a build: copy into `../staging` the files the script lists
 - `gobbonet.exe` from `make-zip.sh`;
 - `PURGE.md` from `docs/PURGE.md`. It moved there in 1.7.2, but the install
   keeps it at the root, where `TROUBLESHOOTING.md` points;
-- `models.ini` from `installer/models.ini` (1.7.7);
+- `models.ini` from `catalog/models.ini` (1.7.7);
 - `engine.sha256` from the repo root (1.7.8). `launch.bat` reads its
   llama.cpp pin from it, and `gobbonet engine install` needs it beside the
   program.
@@ -114,8 +138,10 @@ side over first. This script now matches it:
   the browser. With no settings yet it runs `launch.bat`'s first-run setup.
   So does a first run that stopped before its end and left no engine set:
   `launch.bat` keeps a `.gobbonet-setup-pending` mark until it finishes.
-- **Setup or add a model** runs `launch.bat` itself: the engine download,
-  hardware check and model menu.
+- **Setup or add a model** runs `gobbonet.exe launch --setup`, which runs
+  `launch.bat`: the engine download, hardware check and model menu. Going
+  through `gobbonet.exe` puts it in a kill-on-close job, so closing the window
+  also ends the embedding server it started (1.7.9, PR #15).
 - The finish page's *Launch GobboNet* runs the same command as the shortcuts,
   in the same folder.
 - Every link is recreated on each install, so updating over an older version

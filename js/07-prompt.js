@@ -185,10 +185,12 @@ function injectGreeting(thread, card) {
   thread.messages.push(msg);
 }
 
-/** Live "parsed N entities · M tags · K prose chunks" readout for the RAG
- *  Storybook field, so the author sees how their text was interpreted
- *  (structured vs prose) without guessing. Runs the same parser the
- *  retriever uses, so the counts match what actually fires. */
+/** Live readout under the RAG Storybook field, so the author sees how their
+ *  text was read without guessing: entries with a header (and their tags),
+ *  and plain-text entries. Runs the same parser the retriever uses, so the
+ *  counts match what can fire. 1.7.9: it names the header entries and their
+ *  tags, because "parsed 0 entities" was all a power user got when a header
+ *  line did not parse. */
 function updateStorybookReadout() {
   const el = document.getElementById('storybook-readout');
   if (!el) return;
@@ -197,12 +199,17 @@ function updateStorybookReadout() {
   let parsed;
   try { parsed = parseStorybook(raw); } catch (e) { el.textContent = 'parse error'; return; }
   const c = parsed.counts;
+  const named = parsed.order.length;
   const parts = [];
-  parts.push(`${c.entities} ${c.entities === 1 ? 'entity' : 'entities'}`);
-  if (c.subtrees) parts.push(`${c.subtrees} subtree${c.subtrees !== 1 ? 's' : ''}`);
-  parts.push(`${c.tags} tag${c.tags !== 1 ? 's' : ''}`);
-  parts.push(`${c.proseChunks} prose chunk${c.proseChunks !== 1 ? 's' : ''}`);
-  el.textContent = 'parsed \u2192 ' + parts.join(' \u00b7 ');
+  if (named) {
+    const shown = parsed.order.slice(0, 6).map(id => {
+      const n = parsed.entities[id].tags.length;
+      return id + (n ? ` (${n} tag${n !== 1 ? 's' : ''})` : '');
+    }).join(', ') + (named > 6 ? `, +${named - 6} more` : '');
+    parts.push(`${named} named entr${named === 1 ? 'y' : 'ies'}: ${shown}`);
+  }
+  if (c.plainEntries) parts.push(`${c.plainEntries} plain-text entr${c.plainEntries === 1 ? 'y' : 'ies'}`);
+  el.textContent = 'read as \u2192 ' + (parts.join(' \u00b7 ') || 'nothing yet');
 }
 
 
@@ -214,8 +221,10 @@ function renderAvatar(avatarStr, name) {
   const src = safeImageUrl(avatarStr);
   if (src) return `<img src="${escapeHtml(src)}" alt="">`;
   // Fallback: first letter of name
+  // Escaped like everything else that reaches markup: a name is card data,
+  // and one starting with "<" or "&" would otherwise land in the DOM raw.
   const initial = (name || '?').charAt(0).toUpperCase();
-  return initial;
+  return escapeHtml(initial);
 }
 
 function previewAvatar(inputId, previewId) {

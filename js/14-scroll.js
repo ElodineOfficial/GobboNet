@@ -350,9 +350,11 @@ function installDefaultChar(idx) {
   // so the click was a no-op. See renderLanding's preset map.)
   const preset = defaultCharacters[idx];
   if (!preset) return;
-  // Don't install duplicates (match by name)
-  if (state.characterCards.find(c => c.name === preset.name)) {
-    alert(`"${preset.name}" is already in your character list.`);
+  // Never a second copy (matched by name). One whose prompt differs from the
+  // shipped version is updated in place, with UNDO; an identical one is left.
+  const have = state.characterCards.find(c => c.name === preset.name);
+  if (have) {
+    if (defaultCharState(preset) === 'update') updateDefaultChar(have, preset);
     return;
   }
   const card = {
@@ -360,6 +362,21 @@ function installDefaultChar(idx) {
     id: generateId(),
     name: preset.name || 'Unnamed',
     avatar: preset.avatar || '',
+    ...defaultCharFields(preset),
+  };
+  state.characterCards.push(card);
+  saveState();
+  render(); // refresh landing page to show updated character list
+}
+
+/* ── Default characters: what a preset sets on a card (1.7.9) ──
+   The prompt text and the sampler values the preset ships with. Everything
+   else on a card -- its id, avatar, colours, background, banned phrases,
+   memory files, code -- is the user's and an UPDATE leaves it alone. */
+const DEFAULT_CHAR_PROMPT_FIELDS = ['writingStyle', 'personality', 'startingLore', 'greeting', 'altGreetings'];
+
+function defaultCharFields(preset) {
+  return {
     writingStyle: preset.writingStyle || '',
     personality: preset.personality || '',
     startingLore: preset.startingLore || '',
@@ -379,9 +396,36 @@ function installDefaultChar(idx) {
     carouselMode: preset.carouselMode || 'random',
     carouselIndex: 0,
   };
-  state.characterCards.push(card);
+}
+
+/** 'new' (not added), 'same' (added, prompt as shipped) or 'update' (added,
+ *  and its prompt differs from the version shipped now). */
+function defaultCharState(preset) {
+  const have = (state.characterCards || []).find(c => c && c.name === preset.name);
+  if (!have) return 'new';
+  const norm = v => String(v || '').replace(/\r\n/g, '\n').trim();
+  return DEFAULT_CHAR_PROMPT_FIELDS.every(k => norm(have[k]) === norm(preset[k])) ? 'same' : 'update';
+}
+
+/** Bring an added default character up to the shipped version, keeping the
+ *  user's own look and extras. UNDO puts the card back exactly as it was. */
+function updateDefaultChar(card, preset) {
+  const before = JSON.parse(JSON.stringify(card));
+  const f = defaultCharFields(preset);
+  // Colours and carousel lines are the user's; only the prompt and samplers update.
+  ['textColor', 'dialogColor', 'carouselEnabled', 'carouselPrompts', 'carouselMode', 'carouselIndex'].forEach(k => delete f[k]);
+  Object.assign(card, f);
   saveState();
-  render(); // refresh landing page to show updated character list
+  render();
+  undoable({
+    label: 'Updated "' + String(preset.name).slice(0, 40) + '" to the version that ships with GobboNet',
+    undo: () => {
+      const i = state.characterCards.findIndex(c => c.id === before.id);
+      if (i >= 0) state.characterCards[i] = before;
+      saveState();
+      render();
+    },
+  });
 }
 
 function toggleSidebar() {

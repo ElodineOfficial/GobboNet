@@ -22,10 +22,14 @@ func Discover() string {
 		dir := filepath.Dir(exe)
 		candidates = append(candidates,
 			filepath.Join(dir, "models.ini"),
+			filepath.Join(dir, "catalog", "models.ini"),
+			// installer/ was retired in 1.7.9 and its models.ini moved to
+			// catalog/. An update extracted over an older folder leaves the
+			// old copy behind; it is looked for last, so the new one wins.
 			filepath.Join(dir, "installer", "models.ini"),
 		)
 	}
-	candidates = append(candidates, "installer/models.ini", "models.ini")
+	candidates = append(candidates, "catalog/models.ini", "models.ini", "installer/models.ini")
 	for _, c := range candidates {
 		if st, err := os.Stat(c); err == nil && !st.IsDir() {
 			return c

@@ -68,9 +68,22 @@ function createFolder(name) {
 
 function deleteFolder(id, event) {
   if (event) event.stopPropagation();
+  const at = state.folders.findIndex(f => f.id === id);
+  if (at < 0) return;
+  const folder = state.folders[at];
+  const members = state.threads.filter(t => t.folderId === id).map(t => t.id);
   for (const t of state.threads) { if (t.folderId === id) t.folderId = null; }
   state.folders = state.folders.filter(f => f.id !== id);
   saveState(); renderSidebar();
+  undoable({
+    label: 'Deleted folder "' + String(folder.name || 'Folder').slice(0, 40) + '"',
+    undo: () => {
+      if (!state.folders.some(f => f.id === id)) state.folders.splice(Math.min(at, state.folders.length), 0, folder);
+      // Only the chats it held, and only if nobody filed them elsewhere since.
+      for (const t of state.threads) if (members.includes(t.id) && !t.folderId) t.folderId = id;
+      renderSidebar();
+    },
+  });
 }
 
 function toggleFolderCollapse(id) {
@@ -222,9 +235,13 @@ function addTag(threadId, tag) {
   if (btn) openTagEditor(threadId, { stopPropagation: ()=>{}, currentTarget: btn });
 }
 
+/* Removing a tag asks first rather than offering UNDO: UNDO is kept for
+   messages, chats, characters, personas, memory files, mods, macros, folders
+   and the DATA panel (1.7.9, Elodine's call). */
 function removeTag(threadId, tag) {
   const t = state.threads.find(t => t.id === threadId);
   if (!t || !t.tags) return;
+  if (!confirm('Remove the tag "' + String(tag).slice(0, 40) + '" from this chat?')) return;
   t.tags = t.tags.filter(tg => tg !== tag);
   saveState(); renderSidebar();
   const btn = document.querySelector(`[data-thread-id=${CSS.escape(threadId)}] .thread-tag-btn`);
@@ -255,10 +272,10 @@ function renderThreadItem(t) {
        data-thread-id="${escapeHtml(t.id)}"
        draggable="true"
        onclick="switchThread('${escapeJsAttr(t.id)}')"
-       ondragstart="onThreadDragStart('${t.id}',event)"
-       ondragover="onThreadDragOver('${t.id}',event)"
-       ondragleave="onThreadDragLeave('${t.id}',event)"
-       ondrop="onThreadDrop('${t.id}',event)"
+       ondragstart="onThreadDragStart('${escapeJsAttr(t.id)}',event)"
+       ondragover="onThreadDragOver('${escapeJsAttr(t.id)}',event)"
+       ondragleave="onThreadDragLeave('${escapeJsAttr(t.id)}',event)"
+       ondrop="onThreadDrop('${escapeJsAttr(t.id)}',event)"
        ondragend="onThreadDragEnd(event)">
     <div class="thread-body">
       <div class="thread-name-row">
@@ -327,7 +344,7 @@ function renderSidebar() {
     if (query && fThreads.length === 0) continue;
     const isOpen = !folder.collapsed || !!query;
     html += `<div class="folder-section${folder.collapsed&&!query?' folder-collapsed':''}" data-folder-id="${escapeHtml(folder.id)}">
-      <div class="folder-hdr" onclick="toggleFolderCollapse('${escapeJsAttr(folder.id)}')" ondragover="onFolderDragOver('${folder.id}',event)" ondragleave="onFolderDragLeave(event)" ondrop="onFolderDrop('${folder.id}',event)">
+      <div class="folder-hdr" onclick="toggleFolderCollapse('${escapeJsAttr(folder.id)}')" ondragover="onFolderDragOver('${escapeJsAttr(folder.id)}',event)" ondragleave="onFolderDragLeave(event)" ondrop="onFolderDrop('${escapeJsAttr(folder.id)}',event)">
         <span class="folder-chevron">${isOpen?'&#9660;':'&#9658;'}</span>
         <span class="folder-icon">&#128193;</span>
         <span class="folder-name-text">${escapeHtml(folder.name)}</span>

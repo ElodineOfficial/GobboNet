@@ -25,7 +25,7 @@ README = read('README.md')
 TROUBLE = read('TROUBLESHOOTING.md')
 PURGE = read('docs/PURGE.md')
 GO_SERVER = read('docs/GO_SERVER.md')
-SPLIT = read('docs/GO_CONFIG_SPLIT.md')
+SPLIT = read('docs/archive/GO_CONFIG_SPLIT.md')
 NSI = read('installer-win/gobbonet.nsi')
 USAGE = read('cmd/gobbonet/main.go').split('func usage()', 1)[1].split('`)', 1)[0]
 
@@ -132,7 +132,7 @@ class DesignNotes(Docs):
 
     def test_config_split_has_no_pasted_text(self):
         self.assertTrue(SPLIT.startswith('# Shared config file design (historical)\n'))
-        self.assertAbsent('Now I have the complete picture', SPLIT, 'docs/GO_CONFIG_SPLIT.md')
+        self.assertAbsent('Now I have the complete picture', SPLIT, 'docs/archive/GO_CONFIG_SPLIT.md')
 
     def test_installer_header_matches_the_installer(self):
         header = NSI.split('Unicode true', 1)[0]

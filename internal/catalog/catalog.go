@@ -1,4 +1,4 @@
-// Package catalog reads installer/models.ini — the model list gen-catalog.py
+// Package catalog reads catalog/models.ini — the model list gen-catalog.py
 // generates from launch.bat.
 //
 // The file is shipped beside the binary rather than compiled in, so the
@@ -63,7 +63,43 @@ type Entry struct {
 	// "moe", "cpu-friendly") and free text from the catalogue author.
 	Tags  []string
 	Notes string
+
+	// TierHint is the catalogue's own say on the tier (1.7.9): "small", "mid",
+	// "large" or "moe". Optional; Tier() works one out when it is empty or
+	// not one of those. Lets the published list place a model by hand.
+	TierHint string
 }
+
+// Tiers are the Add a Model window's groups (1.7.9, F2), in the order shown.
+var Tiers = []string{"small", "mid", "large", "moe"}
+
+// Tier is the group the model is listed under. The catalogue's hint wins;
+// otherwise a model with an MoE allowance is "moe" (its size is not the
+// whole story), and the rest go by the card they need, on the same lines as
+// the window's Light / Medium / Heavy filter: 8 GB or less, up to 16, more.
+func (e Entry) Tier() string {
+	for _, t := range Tiers {
+		if e.TierHint == t {
+			return t
+		}
+	}
+	if e.MoEMinVRAM > 0 && e.MinRAM > 0 {
+		return "moe"
+	}
+	switch {
+	case e.MinVRAM <= 8:
+		return "small"
+	case e.MinVRAM <= 16:
+		return "mid"
+	}
+	return "large"
+}
+
+// Verified reports whether the catalogue pins this file's SHA-256 itself.
+// Unpinned entries still download -- checked against HuggingFace's own
+// record -- but the window marks them UNVERIFIED and the server wants a
+// second, explicit yes before starting one (internal/server, models.go).
+func (e Entry) Verified() bool { return e.SHA256 != "" }
 
 // Fits reports whether the model suits a machine with vramGB of GPU memory and
 // ramGB of system RAM: the whole model's MinVRAM, or -- for a Mixture-of-
@@ -189,6 +225,7 @@ func Load(path string) (*Catalog, error) {
 
 			MoEMinVRAM: atoiOr(kv["moe_min_vram"], 0),
 			MinRAM:     atoiOr(kv["min_ram"], 0),
+			TierHint:   strings.ToLower(strings.TrimSpace(kv["tier"])),
 		}
 		if v, err := strconv.ParseFloat(kv["size_gb"], 64); err == nil {
 			e.SizeGB = v

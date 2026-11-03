@@ -34,11 +34,15 @@ const between = (src, from, to, file) => {
 
 /* ================================================================ A */
 console.log('\n=== A. the box ===');
-const box = between(HTML, 'id="config-file-group"', 'Remote Images In Cards', 'chat.html');
+// 1.7.9 (F3): the box is the last one in CONFIG's Advanced section, so it
+// runs up to Privacy Status, which stays last.
+const box = between(HTML, 'id="config-file-group"', '&#128274; Privacy Status', 'chat.html');
 {
   const modal = between(HTML, 'id="settings-modal"', '<!-- MODEL CATALOGUE MODAL', 'chat.html');
   ok(modal.includes('id="config-file-group"'), 'CONFIG has a Config File box');
-  ok(HTML.indexOf('id="network-hosts-group"') < HTML.indexOf('id="config-file-group"'), 'next to the other server setting, Network access');
+  ok(HTML.indexOf('id="network-hosts-group"') < HTML.indexOf('id="config-file-group"'), 'after Network access, the other server setting');
+  const adv = between(HTML, 'id="cfg-advanced"', '</details>', 'chat.html');
+  ok(adv.includes('id="config-file-group"'), 'in the Advanced section (1.7.9): a file editor is a power-user tool');
   ok(/<textarea id="config-file-text"[^>]*spellcheck="false"[^>]*wrap="off"/.test(box), 'a plain-text editor: no spellcheck, no wrapping');
   for (const [id, label] of [['config-file-save', 'SAVE TO CONFIG.TOML'], ['config-file-reload', 'RELOAD'], ['config-file-undo', 'UNDO LAST SAVE']]) {
     ok(new RegExp(`id="${id}"[^>]*>${label}<`).test(box), `${label}`);

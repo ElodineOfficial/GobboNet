@@ -288,7 +288,8 @@ console.log('\n=== F. built from what CONFIG already has ===');
 {
   const box = HTML.slice(HTML.indexOf('<div class="form-group" id="lan-group"'), HTML.indexOf('id="lan-status"'));
   ok(box.length > 100, 'the box is in chat.html');
-  ok(box.startsWith('<div class="form-group" id="lan-group" style="margin-top:12px; padding:12px; border:1px solid rgba(0,243,255,0.18); border-radius:var(--radius); background:rgba(0,243,255,0.02);">'),
+  // data-tour (1.7.9, the tour's target) is not styling; the style is what is pinned.
+  ok(box.replace(/ data-tour="[^"]*"/, '').startsWith('<div class="form-group" id="lan-group" style="margin-top:12px; padding:12px; border:1px solid rgba(0,243,255,0.18); border-radius:var(--radius); background:rgba(0,243,255,0.02);">'),
      'the box is Idle Stand-Down’s cyan box, exactly');
   const sd = HTML.match(/<div class="form-group" id="standdown-group" (style="[^"]*")/)[1];
   ok(box.includes(sd), 'character for character');
@@ -298,8 +299,10 @@ console.log('\n=== F. built from what CONFIG already has ===');
      'one SAVE FOR NEXT START button, Performance’s wording and class');
   ok(/class="about-build-rows" id="lan-addr-list"/.test(box), 'the address rows are ABOUT’s build rows');
   ok(/<div class="standdown-status" id="lan-status"><\/div>/.test(HTML), 'the status line is Idle Stand-Down’s');
-  ok(HTML.indexOf('id="lan-group"') > HTML.indexOf('RESET TO AUTO') &&
-     HTML.indexOf('id="lan-group"') < HTML.indexOf('Remote Images In Cards'), 'placed after Performance, the other server setting');
+  // 1.7.9 (F3): in Devices & Network, with the other way in, Network access.
+  const net = HTML.slice(HTML.indexOf('data-cfg-section="network"'), HTML.indexOf('</section>', HTML.indexOf('data-cfg-section="network"')));
+  ok(net.includes('id="lan-group"') && net.includes('id="network-hosts-group"') &&
+     net.indexOf('id="lan-group"') < net.indexOf('id="network-hosts-group"'), 'in Devices & Network, first, above Network access');
   ok(/DHCP reservation/.test(box), 'it says the one thing GobboNet cannot do, and who can');
 
   const open = SRC.slice(SRC.indexOf('function openSettings()'), SRC.indexOf('function closeSettings()'));

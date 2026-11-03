@@ -13,7 +13,7 @@ install folder (`%LOCALAPPDATA%\GobboNet` by default) and run
 Most answers below start from something it shows.
 
 Where an answer says to change something in `config.toml`, the chat page can
-open it for you: **CONFIG > Config File**, in a browser on the PC GobboNet runs
+open it for you: **CONFIG > Advanced > Config File**, in a browser on the PC GobboNet runs
 on. It checks a save before writing it and keeps the previous version, and the
 change applies the next time GobboNet starts.
 
@@ -49,6 +49,19 @@ number. Earlier builds fell back to 9066 silently if it contained anything
 else, so a port chosen during setup could vanish with no explanation. The
 launcher now strips stray characters and, if nothing usable is left, prints
 what the file actually contained.
+
+**The chat works here but not on your phone, and the network is "Public".**
+From 1.7.9, `setup-lan.bat` opens GobboNet on home and work networks only
+(Windows calls them Private and Domain), not on Public ones such as cafes and
+hotels. Windows often labels a home Wi-Fi network Public too. `setup-lan.bat`
+notices, and asks whether to make the network Private; `gobbonet doctor`
+says so in its **LAN ACCESS** section.
+
+Fix, for a home network: Settings → Network & internet → your network →
+**Private network**. Or re-run **setup-lan.bat** as Administrator and press
+**P**. To allow Public networks as well (the pre-1.7.9 behaviour), run it as
+`setup-lan.bat /public`. The chat is not encrypted, so only do that on a
+network you trust.
 
 **The chat works here but not on your phone.** The firewall rule and the
 Windows URL reservation are both per-port, and neither carries over when the
@@ -335,12 +348,107 @@ The reason is in `llama-server.log` in GobboNet's data folder
 If a model downloaded but never loads, check for a leftover `.part` file in
 `models\` — that is an aborted download and is safe to delete.
 
+**A model linked from "Found on this computer" stopped appearing.** USE IT
+puts a *link* in your models folder, not a copy. If the original is deleted
+(cleaning the HuggingFace cache, unplugging a drive), the link points at
+nothing and GobboNet stops listing it. Link it again from Add a Model, or copy
+the file into your models folder yourself. On Windows the link is a hard link,
+so the data stays on disk until you delete it from **both** places.
+
+**"could not link ... it is probably on a different drive".** Windows can only
+make a hard link on the same drive. Turn on Developer Mode (Settings > System >
+For developers), which lets GobboNet make a symbolic link instead, or move the
+file to the drive your models folder is on.
+
+**A model I have is not under "Found on this computer".** GobboNet looks in the
+HuggingFace cache (`HF_HUB_CACHE`, `HF_HOME\hub`, or `.cache\huggingface\hub`
+in your user folder) and in any folders listed as `model_dirs` in
+`config.toml`, a few folders deep. Add the folder there, for example
+`model_dirs = ["D:/models"]`. Projectors (`mmproj-...`), embedding models and a
+split model with a part missing are left out on purpose: none of them can be
+chatted with.
+
 **"did not finish loading within 3m0s"** means the model was still loading when
 GobboNet gave up. A big model on a slow disk, or one loading onto the CPU, can
 need longer: raise `model_load_timeout_seconds` in `config.toml` (CONFIG >
 Config File), for example to 600, and restart GobboNet. **"did not start
 replying within 5m0s"** is the same for the prompt being read before a reply:
 raise `reply_start_timeout_seconds`.
+
+---
+
+## Mods
+
+**"Mods are managed from GobboNet on the PC it runs on."** Adding, changing,
+switching on, reordering or removing a mod works only in a browser on the PC
+GobboNet runs on, opened at `http://localhost:9066`. This is on purpose: a mod
+is code that runs in every browser that opens GobboNet, so a phone or another
+device must never be able to put code there. From any signed-in device you can
+still switch a mod **off**.
+
+**A mod I added by hand does not show, or says "Cannot load".** It has to be a
+folder directly inside the `mods` folder (MODS shows where), named in
+lower-case letters, digits, `.`, `-` or `_`, with a `mod.json` that lists its
+files:
+
+```json
+{ "name": "Neon theme", "version": "1.0", "files": ["theme.css", "extra.js"] }
+```
+
+Every file it lists must be inside the folder, and must not be a link. The
+reason it cannot load is shown under its name. A mod added by hand starts
+switched off.
+
+**I switched a mod off but it is still doing something.** A stylesheet goes
+away at once. A script that has already run keeps running until the page
+reloads.
+
+**My extensions from before 1.7.9.** They became the mod "My extensions" the
+first time you opened 1.7.9 on the PC, switched on or off as they were. A phone
+that held them keeps running them until GobboNet has been opened on the PC
+once.
+
+**"... was switched off: it stopped with an error while loading."** One of the
+mod's own files could not be loaded, or its script failed as it started, so
+GobboNet switched the mod off to keep the page working. Anything it already did
+stays until you reload. SWITCH BACK ON tries again; if it keeps happening, the
+mod needs fixing (or an update), and its author wants the message from the
+notice. Errors a mod makes later, after it has started, do not switch it off.
+
+**A mod breaks the page so badly I cannot reach MODS.** Open GobboNet with
+`?nomods` on the end of the address (`http://localhost:9066/?nomods`). That
+page loads no mods at all; switch the culprit off in MODS, then reload without
+`?nomods`.
+
+**ENDORSED MODS says the list could not be reached.** GobboNet fetches the list
+from goblincorps.com when you click BROWSE. If it has fetched it before, it
+shows that copy and says from when. Mods you already installed keep working
+either way. `mod_list_url` in config.toml is where it looks; empty switches the
+list off.
+
+**"... does not match the checksum the endorsed list pins for it, so nothing
+was installed."** The file on the site is not the one Elodine endorsed: it
+changed after the list was made, or something between you and the site changed
+it. Nothing was installed, and a mod you already had is untouched. Try again
+later; if it persists, tell Elodine which mod.
+
+**INSTALL is greyed out, or "already in your mods folder".** Install works only
+on the PC GobboNet runs on. A mod whose name matches a folder you made yourself
+is never installed over it: rename or remove your folder first.
+
+---
+
+## The Gobbonet Informant says something that is not right
+
+The Informant is a character with notes about this version of GobboNet; a small
+model can still mix them up. It is told to say "I don't know" rather than
+guess, so an answer that names a button you cannot find is worth checking here.
+
+If you added the Informant before 1.7.9, your copy still has the older notes.
+On the home screen its tile says **UPDATE**: click it to bring it up to date.
+Your colours, banned phrases and other extras on that card are kept, and UNDO
+puts the old version back for 10 seconds. A tile that says **ADDED** is already
+current. The same goes for the other default characters.
 
 ---
 

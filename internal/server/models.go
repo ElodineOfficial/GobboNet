@@ -124,6 +124,11 @@ type catalogEntry struct {
 	// Buckets are the window's types this model is in -- coding, roleplay,
 	// jack-of-all-trades (roadmap 1.7.7). Empty puts it under ALL MODELS only.
 	Buckets []string `json:"buckets"`
+	// Tier is the group it is listed under: small, mid, large or moe (1.7.9).
+	Tier string `json:"tier"`
+	// Verified is true when the catalogue pins the file's SHA-256 itself.
+	// False shows UNVERIFIED and needs a second click (see downloadRequest).
+	Verified bool `json:"verified"`
 }
 
 func (s *Server) handleCatalog(w http.ResponseWriter, r *http.Request) {
@@ -174,6 +179,8 @@ func (s *Server) handleCatalog(w http.ResponseWriter, r *http.Request) {
 			Ctx:        e.Ctx,
 			Installed:  installed[e.File],
 			Buckets:    nonNil(e.BucketTags()),
+			Tier:       e.Tier(),
+			Verified:   e.Verified(),
 		})
 	}
 
@@ -196,6 +203,11 @@ type downloadRequest struct {
 	// the modal closes, so the next open shows a list instead of the last
 	// transfer's result.
 	Clear bool `json:"clear"`
+	// ConfirmUnverified is the second click (1.7.9, F2). An entry whose
+	// catalogue pins no SHA-256 is only checked against HuggingFace's own
+	// record of the file, so starting one takes an explicit yes. Enforced
+	// here, not only in the window, so a script or a mod cannot skip it.
+	ConfirmUnverified bool `json:"confirmUnverified"`
 }
 
 func (s *Server) handleModelDownload(w http.ResponseWriter, r *http.Request) {
@@ -241,6 +253,17 @@ func (s *Server) modelDownloadPost(w http.ResponseWriter, r *http.Request) {
 	entry, ok := cat.Find(req.Index)
 	if !ok {
 		httpx.Error(w, r, http.StatusBadRequest, "That model is not in the catalogue.")
+		return
+	}
+	if !entry.Verified() && !req.ConfirmUnverified {
+		// 409 with needsConfirm, so the window can ask and resend. Nothing has
+		// started and nothing has been checked yet: the answer is the same
+		// whatever is running or however full the disk is.
+		httpx.WriteJSON(w, r, http.StatusConflict, map[string]any{
+			"needsConfirm": true,
+			"error": entry.Display + " has no checksum pinned in the catalogue. It is still " +
+				"checked against HuggingFace's own record of the file. Click again to download it.",
+		})
 		return
 	}
 

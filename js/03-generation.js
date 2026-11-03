@@ -422,7 +422,7 @@ async function pollJobToCompletion(jobId, feeder, startOffset = 0) {
   while (true) {
     let r, j;
     try {
-      r = await privacyFetch(`${JOBS_URL}/${jobId}?from=${offset}`, { cache: 'no-store' });
+      r = await privacyFetch(`${JOBS_URL}/${encodeURIComponent(jobId)}?from=${offset}`, { cache: 'no-store' });
       if (r.status === 404) return { status: 'lost', offset };
       if (r.status === 401) return { status: 'unauthorized', offset };
       if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -518,7 +518,7 @@ async function runGenerationStream(thread, assistantMsg, requestBody, opts = {})
     if (res.status !== 'unreachable') {
       delete thread.pendingJob;
       delete assistantMsg.jobId;
-      privacyFetch(`${JOBS_URL}/${jobId}`, { method: 'DELETE' }).catch(() => {});
+      privacyFetch(`${JOBS_URL}/${encodeURIComponent(jobId)}`, { method: 'DELETE' }).catch(() => {});
     }
     if (currentJob && currentJob.id === jobId) currentJob = null;
     return { errored, aborted, errorMessage, errorObj, jobMode: true,

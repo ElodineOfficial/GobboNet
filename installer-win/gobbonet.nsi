@@ -31,7 +31,7 @@ Unicode true
 !endif
 
 !define APPNAME     "GobboNet"
-!define APPVER      "1.7.8"
+!define APPVER      "1.7.9"
 ; What the main shortcuts and the finish page start: `gobbonet.exe launch`
 ; (1.7.6 hotfix, patch 3). It serves straight away with the settings already
 ; saved, and runs launch.bat's first-run setup only when there are none yet
@@ -48,7 +48,7 @@ Unicode true
 !define REGKEY      "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}"
 
 Name              "${APPNAME}"
-OutFile           "GobboNetSetup-1_7_8.exe"
+OutFile           "GobboNetSetup-1_7_9.exe"
 InstallDir        "$LOCALAPPDATA\${APPNAME}"
 InstallDirRegKey  HKCU "Software\${APPNAME}" "InstallDir"
 RequestExecutionLevel user
@@ -56,7 +56,7 @@ SetCompressor /SOLID lzma
 ShowInstDetails   show
 ShowUninstDetails show
 
-VIProductVersion "1.7.8.0"
+VIProductVersion "1.7.9.0"
 VIAddVersionKey  "ProductName"     "${APPNAME}"
 VIAddVersionKey  "FileDescription" "${APPNAME} Installer"
 VIAddVersionKey  "FileVersion"     "${APPVER}.0"
@@ -321,7 +321,7 @@ Function PasswordPageCreate
   System::Call 'uxtheme::SetWindowTheme(p $hPwSkip, t " ", t " ")'
   SetCtlColors $hPwSkip "${GN_CHECKCOLOR}" "${MUI_BGCOLOR}"
 
-  ${NSD_CreateLabel} 0 94u 100% 20u "Six characters minimum. You will type this once on your phone the first time it connects."
+  ${NSD_CreateLabel} 0 94u 100% 20u "Eight characters minimum. You will type this once on your phone the first time it connects."
   Pop $0
   SetCtlColors $0 "8FA383" "${MUI_BGCOLOR}"
 
@@ -344,12 +344,13 @@ Function PasswordPageLeave
     MessageBox MB_ICONEXCLAMATION "Enter a password, or tick the skip box and set it on first run."
     Abort
   ${EndIf}
-  ; Six, matching launch.bat's console prompt ($min = 6). These two are the
-  ; only ways a password gets set, and a rule that differs between them
-  ; means the wizard accepts something the fallback path would reject.
+  ; Eight: min_password_length's default, the same as launch.bat's prompt
+  ; when no config exists yet (1.7.9). There is no config at install time, so
+  ; the setting cannot be read here; someone who wants a shorter password can
+  ; tick the skip box, set min_password_length, then run set-password.
   StrLen $3 $1
-  ${If} $3 < 6
-    MessageBox MB_ICONEXCLAMATION "Use at least six characters."
+  ${If} $3 < 8
+    MessageBox MB_ICONEXCLAMATION "Use at least 8 characters."
     Abort
   ${EndIf}
   ${If} $1 != $2
@@ -571,7 +572,7 @@ If it will not close, a reboot always clears it." \
   File "${APPSRC}\identify-model.ps1"
   File "${APPSRC}\hw-recommend.ps1"
   ; models.ini (1.7.7): the bundled model list, generated from launch.bat by
-  ; installer/gen-catalog.py. gobbonet.exe looks for it beside itself
+  ; catalog/gen-catalog.py. gobbonet.exe looks for it beside itself
   ; (internal/catalog/discover.go). CONFIG > Add a Model falls back to it when
   ; goblincorps.com cannot be reached, and its Coding / Roleplay / Jack of all
   ; trades buttons take each model's type from it until the live list carries
@@ -630,8 +631,11 @@ If it will not close, a reboot always clears it." \
                  "$INSTDIR\${APPEXE}" "launch" "$INSTDIR\gobbonet.ico" 0
   CreateShortcut "$SMPROGRAMS\${APPNAME}\Launch ${APPNAME}.lnk" \
                  "$INSTDIR\${APPEXE}" "launch" "$INSTDIR\gobbonet.ico" 0
+  ; Through gobbonet.exe, not launch.bat directly (1.7.9, PR #15): launch
+  ; --setup runs the same launch.bat inside a kill-on-close job, so closing
+  ; the window also ends the embedding server it starts.
   CreateShortcut "$SMPROGRAMS\${APPNAME}\Setup or add a model.lnk" \
-                 "$INSTDIR\launch.bat" "" "$INSTDIR\gobbonet.ico" 0
+                 "$INSTDIR\${APPEXE}" "launch --setup" "$INSTDIR\gobbonet.ico" 0
   CreateShortcut "$SMPROGRAMS\${APPNAME}\${APPNAME} LAN Setup.lnk" \
                  "$INSTDIR\${LANEXE}" "" "$INSTDIR\gobbonet.ico" 0
   !insertmacro ShortcutRunAsAdmin "$SMPROGRAMS\${APPNAME}\${APPNAME} LAN Setup.lnk"

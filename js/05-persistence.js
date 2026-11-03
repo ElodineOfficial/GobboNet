@@ -363,7 +363,10 @@ function applyLoadedState(saved) {
         if (state.seededDefaultMacros.includes(def.trigger)) continue;
         // Only inject if the user doesn't already have a macro with the
         // same trigger — don't clobber their customization.
-        const exists = state.macros.some(m => m.trigger === def.trigger);
+        // Matched without regard to case, as expansion is: a user's own
+        // "system" macro is theirs, and must not get a twin (1.7.9).
+        const exists = state.macros.some(m => m && typeof m.trigger === 'string'
+          && m.trigger.toLowerCase() === def.trigger.toLowerCase());
         if (!exists) {
           state.macros.push({ ...def });
         }

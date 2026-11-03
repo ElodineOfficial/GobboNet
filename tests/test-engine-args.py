@@ -65,6 +65,7 @@ KNOWN_GO_ONLY = {
     "--fit-ctx": "automatic placement may not shrink the selected context",
     "--api-key":            "llm_api_key, a Go-config-only setting",
     "--jinja":              "conditional; launch.bat interpolates !JINJA_FLAG!",
+    "--no-jinja":           "conditional; launch.bat interpolates !JINJA_FLAG! (1.7.9)",
     "--chat-template":      "conditional; launch.bat uses !CHAT_TEMPLATE_FLAG!",
     "--chat-template-file": "conditional; same",
 }

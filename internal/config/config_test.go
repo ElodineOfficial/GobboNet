@@ -696,3 +696,40 @@ func TestNearestKeyClassification(t *testing.T) {
 		}
 	}
 }
+
+// 1.7.9: min_password_length defaults to 8, may go as low as 4 (a PIN) and as
+// high as the user likes. A value below 4 is lifted to 4 rather than refused,
+// so a typo cannot stop GobboNet from starting.
+func TestMinPasswordLength(t *testing.T) {
+	cases := []struct {
+		body string
+		want int
+	}{
+		{"", DefaultMinPasswordLength},
+		{"min_password_length = 0\n", DefaultMinPasswordLength},
+		{"min_password_length = 4\n", 4},
+		{"min_password_length = 1\n", MinPasswordFloor},
+		{"min_password_length = 16\n", 16},
+	}
+	for _, c := range cases {
+		cfg, err := Load(writeConfig(t, c.body))
+		if err != nil {
+			t.Fatalf("%q: %v", c.body, err)
+		}
+		if cfg.MinPasswordLen != c.want {
+			t.Errorf("%q: MinPasswordLen = %d, want %d", c.body, cfg.MinPasswordLen, c.want)
+		}
+	}
+	if DefaultMinPasswordLength != 8 || MinPasswordFloor != 4 {
+		t.Errorf("default/floor = %d/%d, want 8/4", DefaultMinPasswordLength, MinPasswordFloor)
+	}
+	// It is a real key: `gobbonet config get/set` and the CONFIG file editor
+	// list it, and the default config documents it.
+	found := false
+	for _, k := range Keys() {
+		found = found || k == "min_password_length"
+	}
+	if !found {
+		t.Error("min_password_length is not in Keys()")
+	}
+}

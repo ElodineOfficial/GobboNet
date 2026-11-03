@@ -654,3 +654,35 @@ func TestBuiltinTemplateNamesAreRecognised(t *testing.T) {
 		})
 	}
 }
+
+// 1.7.9: Tekken models are recognised by tokenizer.ggml.pre, not only by the
+// filenames the regexes know. Every case below has a name no filename rule
+// matches, so without the tokenizer check each would fall through to the
+// generic llama path.
+func TestTekkenByTokenizerWhateverTheName(t *testing.T) {
+	realV7 := "{%- for message in messages %}{%- if message['role'] == 'system' %}[SYSTEM_PROMPT]{{ message['content'] }}[/SYSTEM_PROMPT]{%- elif message['role'] == 'user' %}[INST]{{ message['content'] }}[/INST]{%- endif %}{%- endfor %}"
+	cases := []struct {
+		name, file, tmpl string
+		wantJinja        int
+		wantTmpl         string
+	}{
+		{"usable embedded template is preferred", "Magistral-Small-2509-Q4_K_M.gguf", realV7, 1, ""},
+		{"no template at all: v3-tekken, safe on both eras", "my-renamed-merge-Q5_K_M.gguf", "", 0, "mistral-v3-tekken"},
+		{"broken template that knows [SYSTEM_PROMPT]: v7-tekken", "Devstral-Q4.gguf", "[SYSTEM_PROMPT]", 0, "mistral-v7-tekken"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := Classify(ClassifyInput{Filename: c.file, Architecture: "llama", ChatTemplate: c.tmpl, TokenizerPre: "tekken"})
+			if got.Family != "mistral" {
+				t.Errorf("family: got %q, want mistral", got.Family)
+			}
+			if got.UseJinja != c.wantJinja || got.ChatTemplate != c.wantTmpl {
+				t.Errorf("got UseJinja=%d ChatTemplate=%q, want %d %q", got.UseJinja, got.ChatTemplate, c.wantJinja, c.wantTmpl)
+			}
+		})
+	}
+	// A non-Tekken tokenizer with the same anonymous name is left alone.
+	if got := Classify(ClassifyInput{Filename: "my-renamed-merge-Q5_K_M.gguf", Architecture: "llama", TokenizerPre: "llama-bpe"}); got.Family == "mistral" {
+		t.Errorf("llama-bpe model classified as mistral: %+v", got)
+	}
+}

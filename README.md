@@ -13,7 +13,7 @@ This guide assumes you've never set up anything like this before. Take it one st
 - **DeepSeek** — working
 - **Qwen** — working [Qwen3 30B-A3B, QwQ 32B]
 - **gpt-oss** — working [20B and 120B, Harmony format]
-- **Mistral** — working [Mistral Small 24B and its finetunes, including Cydonia and Magidonia]
+- **Mistral** — working [Mistral Small 24B and its finetunes, including Cydonia and Magidonia; from 1.7.9 also Tekken-format models such as Mistral Nemo]
 - **Granite** — working
 - **Command R** — working
 - **GLM** — working
@@ -112,7 +112,7 @@ A black window with green text will open. This is normal — it's the launcher t
 
 ### It will ask you to set a password
 
-The very first time, it asks you to **choose a password**. Type one (at least 6 characters) and press Enter, then type it again to confirm.
+The very first time, it asks you to **choose a password**. Type one (at least 8 characters by default; `min_password_length` in `config.toml` changes that) and press Enter, then type it again to confirm.
 
 This password protects your chat. Anyone else on your home Wi-Fi could otherwise open it, so the password keeps it private. You'll only type it again when you connect from your phone.
 
@@ -207,7 +207,7 @@ Gobbonet is more than a plain chatbox. Here are the parts you'll actually use, i
 - **Web search (optional).** There's a search button that lets the AI look things up online. It needs a free key — see below. Off unless you turn it on.
 - **Adding models (optional).** Config → **Add a Model** shows a catalogue you can download from without leaving GobboNet or working out HuggingFace's interface. GobboNet downloads the file, checks it, and puts it where it belongs. The list itself is a small public file fetched from goblincorps.com so it can be kept current — a plain download with nothing about you or your machine attached, cached for a day, and switchable off with `model_catalog_remote = false`. If it can't be reached, the list that shipped with GobboNet is used instead and downloading still works.
 - **Switching models.** If you've downloaded more than one model, you can switch between them from a dropdown at the top — no need to restart.
-- **Using a server you already run (optional).** If you already have llama.cpp or Ollama running, GobboNet can talk to that instead of starting its own engine. Open `config.toml` (on the PC running GobboNet, Config → **Config File** opens it for you), set `server_exe = ""` and point `llm_url` at your server:
+- **Using a server you already run (optional).** If you already have llama.cpp or Ollama running, GobboNet can talk to that instead of starting its own engine. Open `config.toml` (on the PC running GobboNet, Config → Advanced → **Config File** opens it for you), set `server_exe = ""` and point `llm_url` at your server:
 
   ```toml
   server_exe = ""
@@ -356,6 +356,10 @@ Nothing is listed right now. If you find something, open an issue on GitHub: the
 
 ### Recently fixed
 
+**RAG Storybook lore not being pulled in** — *fixed in 1.7.9.* A labelled entry like `# Selah, [.7 wing, .3 light, 1.0 angel]` was not read as an entry at all, a name in a header did not trigger anything, and plain-text lore only worked with the optional embedding model running. Now both ways work: a labelled entry fires on its name or when its tags add up to 1.0, and plain text is split into entries of up to four sentences that fire on a name or one of their words (two or three if you set it that way per character) — with or without the embedding model. See `docs/RAG_INFO.md`.
+
+**Tekken models answering about the video game** — *fixed in 1.7.9.* Mistral Nemo and other models that use Mistral's "Tekken" chat format replied as if every message were about the fighting game. The engine was reading the format's built-in name as the conversation itself, because newer llama.cpp builds switch their own template handling on by default. GobboNet now switches it off whenever it hands over a built-in format, and recognises Tekken models by what is inside the file (Magistral, Ministral, Devstral and renamed merges included), not only by their names.
+
 **Banned words not keeping words out** — *fixed in 1.7.8.* The list banned every piece of every word and phrase it was given, so a phrase took its everyday words with it ("her", "down"), a word that splits into pieces banned fragments other words share, and the slider's far end was only a strong nudge. It now bans a word at its own token, stops a phrase at its rarest word, never bans a common word or a fragment, and at -100 bans outright. **CHECK** under the list shows exactly what gets banned with the model you have loaded. It still works on the model's tokens, not on spelling, so single words work best.
 
 **Mistral Small models talking nonsense** — *fixed in 1.7.2.* Cydonia, Magidonia and other Mistral Small 24B descendants would ignore their character entirely and answer in French, or start writing academic papers. The cause was one character: GobboNet was framing the conversation with a space where those models expect none, which was enough to stop them recognising that a conversation was happening at all. They now use their own built-in formatting. This was previously listed here as "Tekken tokenizer models misbehave".
@@ -379,7 +383,7 @@ Between 1.6 and v2.0
 - Auto-swipe on a bad entry — if a reply trips a banned word, reroll it automatically instead of making you do it by hand.
 - Optional flags on all fields — per-field toggles across the app. Honest note: this one may turn out redundant, and we'll drop it if it does.
 - Smoother alternate greetings — make moving between a character's different opening lines feel less clunky.
-- Undo button — take back the last thing you did.
+- ~~Undo button — take back the last thing you did.~~ Shipped in 1.7.9: deleting almost anything offers UNDO for 10 seconds.
 - Group chat — more than one character in the same conversation.
 - User-controlled information hierarchy — you decide what gets sent to the model first, and what gets pushed down the list when space runs short.
 - TTS / STT — speak to it, and have it speak back.
@@ -409,6 +413,7 @@ Everything GobboNet can do, grouped so it's easy to scan.
 - Stop button — cut off a reply mid-sentence whenever you want.
 - Reroll — not happy with an answer? Regenerate it with one click.
 - Copy, edit, delete, or reroll any individual reply.
+- UNDO — deleting a chat, message, folder, character, persona, memory file, macro, mod or server backup, and PURGE, shows UNDO for 10 seconds (or press Ctrl+Z). Removing a tag or a scheduled message asks first instead.
 - Copy button on code blocks — grab code in one tap.
 - Token counter — see how much of the AI's "memory" you're using.
 - Chain-of-thought (reasoning) view — on models that support it, you can watch the AI's step-by-step thinking.
@@ -417,6 +422,8 @@ Everything GobboNet can do, grouped so it's easy to scan.
 
 **Conversations & organizing**
 - Landing page — a home dashboard you start from each time.
+- A one-minute tour — offered once on a fresh install, and any time from Config → Basics → **SHOW ME AROUND**.
+- Settings in five sections (Basics, Characters & Chat, Model & Performance, Devices & Network, Advanced) with a search box that finds any setting.
 - Conversation threads — every chat is saved separately, like a history list.
 - Rename any thread; copy, edit, or delete threads.
 - Search your conversations — find an old chat by what was said in it.
@@ -426,7 +433,7 @@ Everything GobboNet can do, grouped so it's easy to scan.
 - Drag-and-drop file attachments — drag a file straight into the chat to attach it.
 
 **Characters & personas**
-- Default characters — comes with ready-made personalities to chat with right away.
+- Default characters — comes with ready-made personalities to chat with right away, including the Gobbonet Informant, a guide that answers questions about GobboNet itself. When a newer version of one ships, its tile says **UPDATE**.
 - Character cards — build your own detailed characters (name, description, personality, style, settings).
 - Import and export character cards (V2/V3) — bring in the standard `.png` character cards used by other popular AI chat apps, and export your own back out in the same format. Cards are cross-compatible both directions, so you don't have to recreate a library you already own. Honest note: most cards carry over cleanly, but some may need a little tweaking after import.
 - Lorebook import — embedded lorebooks come across with their underlying information preserved, and card details like creator, tags, version, and notes are kept and handed back when you export. Now fully exposed. Honest note: an imported lorebook is flattened into always-on lore rather than staying keyword-triggered, so all the content is there, it just arrives as one block instead of firing on cue.
@@ -443,9 +450,9 @@ Everything GobboNet can do, grouped so it's easy to scan.
 **Writing & macros**
 - `{{char}}` and `{{user}}` placeholders — automatically fill in the character's and your name as you chat.
 - `{{current_DAT}}` — lets the AI know the current date and time.
-- Built-in macros like `{{continue}}` and `{{fast forward}}` to nudge a story or task along.
+- Built-in macros like `{{continue}}` and `{{fast_forward}}` to nudge a story or task along.
 - `{{auto_continue_x}}` — keeps a story or task running on its own so it makes progress while you step away.
-- Custom macros — create your own shortcuts for text or actions you use a lot.
+- Custom macros — create your own shortcuts for text or actions you use a lot. A macro can take text: `{{SYSTEM: keep it short}}` (or `{{SYSTEM:}} keep it short` for the rest of the line) sends the model an out-of-character note, ready-made. In your own macros, `{{input}}` marks where the text goes, and `{{input1}}`, `{{input2}}`… take pieces split at `|`.
 
 **The AI's behavior (controls)**
 - System prompt editing — change the underlying instructions that shape how the AI behaves.
@@ -454,6 +461,7 @@ Everything GobboNet can do, grouped so it's easy to scan.
 - Banned words — keep specific words out of a character's replies, from a nudge to an outright ban. Single words work best; CHECK shows what gets banned.
 - Model selector — choose which AI model you're talking to.
 - Model hot-swap — switch to a different downloaded model without restarting anything.
+- Add a Model — sixteen models to download, filtered by what they are good at and by size (Light, Medium, Heavy, Mixture of Experts), each checked before use. **FOUND ON THIS COMPUTER** offers models you already have from HuggingFace or another app, used in place without copying.
 
 **Web search (optional)**
 - Search the web — let the AI look things up online (needs a free Ollama key).
@@ -464,7 +472,7 @@ Everything GobboNet can do, grouped so it's easy to scan.
 - Export, import, or purge all your data — back up everything to a file, restore it later, or wipe it completely.
 
 **Customization (advanced)**
-- Internal "mod" controls — add your own custom JavaScript extensions and override the stylesheet to change how the app looks and works.
+- Mods — stylesheets and scripts that change how the app looks and works, each with its own switch and load order. Write your own in the MODS panel (they are kept as the mod "My extensions"), or drop a folder with a `mod.json` into GobboNet's `mods` folder. Mods are added and switched on only from the PC GobboNet runs on, so another device can never push code to you. ENDORSED MODS in the same panel lists mods Elodine endorses at [goblincorps.com/gobbonet_extras](https://goblincorps.com/gobbonet_extras), installed with one click and checked file by file against the list's SHA-256 pins. A mod that breaks while loading switches itself off.
 
 **Scheduling**
 - Scheduled tasks — set prompts to send themselves at specific times.

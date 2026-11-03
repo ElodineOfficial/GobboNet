@@ -86,9 +86,13 @@ function page() {
   ctx.globalThis = ctx;
   vm.createContext(ctx);
   vm.runInContext(block, ctx);
-  const names = () => els['model-catalog-list'].children.map(r => r.children[0].textContent);
+  // 1.7.9: the list is grouped under tier headings, so rows are picked out by class.
+  const rows = () => els['model-catalog-list'].children.filter(r => r.classList.contains('catalog-entry'));
+  const names = () => rows().map(r => r.children[0].textContent);
+  const rowOf = (n) => rows().find(r => r.children[0].textContent === n);
+  const headings = () => els['model-catalog-list'].children.filter(r => r.classList.contains('catalog-tier')).map(h => h.children[0].textContent);
   const pressed = () => buttons.filter(b => b.classList.contains('btn-fill')).map(b => b.label);
-  return { ctx, els, buttons, names, pressed };
+  return { ctx, els, buttons, names, pressed, rowOf, headings };
 }
 
 /* ================================================================ */
@@ -107,33 +111,35 @@ const P = page();
 {
   await P.ctx.loadModelCatalog();
   eq(P.names().length, 11, 'all 11 models are listed');
+  eq(P.headings(), ['LIGHT', 'MEDIUM', 'HEAVY', 'MIXTURE OF EXPERTS'], 'grouped under the four tier headings, in order (1.7.9)');
+  eq(P.names().slice(0, 3), ['Untagged, no figure', 'Llama 3.2 3B Instruct', 'Gemma 4 E4B IT'], 'smallest download first within a tier');
   eq(P.pressed(), ['ALL MODELS', 'ANY SIZE'], 'ALL MODELS and ANY SIZE are the filled buttons');
   eq(P.els['model-catalog-filters'].style.display, '', 'the filter rows are shown once a list has loaded');
-  const meta = P.els['model-catalog-list'].children[0].children[1].textContent;
+  const meta = P.rowOf('Gemma 4 E4B IT').children[1].textContent;
   eq(meta, 'Light · 5.4 GB download · suits 6 GB VRAM or more · 32,768 token context', 'each row starts with its size class');
-  const bare = P.els['model-catalog-list'].children[10].children[1].textContent;
+  const bare = P.rowOf('Untagged, no figure').children[1].textContent;
   eq(bare, '1.0 GB download', 'a model with no figure has no class, and nothing invented');
 }
 
 console.log('\n=== a MoE model says it also suits a smaller card (issue #65) ===');
 {
-  const moe = P.els['model-catalog-list'].children[5].children[1].textContent;
+  const moe = P.rowOf('Qwen3.6 35B-A3B MoE').children[1].textContent;
   eq(moe, 'Heavy · 22.0 GB download · suits 24 GB VRAM or more, or 8 GB with 32 GB system RAM · 8,192 token context',
      'Qwen3.6 35B-A3B: or 8 GB with 32 GB system RAM');
-  const dense = P.els['model-catalog-list'].children[9].children[1].textContent;
+  const dense = P.rowOf('Command R 35B (08-2024)').children[1].textContent;
   ok(!/system RAM/.test(dense), 'a dense model says nothing about system RAM', dense);
 }
 
 console.log('\n=== type ===');
 {
   P.ctx.setCatalogFilter('type', 'coding');
-  eq(P.names(), ['Qwen3.5 9B', 'Qwen3.6 35B-A3B MoE', 'DeepSeek-R1 8B', 'gpt-oss 20B'], 'CODING');
+  eq(P.names(), ['Qwen3.5 9B', 'DeepSeek-R1 8B', 'gpt-oss 20B', 'Qwen3.6 35B-A3B MoE'], 'CODING (by tier, smallest first)');
   eq(P.pressed(), ['CODING', 'ANY SIZE'], 'and CODING is now the filled one');
   P.ctx.setCatalogFilter('type', 'roleplay');
   eq(P.names(), ['Mistral 7B v0.3', 'Gemma 4 26B-A4B MoE', 'Command R 35B (08-2024)'], 'ROLEPLAY');
   P.ctx.setCatalogFilter('type', 'jack-of-all-trades');
-  eq(P.names(), ['Gemma 4 E4B IT', 'Llama 3.2 3B Instruct', 'Gemma 4 26B-A4B MoE', 'Qwen3.6 35B-A3B MoE',
-                 'gpt-oss 20B', 'Command R 7B (12-2024)'], 'JACK OF ALL TRADES');
+  eq(P.names(), ['Llama 3.2 3B Instruct', 'Gemma 4 E4B IT', 'Command R 7B (12-2024)', 'gpt-oss 20B',
+                 'Gemma 4 26B-A4B MoE', 'Qwen3.6 35B-A3B MoE'], 'JACK OF ALL TRADES');
   ok(!P.names().includes('Untagged, no figure'), 'an untagged model is in no bucket');
   P.ctx.setCatalogFilter('type', 'all');
   ok(P.names().includes('Untagged, no figure'), 'but is under ALL MODELS');
@@ -142,11 +148,15 @@ console.log('\n=== type ===');
 console.log('\n=== size, and both together ===');
 {
   P.ctx.setCatalogFilter('size', 'light');
-  eq(P.names(), ['Gemma 4 E4B IT', 'Llama 3.2 3B Instruct', 'Mistral 7B v0.3', 'Qwen3.5 9B', 'Command R 7B (12-2024)'], 'LIGHT');
+  eq(P.names(), ['Llama 3.2 3B Instruct', 'Gemma 4 E4B IT', 'Qwen3.5 9B', 'Command R 7B (12-2024)', 'Mistral 7B v0.3'], 'LIGHT');
   P.ctx.setCatalogFilter('size', 'medium');
-  eq(P.names(), ['Gemma 4 26B-A4B MoE', 'DeepSeek-R1 8B', 'gpt-oss 20B'], 'MEDIUM');
+  eq(P.names(), ['DeepSeek-R1 8B', 'gpt-oss 20B', 'Gemma 4 26B-A4B MoE'], 'MEDIUM');
   P.ctx.setCatalogFilter('size', 'heavy');
-  eq(P.names(), ['Qwen3.6 35B-A3B MoE', 'Command R 35B (08-2024)'], 'HEAVY');
+  eq(P.names(), ['Command R 35B (08-2024)', 'Qwen3.6 35B-A3B MoE'], 'HEAVY');
+  P.ctx.setCatalogFilter('size', 'moe');
+  eq(P.names(), ['Qwen3.6 35B-A3B MoE'], 'MOE: only the Mixture-of-Experts models (1.7.9)');
+  eq(P.headings(), ['MIXTURE OF EXPERTS'], 'under their own heading');
+  P.ctx.setCatalogFilter('size', 'heavy');
   P.ctx.setCatalogFilter('type', 'coding');
   eq(P.names(), ['Qwen3.6 35B-A3B MoE'], 'CODING + HEAVY');
   eq(P.pressed(), ['CODING', 'HEAVY'], 'one filled button per row');
@@ -199,7 +209,7 @@ console.log('\n=== the markup ===');
   const btns = filterButtons();
   eq(btns.map(b => `${b.dataset.kind}:${b.dataset.value}:${b.label}`), [
     'type:all:ALL MODELS', 'type:coding:CODING', 'type:roleplay:ROLEPLAY', 'type:jack-of-all-trades:JACK OF ALL TRADES',
-    'size:any:ANY SIZE', 'size:light:LIGHT', 'size:medium:MEDIUM', 'size:heavy:HEAVY'], 'the eight buttons, in order');
+    'size:any:ANY SIZE', 'size:light:LIGHT', 'size:medium:MEDIUM', 'size:heavy:HEAVY', 'size:moe:MOE'], 'the nine buttons, in order');
   const goBuckets = (BUCKETS_GO.match(/var Buckets = \[\]string\{([^}]*)\}/)[1].match(/"([^"]+)"/g) || []).map(s => s.slice(1, -1));
   eq(btns.filter(b => b.dataset.kind === 'type' && b.dataset.value !== 'all').map(b => b.dataset.value), goBuckets,
      'the type buttons are exactly the buckets the server knows');

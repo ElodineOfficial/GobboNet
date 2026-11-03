@@ -4,7 +4,7 @@
 Roadmap 1.7.7: each model is tagged coding, roleplay and/or
 jack-of-all-trades. launch.bat stays the single source of truth for the model
 set, so the tags sit beside each download block as MODEL_TAGS, the way
-DL_SHA256 does; installer/gen-catalog.py carries them into models.ini, and the
+DL_SHA256 does; catalog/gen-catalog.py carries them into models.ini, and the
 Go catalogue reads them from there (internal/catalog/buckets.go).
 
 Held here:
@@ -26,7 +26,7 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-GEN = ROOT / 'installer' / 'gen-catalog.py'
+GEN = ROOT / 'catalog' / 'gen-catalog.py'
 BUCKETS_GO = ROOT / 'internal' / 'catalog' / 'buckets.go'
 
 
@@ -54,7 +54,7 @@ class CatalogBuckets(unittest.TestCase):
     def test_every_model_in_launch_bat_is_tagged(self):
         text = (ROOT / 'launch.bat').read_text(encoding='ascii')
         blocks = re.findall(r'if "!MODEL_CHOICE!"=="(\d+)" \((.*?)^\)', text, re.S | re.M)
-        self.assertEqual(len(blocks), 10)
+        self.assertEqual(len(blocks), 16)
         for idx, body in blocks:
             m = re.search(r'set "MODEL_TAGS=([^"]*)"', body)
             self.assertIsNotNone(m, 'choice %s has no MODEL_TAGS' % idx)
@@ -68,11 +68,11 @@ class CatalogBuckets(unittest.TestCase):
     def test_committed_models_ini_is_the_generators_output(self):
         p, out = generate(ROOT)
         self.assertEqual(p.returncode, 0, p.stderr)
-        committed = (ROOT / 'installer' / 'models.ini').read_bytes()
-        self.assertEqual(out, committed, 'installer/models.ini is stale: re-run gen-catalog.py')
+        committed = (ROOT / 'catalog' / 'models.ini').read_bytes()
+        self.assertEqual(out, committed, 'catalog/models.ini is stale: re-run gen-catalog.py')
         self.assertEqual((ROOT / 'linux-amd64' / 'models.ini').read_bytes(), committed,
-                         'linux-amd64/models.ini is not a copy of installer/models.ini')
-        self.assertEqual(committed.count(b'\r\ntags='), 10)
+                         'linux-amd64/models.ini is not a copy of catalog/models.ini')
+        self.assertEqual(committed.count(b'\r\ntags='), 16)
 
     def test_a_misspelled_bucket_stops_the_generator(self):
         with tempfile.TemporaryDirectory() as d:
@@ -93,7 +93,7 @@ class CatalogBuckets(unittest.TestCase):
             p, out = generate(d)
             self.assertEqual(p.returncode, 0, p.stderr)
             self.assertIn('has no MODEL_TAGS, so it only shows under ALL MODELS', p.stderr)
-            self.assertEqual(out.count(b'\r\ntags='), 9)
+            self.assertEqual(out.count(b'\r\ntags='), 15)
 
 
 if __name__ == '__main__':

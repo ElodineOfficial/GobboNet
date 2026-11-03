@@ -15,12 +15,12 @@ go build -o gobbonet ./cmd/gobbonet
 ```
 
 Go 1.25+. No cgo, no runtime dependencies — the result is one file, with the
-chat page compiled in (run `./stage-web.sh` first; see below).
+chat page compiled in (run `./scripts/stage-web.sh` first; see below).
 
 ## Releases
 
 ```sh
-./build-release.sh
+./scripts/build-release.sh
 ```
 
 Cross-compiles for linux/amd64, linux/arm64, windows/amd64, darwin/arm64 and
@@ -312,7 +312,7 @@ means one of:
    flow — at the cost of owning hardware-detection edge cases that upstream's
    probe spent ~2,000 lines learning, on platforms it never targeted.
 3. **Port only the catalogue.** It is already machine-readable as
-   `installer/models.ini`; a `gobbonet setup` CLI could drive the download while
+   `catalog/models.ini`; a `gobbonet setup` CLI could drive the download while
    probing stays behind a platform-specific interface.
 
 Current state is (1). (2) is the one that actually retires `launch.bat` and gets
@@ -484,8 +484,10 @@ miss means the model's turn markers get rendered to the user as content.
 
 `/search/*` goes straight to `search_url` — `https://ollama.com/api` by default
 — carrying the browser's own `Authorization` header and nothing of ours. It is
-the only route that leaves the machine, and only when a user switches search on
-and supplies a key.
+the only route that passes a browser's request out of the machine, and only when
+a user switches search on and supplies a key. (GobboNet itself fetches two
+static lists when asked: the model catalogue and, from 1.7.9, the endorsed mod
+list when BROWSE is clicked; see docs/ENDORSED-MODS.md.)
 
 Upstream ran a relay for this until 1.6.0: a hidden-window PowerShell started
 from `launch.bat` with `-EncodedCommand` and 4,656 characters of base64, binding

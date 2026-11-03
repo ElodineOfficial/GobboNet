@@ -269,7 +269,9 @@ console.log('\n=== F. wiring ===');
   const defaults = between(STATE, 'const DEFAULT_SETTINGS = {', '\n};', 'js/04-state.js');
   ok(/\n  retrievalNearEnd: false\n?$/.test(defaults) || /retrievalNearEnd: false/.test(defaults), 'off by default (DEFAULT_SETTINGS.retrievalNearEnd = false)');
   ok(/state\.settings\.retrievalNearEnd === true/.test(RAG), 'only a real true turns it on');
-  const box = between(HTML, 'id="prompt-order-group"', 'Performance &mdash; llama.cpp tuning', 'chat.html');
+  // 1.7.9 (F3): in CONFIG's Advanced section, followed by Lore Compression.
+  const box = between(HTML, 'id="prompt-order-group"', '&#128221; Lore Compression', 'chat.html');
+  ok(between(HTML, 'id="cfg-advanced"', '</details>', 'chat.html').includes('id="prompt-order-group"'), 'in the Advanced section');
   ok(/<input type="checkbox" id="set-retrieval-near-end">/.test(box) && /Put lorebook snippets just before my newest message/.test(box),
      'CONFIG has the switch, in its own Prompt Order box');
   ok(/character and lore &rarr; the conversation &rarr; lorebook snippets &rarr; your new message/.test(box), 'it spells out the order it gives');

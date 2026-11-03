@@ -425,6 +425,14 @@ function scheduleStateSync() {
 
 async function flushStateSync() {
   if (!syncEnabled()) return;
+  // A delete with UNDO still on offer is not final, so other devices must not
+  // hear about it yet (1.7.9). The push is re-armed when it commits or is
+  // undone (js/18-utils.js UNDO). typeof: this file is also run on its own
+  // by tests that load no utils.
+  if (typeof undoHoldsSync === 'function' && undoHoldsSync()) {
+    stateSync.pendingPush = true;
+    return;
+  }
   if (stateSync.inFlight) {
     // Another push is happening. Re-arm so we capture the latest.
     stateSync.pushTimer = setTimeout(flushStateSync, 2000);
@@ -525,6 +533,10 @@ function forceServerFlush() {
  */
 function flushBeforeExit(opts) {
   const beacon = !!(opts && opts.beacon);
+  // Leaving for good: a delete still offering UNDO becomes final first, so
+  // what is saved and pushed below is what the person did (1.7.9). Not on a
+  // mere tab switch (beacon false), where they may well come back to undo.
+  if (beacon) { try { if (typeof commitPendingUndo === 'function') commitPendingUndo(); } catch (_) {} }
   try {
     // Local save always. Skip arming the debounced push — the page is going
     // away, so the timer would never fire; the keepalive push below is the
@@ -674,12 +686,13 @@ async function restoreFromServer(opts) {
     // that would make boot execute code out of it; the code itself is kept so
     // it can be read and switched on here. See neutralizeUntrustedCode.
     //
-    // The typeof guard is deliberate: 23-card-code.js loads after this file,
-    // and a load-order change should not turn into a hard failure on the
-    // restore path.
-    const neutralized = (typeof neutralizeUntrustedCode === 'function')
-      ? neutralizeUntrustedCode(parsed)
-      : { cards: 0, extensions: false };
+    // Called directly, with no `typeof` guard (1.7.9, PR #5 review). The guard
+    // was there so a load-order change could not break restores, but what it
+    // did instead was skip the security control without a sound: if the
+    // function were ever missing, synced code would arrive switched ON. A
+    // restore that fails loudly is the right outcome. By the time any restore
+    // runs, 23-card-code.js has loaded (restores start from boot or a click).
+    const neutralized = neutralizeUntrustedCode(parsed);
     if (neutralized.cards || neutralized.extensions) {
       text = JSON.stringify(parsed);   // localStorage path writes the raw text
       if (!opts.silent) {
@@ -1997,6 +2010,10 @@ function redactedStateMeta() {
     meta.settings = { ...meta.settings };
     delete meta.settings.apiKey;
   }
+  // Code does not travel in /state any more (1.7.9, F1): mods live on the PC
+  // and are switched on there. An empty list is sent so a 1.7.8 device reading
+  // this has nothing to run, and so a blob still held here never leaves.
+  if (meta) meta.extensions = { enabled: false, styles: [], scripts: [] };
   return meta;
 }
 
@@ -2231,7 +2248,15 @@ async function ensureSyncLedger() {
     return true;
   }
   if (!idx) {
-    if (!state.threads || state.threads.length === 0) return false;
+    if (!state.threads || state.threads.length === 0) {
+      // Nothing on the server and no conversation here: nothing is seeded
+      // (an empty device must not create the backup), and the first chat's
+      // upload carries the settings with it. Say "idle" rather than leave the
+      // indicator on "syncing..." for good, which is what a brand-new profile
+      // showed from its first load until 1.7.9.
+      if (stateSync.status === 'syncing') stateSync.status = 'idle';
+      return false;
+    }
     await seedWholeDocument(null);
     return true;
   }
@@ -2417,11 +2442,24 @@ async function pushChangedConversations(opts) {
     else if (outcome === 'conflict') conflicts++;
   }
   const live = new Set(state.threads.map(t => t.id));
-  for (const id of Object.keys(L.threads)) {
-    if (live.has(id) || state.threads.some(t => t.id === id)) continue;
-    const outcome = await deleteOneThread(id, opts);
-    if (outcome === 'sent') sent++;
-    else if (outcome === 'conflict') conflicts++;
+  const gone = Object.keys(L.threads).filter(id => !live.has(id) && !state.threads.some(t => t.id === id));
+  if (opts && opts.keepalive) {
+    // Leaving the page: start every DELETE now, together. One at a time, only
+    // the first got out before the page was torn down -- the rest never ran,
+    // so after deleting or purging several chats and closing the tab, all but
+    // one came back from the server on the next load (1.7.8 too). DELETEs
+    // carry no body, so keepalive's 64 KB budget is not a concern.
+    const outcomes = await Promise.all(gone.map(id => deleteOneThread(id, opts).catch(() => 'error')));
+    for (const outcome of outcomes) {
+      if (outcome === 'sent') sent++;
+      else if (outcome === 'conflict') conflicts++;
+    }
+  } else {
+    for (const id of gone) {
+      const outcome = await deleteOneThread(id, opts);
+      if (outcome === 'sent') sent++;
+      else if (outcome === 'conflict') conflicts++;
+    }
   }
   if ((await pushMeta(opts)) === 'conflict') conflicts++;
 

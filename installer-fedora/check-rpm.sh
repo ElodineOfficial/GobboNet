@@ -264,7 +264,7 @@ if [ -f "$ROOT/installer-linux/gobbonet-launch" ]; then
     }
     same "$TMP$LIB/gobbonet-launch"   "$ROOT/installer-linux/gobbonet-launch"   "launcher is installer-linux/gobbonet-launch, byte for byte"
     same "$TMP$LIB/gobbonet-setup.py" "$ROOT/installer-linux/gobbonet-setup.py" "setup wizard is installer-linux/gobbonet-setup.py, byte for byte"
-    same "$TMP$LIB/models.ini"        "$ROOT/installer/models.ini"              "catalogue is installer/models.ini, byte for byte"
+    same "$TMP$LIB/models.ini"        "$ROOT/catalog/models.ini"              "catalogue is catalog/models.ini, byte for byte"
     changed="$(diff "$ROOT/installer-linux/wizard.html" "$WIZARD" 2>/dev/null | grep -c '^[<>]' || true)"
     [ "$changed" = 4 ] \
         && ok "wizard.html differs from installer-linux/ in exactly its two Fedora lines" \
@@ -273,8 +273,8 @@ if [ -f "$ROOT/installer-linux/gobbonet-launch" ]; then
     # SILENTLY in every checkout -- the bit does not survive a commit made from
     # Windows, and the script had never had it. Run through bash for the same
     # reason.
-    if [ -f "$ROOT/verify-payload.sh" ]; then
-        if report="$(bash "$ROOT/verify-payload.sh" "$TMP$LIB" "packaged payload" 2>&1)"; then
+    if [ -f "$ROOT/scripts/verify-payload.sh" ]; then
+        if report="$(bash "$ROOT/scripts/verify-payload.sh" "$TMP$LIB" "packaged payload" 2>&1)"; then
             ok "packaged payload matches payload.manifest"
         else
             bad "packaged payload does not match payload.manifest: $(tr -s ' \n' ' ' <<<"$report")"

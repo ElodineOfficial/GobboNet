@@ -682,8 +682,15 @@ echo  ====================================================
 echo.
 set "GOBBONET_SECRET_OUT=!SECRET_FILE!"
 set "PW_SCRIPT=%TEMP%\gobbonet_setpw_%RANDOM%.ps1"
+:: 1.7.9: the minimum is min_password_length from config.toml (8 unless the
+:: user set it, never below 4), read by the script itself through
+:: gobbonet.exe so no install path goes through cmd quoting. No config yet,
+:: or no gobbonet.exe: 8. It only applies to a password being chosen here.
+set "GOBBONET_DIR=%~dp0"
 (
-echo $min = 6
+echo $min = 8
+echo $gn = Join-Path $env:GOBBONET_DIR 'gobbonet.exe'
+echo if ^(Test-Path -LiteralPath $gn^) { $v = ^& $gn config get min_password_length 2^>$null; if ^("$v" -match '^^\d+$'^) { $min = [Math]::Max^(4, [int]"$v"^) } }
 echo while ^($true^) {
 echo     $p1 = Read-Host 'Enter a password' -AsSecureString
 echo     $b1 = [Runtime.InteropServices.Marshal]::SecureStringToBSTR^($p1^)
@@ -1112,7 +1119,7 @@ goto :write_model_json
 ::
 :: Run hardware-probe.ps1 (visible, so the user sees their GPU/RAM
 :: detected), then parse hardware.json into HW_* vars plus per-model
-:: markers (MK_1..MK_8) and a recommended option number (REC).
+:: markers (MK_1..MK_17) and a recommended option number (REC).
 ::
 :: REC = best model that fits detected VRAM (flagship-first):
 ::   >=16 GB -> 5 (Gemma 4 26B)   >=12 -> 8 (gpt-oss 20B)
@@ -1188,6 +1195,9 @@ echo.
 echo     [1] Gemma 4 E4B IT         Q4_K_M  ~5.4 GB  !MK_1!
 echo         Google - fast and sharp for its size
 echo.
+echo    [12] Llama 3.2 1B Instruct  Q8_0    ~1.3 GB  !MK_12!
+echo         Meta - tiny; runs on almost anything, even without a GPU
+echo.
 echo   -- MEDIUM (fits ~8-12 GB VRAM) ------------------
 echo.
 echo     [4] Qwen3.5 9B             Q4_K_M  ~6.2 GB  !MK_4!
@@ -1201,9 +1211,15 @@ echo.
 echo     [3] Mistral 7B v0.3        Q6_K    ~7.5 GB  !MK_3!
 echo         Mistral AI - tight instruction following
 echo.
+echo    [13] Mistral Nemo 12B       Q4_K_M  ~7.5 GB  !MK_13!
+echo         Mistral AI - a roleplay favourite, 128K context
+echo.
 echo     [7] DeepSeek-R1 8B         Q8_0    ~8.5 GB  !MK_7!
 echo         Reasoning-focused model (Qwen3 distill)
 echo         Shows chain-of-thought by default
+echo.
+echo    [14] Phi-4 14B              Q4_K_M  ~9.1 GB  !MK_14!
+echo         Microsoft - careful reasoning and code
 echo.
 echo     [8] gpt-oss 20B            MXFP4   ~12 GB   !MK_8!
 echo         OpenAI - open-weights reasoning model
@@ -1215,9 +1231,18 @@ echo     [5] Gemma 4 26B-A4B MoE    Q4_K_S  ~16 GB   !MK_5!
 echo         Google - MoE runs FAST despite large size
 echo         Great default for 16 GB GPUs
 echo.
+echo    [15] Mistral Small 3.2 24B  Q4_K_M  ~14.3 GB !MK_15!
+echo         Mistral AI - strong dense all-rounder, needs ~18 GB
+echo.
 echo    [10] Command R 35B (08-2024) Q4_K_S ~19 GB   !MK_10!
 echo         Cohere - heavy chat model, needs ~24 GB VRAM
 echo         Multilingual strength, 128K context
+echo.
+echo    [16] Gemma 4 31B IT         Q4_K_M  ~19.6 GB !MK_16!
+echo         Google - the largest dense Gemma 4, needs ~24 GB
+echo.
+echo    [17] Qwen3-Coder 30B-A3B MoE Q4_K_M ~18.6 GB !MK_17!
+echo         Alibaba - coding specialist; MoE runs fast
 echo.
 echo     [6] Qwen3.6 35B-A3B MoE    Q4_K_M  ~22 GB   !MK_6!
 echo         Alibaba - largest in this list, needs ~24 GB
@@ -1237,7 +1262,7 @@ if not "!REC!"=="0" (
     echo   or type a number to choose a different model.
     echo.
 )
-:: Only 1-11 is an answer (issue #63). Anything else used to fall through
+:: Only 1-17 is an answer (issue #63). Anything else used to fall through
 :: every branch below into the [11] "add my own .gguf" path, which ends at
 :: :fatal. The prompt just above this menu is a Y/N question, so "y" was
 :: the natural thing to type, and it closed the window with [FATAL]. Ask
@@ -1249,10 +1274,10 @@ if not "!REC!"=="0" (
 set "_MC_TRIES=0"
 :ask_model_choice
 set "MODEL_CHOICE="
-set /p "MODEL_CHOICE=  Your choice [1-11]: "
+set /p "MODEL_CHOICE=  Your choice [1-17]: "
 if not defined MODEL_CHOICE if not "!REC!"=="0" set "MODEL_CHOICE=!REC!"
 set "_MC_OK="
-for %%N in (1 2 3 4 5 6 7 8 9 10 11) do if "!MODEL_CHOICE!"=="%%N" set "_MC_OK=1"
+for %%N in (1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17) do if "!MODEL_CHOICE!"=="%%N" set "_MC_OK=1"
 if not defined _MC_OK (
     set /a _MC_TRIES+=1
     echo.
@@ -1261,9 +1286,9 @@ if not defined _MC_OK (
         set "MODEL_CHOICE=11"
     ) else (
         if "!REC!"=="0" (
-            echo  [*] That is not one of the choices. Type a number from 1 to 11.
+            echo  [*] That is not one of the choices. Type a number from 1 to 17.
         ) else (
-            echo  [*] That is not one of the choices. Type a number from 1 to 11,
+            echo  [*] That is not one of the choices. Type a number from 1 to 17,
             echo      or press ENTER for the recommended pick [!REC!].
         )
         echo.
@@ -1289,6 +1314,12 @@ if "!MODEL_CHOICE!"=="8" set "PICK_MIN=14"
 :: including for slot 10, which is the second-largest model in the list.
 if "!MODEL_CHOICE!"=="9" set "PICK_MIN=9"
 if "!MODEL_CHOICE!"=="10" set "PICK_MIN=24"
+if "!MODEL_CHOICE!"=="12" set "PICK_MIN=4"
+if "!MODEL_CHOICE!"=="13" set "PICK_MIN=10"
+if "!MODEL_CHOICE!"=="14" set "PICK_MIN=12"
+if "!MODEL_CHOICE!"=="15" set "PICK_MIN=18"
+if "!MODEL_CHOICE!"=="16" set "PICK_MIN=24"
+if "!MODEL_CHOICE!"=="17" set "PICK_MIN=22"
 if not defined HW_VRAM set "HW_VRAM=0"
 :: Mixture-of-Experts models also fit a smaller card, when system RAM can hold
 :: the experts that do not fit on it (issue #65): MOE_MIN_VRAM of VRAM and the
@@ -1299,6 +1330,7 @@ set "PICK_MOE_RAM=0"
 if "!MODEL_CHOICE!"=="5" set "PICK_MOE_RAM=24"
 if "!MODEL_CHOICE!"=="6" set "PICK_MOE_RAM=32"
 if "!MODEL_CHOICE!"=="8" set "PICK_MOE_RAM=16"
+if "!MODEL_CHOICE!"=="17" set "PICK_MOE_RAM=24"
 if not defined HW_RAM set "HW_RAM=0"
 if !PICK_MOE_RAM! gtr 0 if !HW_VRAM! geq !MOE_MIN_VRAM! if !HW_RAM! geq !PICK_MOE_RAM! set "PICK_MIN=0"
 if !HW_VRAM! gtr 0 if !PICK_MIN! gtr 0 if !HW_VRAM! lss !PICK_MIN! (
@@ -1322,10 +1354,15 @@ if !HW_VRAM! gtr 0 if !PICK_MIN! gtr 0 if !HW_VRAM! lss !PICK_MIN! (
 
 :: MODEL_TAGS sorts each model into the Add a Model window's buckets
 :: (roadmap 1.7.7): coding, roleplay, jack-of-all-trades. launch.bat
-:: itself never reads it; installer/gen-catalog.py carries it into
+:: itself never reads it; catalog/gen-catalog.py carries it into
 :: models.ini, the same way it carries DL_SHA256. A model can be in more
 :: than one bucket (comma-separated), and one in none still shows under
 :: ALL MODELS.
+::
+:: DL_SHA256, where set, is the checksum pinned in the catalogue (1.7.9):
+:: the download is checked against it instead of HuggingFace's own record.
+:: catalog/pin-hashes.py fills it in. Cleared first so nothing stale leaks in.
+set "DL_SHA256="
 if "!MODEL_CHOICE!"=="1" (
     set "DL_REPO=bartowski/google_gemma-4-E4B-it-GGUF"
     set "DL_FILE=google_gemma-4-E4B-it-Q4_K_M.gguf"
@@ -1469,6 +1506,92 @@ if "!MODEL_CHOICE!"=="10" (
     set "KV_CACHE_TYPE=q8_0"
     goto :download_model
 )
+if "!MODEL_CHOICE!"=="12" (
+    set "DL_REPO=bartowski/Llama-3.2-1B-Instruct-GGUF"
+    set "DL_FILE=Llama-3.2-1B-Instruct-Q8_0.gguf"
+    set "MODEL_ID=llama32-1b"
+    set "MODEL_DISPLAY=Llama 3.2 1B Instruct"
+    set "MODEL_TAGS=jack-of-all-trades"
+    set "MODEL_FAMILY=llama"
+    set "MODEL_MAX_CTX=131072"
+    set "MODEL_THINK_FMT=none"
+    set "CTX_SIZE=32768"
+    set "KV_CACHE_TYPE=f16"
+    goto :download_model
+)
+if "!MODEL_CHOICE!"=="13" (
+    set "DL_REPO=bartowski/Mistral-Nemo-Instruct-2407-GGUF"
+    set "DL_FILE=Mistral-Nemo-Instruct-2407-Q4_K_M.gguf"
+    set "DL_SHA256=7c1a10d202d8788dbe5628dc962254d10654c853cae6aaeca0618f05490d4a46"
+    set "MODEL_ID=mistral-nemo-12b"
+    set "MODEL_DISPLAY=Mistral Nemo 12B (2407)"
+    set "MODEL_TAGS=roleplay"
+    set "MODEL_FAMILY=mistral"
+    set "MODEL_MAX_CTX=131072"
+    set "MODEL_THINK_FMT=none"
+    rem A Tekken-tokenizer model: the 1.7.9 Tekken fix (--no-jinja with the
+    rem built-in template) is what makes it answer properly.
+    set "CTX_SIZE=16384"
+    set "KV_CACHE_TYPE=f16"
+    goto :download_model
+)
+if "!MODEL_CHOICE!"=="14" (
+    set "DL_REPO=bartowski/phi-4-GGUF"
+    set "DL_FILE=phi-4-Q4_K_M.gguf"
+    set "MODEL_ID=phi4-14b"
+    set "MODEL_DISPLAY=Phi-4 14B"
+    set "MODEL_TAGS=coding,jack-of-all-trades"
+    set "MODEL_FAMILY=phi"
+    set "MODEL_MAX_CTX=16384"
+    set "MODEL_THINK_FMT=none"
+    rem Lower-case repo and file. Hugging Face paths are case-sensitive.
+    set "CTX_SIZE=16384"
+    set "KV_CACHE_TYPE=f16"
+    goto :download_model
+)
+if "!MODEL_CHOICE!"=="15" (
+    set "DL_REPO=bartowski/mistralai_Mistral-Small-3.2-24B-Instruct-2506-GGUF"
+    set "DL_FILE=mistralai_Mistral-Small-3.2-24B-Instruct-2506-Q4_K_M.gguf"
+    set "MODEL_ID=mistral-small-32-24b"
+    set "MODEL_DISPLAY=Mistral Small 3.2 24B (2506)"
+    set "MODEL_TAGS=roleplay,jack-of-all-trades"
+    set "MODEL_FAMILY=mistral"
+    set "MODEL_MAX_CTX=131072"
+    set "MODEL_THINK_FMT=none"
+    set "CTX_SIZE=16384"
+    set "KV_CACHE_TYPE=q8_0"
+    goto :download_model
+)
+if "!MODEL_CHOICE!"=="16" (
+    set "DL_REPO=bartowski/google_gemma-4-31B-it-GGUF"
+    set "DL_FILE=google_gemma-4-31B-it-Q4_K_M.gguf"
+    set "DL_SHA256=2959c1b0a4f792493bb0092846ea06aec54547e47be979c282634d938d501b75"
+    set "MODEL_ID=gemma4-31b"
+    set "MODEL_DISPLAY=Gemma 4 31B IT"
+    set "MODEL_TAGS=roleplay,jack-of-all-trades"
+    set "MODEL_FAMILY=gemma"
+    set "MODEL_MAX_CTX=262144"
+    set "MODEL_THINK_FMT=gemma"
+    rem 8192 for the reason slot 6 gives: 19.6 GB of weights on a 24 GB card
+    rem leaves little for the KV cache. CONFIG raises it for anyone with room.
+    set "CTX_SIZE=8192"
+    set "KV_CACHE_TYPE=q8_0"
+    goto :download_model
+)
+if "!MODEL_CHOICE!"=="17" (
+    set "DL_REPO=unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF"
+    set "DL_FILE=Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf"
+    set "MODEL_ID=qwen3-coder-30b"
+    set "MODEL_DISPLAY=Qwen3-Coder 30B-A3B MoE"
+    set "MODEL_TAGS=coding"
+    set "MODEL_FAMILY=qwen"
+    set "MODEL_MAX_CTX=262144"
+    set "MODEL_THINK_FMT=none"
+    rem Qwen3-Coder answers directly; it has no thinking mode.
+    set "CTX_SIZE=16384"
+    set "KV_CACHE_TYPE=q8_0"
+    goto :download_model
+)
 
 echo.
 echo  [INFO] Place your .gguf file in: !MODEL_DIR!
@@ -1555,6 +1678,15 @@ set "POINTER_URL=https://huggingface.co/!DL_REPO!/raw/main/!DL_FILE!"
 set "PTR_FILE=%TEMP%\gobbonet_ptr_%RANDOM%.txt"
 set "VERIFY_RESULT=2"
 
+:: A checksum pinned in the catalogue (1.7.9) wins: it was recorded when the
+:: catalogue was made, so it does not come from the host serving the file.
+set "MODEL_EXPECTED="
+if defined DL_SHA256 (
+    echo  [..] Using the SHA-256 pinned in the model catalogue.
+    set "MODEL_EXPECTED=!DL_SHA256!"
+    goto :model_hash_compare
+)
+
 echo  [..] Fetching expected SHA-256 from HuggingFace...
 call :http_get "!POINTER_URL!" "!PTR_FILE!" quiet
 if not "!HTTP_OK!"=="1" (
@@ -1572,6 +1704,7 @@ if not defined MODEL_EXPECTED (
     goto :model_verify_done
 )
 
+:model_hash_compare
 set "MODEL_ACTUAL="
 for /f "skip=1 delims=" %%H in ('certutil -hashfile "!GGUF_PART!" SHA256 2^>nul') do if not defined MODEL_ACTUAL set "MODEL_ACTUAL=%%H"
 set "MODEL_ACTUAL=!MODEL_ACTUAL: =!"
@@ -1816,24 +1949,19 @@ echo.
 ::      built-in NAME doesn't resolve on current builds (it gets treated as
 ::      a literal template -- the model ends up fed just the word "granite").
 ::   2. MODEL_CHAT_TEMPLATE -- a built-in template NAME (e.g.
-::      mistral-v3-tekken). Used with --jinja DISABLED; llama-server's C++
-::      reference implementation renders it.
+::      mistral-v3-tekken). Sent with an explicit --no-jinja; llama-server's
+::      C++ reference implementation renders it.
 ::   3. Neither -- plain --jinja, honoring the GGUF's embedded template.
 set "JINJA_FLAG="
 set "CHAT_TEMPLATE_FLAG="
 
-:: Guard (defense-in-depth): the pinned llama.cpp build does not recognize
-:: "mistral-v7-tekken" as a built-in name, so passing it bare to --chat-template
-:: makes the server treat the literal text as the template body -- the model is
-:: then fed a constant string and rambles about "tekken". Rewrite to the name
-:: that IS registered. (identify-model.ps1 already emits mistral-v7, but a user
-:: could hand-set this from the CONFIG comment above, or a stale value could
-:: arrive some other way -- so we normalize here too.)
-if /i "!MODEL_CHAT_TEMPLATE!"=="mistral-v7-tekken" (
-    set "MODEL_CHAT_TEMPLATE=mistral-v7"
-    set "MODEL_USE_JINJA=0"
-    echo  [..] Normalized chat template mistral-v7-tekken -^> mistral-v7 ^(unrecognized on pinned build^).
-)
+:: 1.7.9: the "rambles about tekken" symptom was never an unknown name.
+:: mistral-v7-tekken is registered in every pinned build (b8941, b9294,
+:: b10456). The real cause: llama-server now runs with Jinja ON by default,
+:: and with Jinja on it reads --chat-template as Jinja SOURCE, so any built-in
+:: name renders as its own literal text. The old rewrite here to "mistral-v7"
+:: hid that and brought back issue #20's wrong spacing. It is gone; the fix is
+:: the explicit --no-jinja below, sent with every built-in name.
 
 :: Guard: if a template FILE was specified, make sure it is actually a Jinja
 :: template and not an empty file or a failed download (the classic "Entry not
@@ -1869,8 +1997,12 @@ if not "!MODEL_CHAT_TEMPLATE_FILE!"=="" (
         set "JINJA_FLAG=--jinja"
     )
 ) else (
-    if "!MODEL_USE_JINJA!"=="1" set "JINJA_FLAG=--jinja"
+    rem Jinja's state is always stated: leaving the flag out no longer turns
+    rem it off on current engines. A built-in NAME always goes with Jinja off,
+    rem or llama-server renders the name itself as the prompt.
+    if "!MODEL_USE_JINJA!"=="1" (set "JINJA_FLAG=--jinja") else (set "JINJA_FLAG=--no-jinja")
     if not "!MODEL_CHAT_TEMPLATE!"=="" (
+        set "JINJA_FLAG=--no-jinja"
         set "CHAT_TEMPLATE_FLAG=--chat-template !MODEL_CHAT_TEMPLATE!"
     )
 )
@@ -2183,6 +2315,12 @@ exit /b
 
 :launch_legacy
 
+:: 1.7.9: the PowerShell server is deprecated and goes in 1.8. It runs only
+:: when gobbonet.exe is missing or GOBBONET_LEGACY_SERVER is set.
+echo  [*] DEPRECATED: the legacy PowerShell server ^(fileserver.ps1^) is being used.
+echo      It will be removed in GobboNet 1.8. Re-extract the full GobboNet package
+echo      so gobbonet.exe is present, or clear GOBBONET_LEGACY_SERVER.
+echo.
 if not exist "%~dp0chat.html" (
     echo  [ERROR] chat.html not found in: %~dp0
     goto :fatal

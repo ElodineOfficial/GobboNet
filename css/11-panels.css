@@ -87,6 +87,34 @@
   padding-bottom: 14px;
 }
 
+/* 1.7.9: the mod list. */
+.mods-body { padding: 12px 16px 14px; }
+.mod-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 4px 12px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: rgba(0, 243, 255, 0.02);
+}
+.mod-row.mod-on { border-color: var(--cyan-dim); }
+.mod-row.mod-broken { opacity: 0.75; }
+.mod-switch { width: 18px; height: 18px; accent-color: var(--cyan-bright); }
+.mod-name { font-size: 13px; color: var(--cyan-bright); white-space: pre-wrap; }
+.mod-meta { font-size: 11px; color: var(--cyan-dim); }
+.mod-error { font-size: 11px; color: var(--red, #ff4466); margin-top: 2px; }
+.mod-tools { display: flex; gap: 6px; }
+.mods-note-error { color: var(--red, #ff4466) !important; }
+#ext-modal.mods-readonly .ext-entry input,
+#ext-modal.mods-readonly .ext-entry textarea { opacity: 0.6; pointer-events: none; }
+@media (max-width: 700px) {
+  .mod-row { grid-template-columns: auto 1fr; }
+  .mod-tools { grid-column: 1 / -1; }
+}
+
 /* Code-style textareas */
 .ext-code-area {
   font-family: var(--font) !important;
@@ -280,3 +308,49 @@
 @media (max-width: 400px) and (pointer: coarse) {
   .msg-action-btn { padding: 6px 9px; }
 }
+/* Endorsed mods (1.7.9, F6). */
+.endorsed-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+.endorsed-actions a.btn { text-decoration: none; }
+.endorsed-row .mod-name a { color: inherit; }
+.endorsed-row.endorsed-installed { border-color: var(--cyan-dim); }
+.endorsed-adult-cover {
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  border: 1px dashed var(--border, rgba(0, 243, 255, 0.25));
+  border-radius: var(--radius, 6px);
+  font-size: 12px;
+  color: var(--cyan-dim);
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+}
+.mod-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 5px;
+  font-size: 10px;
+  letter-spacing: 1px;
+  border: 1px solid currentColor;
+  border-radius: 3px;
+  color: var(--magenta);
+  vertical-align: 1px;
+}
+.mod-badge.mod-badge-update { color: var(--green-neon); }
+
+/* A mod whose script failed was switched off: said once, out of the way. */
+#mod-notice {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  max-width: min(420px, calc(100vw - 32px));
+  box-sizing: border-box;
+  padding: 12px 14px;
+  background: rgba(10, 10, 15, 0.97);
+  border: 1px solid var(--red-neon);
+  border-radius: var(--radius, 6px);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.6);
+  font-size: 13px;
+  color: rgba(224, 248, 255, 0.95);
+  z-index: 9400;
+}
+#mod-notice[hidden] { display: none; }
+.mod-notice-text { margin-bottom: 8px; }
+.mod-notice-actions { display: flex; gap: 8px; justify-content: flex-end; }

@@ -69,8 +69,8 @@ embed_url = "http://127.0.0.1:11436"
 # panel. Keeping it online means models added after your install show up
 # without you reinstalling anything.
 #
-# This is the second and last thing GobboNet fetches from the internet,
-# after web search. What it sends: a plain GET for a static ~5 KB JSON
+# This is one of the few things GobboNet fetches from the internet, with
+# web search and the endorsed mod list below. What it sends: a plain GET for a static ~5 KB JSON
 # file. No query parameters, no cookies, no identifier, no telemetry, and
 # in particular NOT your hardware -- the whole list is downloaded and
 # filtered on your machine rather than asking a server what fits your GPU.
@@ -92,12 +92,23 @@ model_catalog_url = "https://goblincorps.com/gobbonet_model_list.json"
 # the weights, so the two would have to agree in order to lie. When both
 # exist and disagree, the download is refused outright.
 #
-# Left false because the models.ini that ships here carries no hashes and
-# the published catalogue does not yet either, so turning it on refuses
-# every stock download. Turn it on when you run a catalogue of your own
+# Left false because only some entries in the models.ini that ships here
+# carry a hash so far (catalog/pin-hashes.py adds the rest), so turning it
+# on refuses the others. Turn it on when you run a catalogue of your own
 # with a sha256 on every entry -- then a missing hash means the catalogue
 # is wrong, and you want to hear about it rather than download anyway.
 require_checksum = false
+
+# --- Endorsed mods --------------------------------------------------------
+# The list behind BROWSE ENDORSED MODS in the MODS panel: mods Elodine has
+# looked at and endorses one by one, listed at goblincorps.com/gobbonet_extras.
+# Fetched by this binary only when you open that list, as a plain GET with
+# nothing identifying; a mod's files are fetched only when you click INSTALL,
+# and every file is checked against the SHA-256 the list pins for it. A file
+# that does not match is refused and nothing is installed. Point this at
+# another list, or empty it to switch the list off. Mods you add by hand in
+# the mods folder work either way.
+mod_list_url = "https://goblincorps.com/gobbonet_mod_list.json"
 
 # API key sent to the upstream llama.cpp server (never exposed to the
 # browser). Set this if your upstream requires authentication.
@@ -180,6 +191,20 @@ model_load_timeout_seconds = 180
 #   model_dir = "./models"
 # model_dir = ""
 
+# Models you already have elsewhere (1.7.9). "Add a Model" lists the .gguf
+# files it finds under "Found on this computer", and USE IT links one into
+# model_dir -- a link, not a copy, so no disk is doubled. Nothing is read
+# until that window opens, and nothing leaves this machine.
+#
+# The HuggingFace cache is looked in by default: HF_HUB_CACHE, else
+# HF_HOME/hub, else ~/.cache/huggingface/hub. Set false to skip it.
+scan_hf_cache = true
+#
+# Any other folders to look in, such as LM Studio's or a second drive.
+# Subfolders are searched too, a few levels deep.
+#   model_dirs = ["D:/models", "~/.lmstudio/models"]
+# model_dirs = []
+
 # Where chat.html and friends live. Leave empty to auto-detect next to
 # the binary.
 # web_root = ""
@@ -190,6 +215,12 @@ model_load_timeout_seconds = 180
 # is upgraded to Argon2id automatically on the next successful login.
 # If empty, the server prompts on first run.
 access_secret = ""
+
+# Shortest password accepted when one is CHOSEN (set-password, the setup
+# wizards, the Windows first run). 8 by default; anything from 4 (a PIN) up.
+# A password that is already set keeps working whatever its length -- this
+# is never checked at sign-in. Lower it, then run "gobbonet set-password".
+min_password_length = 8
 
 # --- Chat template overrides (optional) ---------------------------------
 # Only needed if a model's embedded template is broken. Normally the

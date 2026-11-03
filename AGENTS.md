@@ -4,7 +4,7 @@ GobboNet is a private, offline chat app for local GGUF models. One Go binary,
 `gobbonet`, serves the chat page, proxies to llama.cpp and supervises it. The
 Windows and Linux launchers and installers around it handle first-run setup.
 
-This file describes the tree as of 1.7.8. Where it and the code disagree, the
+This file describes the tree as of 1.7.9. Where it and the code disagree, the
 code is right, and this file should be fixed in the same change. It names files
 and functions rather than line numbers, because line numbers go stale.
 
@@ -16,12 +16,19 @@ and functions rather than line numbers, because line numbers go stale.
   Nothing leaves the machine unless the user asked for it: engine and model
   downloads happen when the user picks them, and web search only when it is
   switched on. Every download is pinned by SHA-256. See [CONTRIBUTING.md](CONTRIBUTING.md).
-- **Never edit `internal/webui/assets/`.** `stage-web.sh` copies `chat.html`,
+- **Never edit `internal/webui/assets/`.** `scripts/stage-web.sh` copies `chat.html`,
   `js/`, `css/`, `manifest.webmanifest` and `icons/` there, and `go:embed` compiles them into the binary. Edit the
-  originals and re-run `stage-web.sh`.
+  originals and re-run `scripts/stage-web.sh`.
 - **Batch files are CRLF.** Inside a `( )` block, escape parentheses in `echo`
   text (`^(`, `^)`) and read variables as `!VAR!`, never `%VAR%`.
   `tests/test-launch-cmd-flow.py` and `tests/test-setup-lan.py` check this.
+- **The Informant describes the UI as shipped.** The Gobbonet Informant in
+  `default-characters.json` quotes button and section names; renaming one means
+  updating it, and `tests/test-informant.mjs` fails on any name it quotes that
+  the page no longer has. It stays under 1,500 tokens (by `estimateTokens`) and
+  answers "I don't know, check TROUBLESHOOTING.md" rather than guessing. A user
+  who added an older copy is offered UPDATE on the home screen
+  (`defaultCharState`, `updateDefaultChar` in `js/14-scroll.js`).
 - **Keep copies in sync.** `installer-linux/wizard.html` and
   `linux-amd64/wizard.html` must be identical.
 - **One changelog note per change**, as
@@ -39,7 +46,7 @@ and functions rather than line numbers, because line numbers go stale.
 | --- | --- |
 | `cmd/gobbonet/` | The binary: `serve` (the default), `launch`, `setup`, `set-password`, `config`, `doctor`, `check`, `engine`, `keyring`, `decrypt`, `autostart`, `uninstall`, `version`. Run `gobbonet --help`. |
 | `internal/` | Go packages, listed below. |
-| `chat.html`, `js/`, `css/` | The chat page: 24 JS modules (`01-config.js` to `24-boot.js`) and 17 stylesheets, as plain `<script>` and `<link>` tags. There is no bundler. `manifest.webmanifest` and `icons/` are its phone home-screen name and icons. |
+| `chat.html`, `js/`, `css/` | The chat page: 25 JS modules (`01-config.js` to `25-tutorial.js`) and 19 stylesheets, as plain `<script>` and `<link>` tags. There is no bundler. `manifest.webmanifest` and `icons/` are its phone home-screen name and icons. |
 | `default-characters.json` | The built-in character presets offered on the landing page. |
 | `launch.bat` | Windows first run and "Setup or add a model": password, hardware probe, engine download, model menu. It then writes the settings into `gobbonet.exe`'s config and starts it. |
 | `fileserver.ps1` | The legacy PowerShell server. Used only when `gobbonet.exe` is missing or `GOBBONET_LEGACY_SERVER` is set. |
@@ -47,12 +54,12 @@ and functions rather than line numbers, because line numbers go stale.
 | `stop-gobbonet.bat`, `Repair Windows shortcuts.bat` | Stop everything; re-point Start menu and desktop shortcuts at `gobbonet.exe launch`. |
 | `hardware-probe.ps1`, `hw-recommend.ps1`, `identify-model.ps1` | Windows hardware detection, model recommendation, and GGUF identification for the launcher. |
 | `installer-win/` | **The Windows installer that ships** (NSIS). |
-| `installer/` | An unreleased installer design. Do not ship from it. It holds `models.ini` (the model catalogue every platform reads) and `gen-catalog.py`. |
+| `catalog/` | `models.ini`, the model catalogue every platform reads, and `gen-catalog.py`, which generates it from `launch.bat`. `pin-hashes.py` pins each model's SHA-256 into `launch.bat`; `gen-remote-catalog.py` writes `gobbonet_model_list.json`, the live list to upload to goblincorps.com. (Was `installer/` until 1.7.9.) |
 | `installer-linux/` | The `.deb`, the Linux launcher `gobbonet-launch`, and its first-run wizard (`gobbonet-setup.py` + `wizard.html`). |
 | `installer-fedora/` | The `.rpm`. Install with `sudo dnf install`. |
 | `linux-amd64/` | The ZIP's Linux runtime: launcher, wizard copy and, once built, the binary and engine. |
 | `engine.sha256` | The pinned llama.cpp build and its hashes, read by every builder. |
-| `stage-web.sh`, `make-zip.sh`, `build-release.sh`, `verify-payload.sh`, `payload.manifest` | Build and packaging. See [docs/BUILDING.md](docs/BUILDING.md). |
+| `scripts/` | Build and packaging: `stage-web.sh`, `make-zip.sh`, `build-release.sh`, `verify-payload.sh`, `payload.manifest`, and `PATCH-README.txt`, the release notes `make-zip.sh` puts at the archive's root. Each runs from the repo root whatever directory you call it from. See [docs/BUILDING.md](docs/BUILDING.md). |
 | `tests/` | Node and Python suites. See [tests/README.md](tests/README.md). |
 | `docs/` | `GO_SERVER.md`, `BUILDING.md`, `state-integration.md`, `INDEX.md`, `changelog/`, investigations and roadmaps. |
 
@@ -69,10 +76,13 @@ and functions rather than line numbers, because line numbers go stale.
 | `keyring` | Optional encryption of the state files at rest. |
 | `config` | `config.toml` discovery, defaults and writes. |
 | `models` | Identifies a GGUF from its header: family, context, template, expert count. |
-| `catalog`, `modelfetch`, `engine` | The model catalogue, verified model downloads, and the pinned engine download. |
+| `catalog`, `modelfetch`, `engine` | The model catalogue (tiers, pins), verified model downloads, and the pinned engine download. |
+| `mods` | Mods: folders of CSS/JS under `<data_dir>/mods`, each with a `mod.json` and a switch; served to the page at `/mods` (1.7.9, F1). `endorsed.go`: the endorsed list from goblincorps.com and pinned installs, `/mod-list.json` and `/mod-list/install` (F6, `docs/ENDORSED-MODS.md`). |
+| `localmodels` | Finds GGUFs already on the machine (HuggingFace cache, `model_dirs`) and links one into `model_dir`; never copies (1.7.9, issue #12). |
 | `setup` | `gobbonet setup`, the Go first-run web wizard for platforms whose installer asks nothing. |
 | `webui`, `static` | The embedded chat page, and static file serving. |
 | `autostart`, `atomicfile`, `storelock`, `httpx`, `version` | Start at login, atomic file writes, maintenance locking, response helpers, the build stamp. |
+| `procjob` | Windows: ties `launch.bat`'s whole process tree to the launcher with a kill-on-close job, and starts the browser outside it. No-ops elsewhere. |
 
 ---
 
@@ -98,7 +108,11 @@ and functions rather than line numbers, because line numbers go stale.
   Automatic GPU placement passes `--fit on --fit-target <gpu_reserve_mib>`, at
   least 2048 for Mixture-of-Experts models (#65). llama-server always binds to
   loopback. `tests/test-engine-args.py` pins the flags shared with
-  `launch.bat`'s legacy path.
+  `launch.bat`'s legacy path. Jinja is always stated, `--jinja` or
+  `--no-jinja`, and a built-in `--chat-template` NAME always goes with
+  `--no-jinja`: the pinned engine has Jinja on by default and would render the
+  name itself as the prompt (1.7.9, the Tekken bug).
+  `internal/supervisor/template_args_test.go` holds this.
 - **Config:** `config.toml` is found in this order: `--config`,
   `$GOBBONET_CONFIG`, `$XDG_CONFIG_HOME/gobbonet/`, `~/.config/gobbonet/`, then
   `./config.toml`. On Windows that is usually `%USERPROFILE%\.config\gobbonet\`.
@@ -121,7 +135,10 @@ and functions rather than line numbers, because line numbers go stale.
 - **Entry points:**
   - **Windows first run:** `launch.bat`, which then starts `gobbonet.exe`.
   - **Windows afterwards:** the shortcuts run `gobbonet.exe launch`, which
-    serves the saved config and asks nothing. A first run that stopped early
+    serves the saved config and asks nothing. "Setup or add a model" runs
+    `gobbonet.exe launch --setup`. Whenever `launch` runs `launch.bat`, it puts
+    it in a kill-on-close job (`internal/procjob`), so closing the window ends
+    everything it started (1.7.9, PR #15). A first run that stopped early
     leaves `.gobbonet-setup-pending` beside `launch.bat` and a config with no
     engine; `launch` runs setup again for that (`cmd/gobbonet/launch.go`).
   - **Linux packages and ZIP:** `gobbonet-launch` runs the Python wizard on
@@ -130,7 +147,8 @@ and functions rather than line numbers, because line numbers go stale.
 ### The chat page
 
 - **Load order is the contract.** Modules share globals, so `chat.html`'s
-  `<script>` order is load-bearing: `01-config.js` first, `24-boot.js` last.
+  `<script>` order is load-bearing: `01-config.js` first, then `24-boot.js`,
+  then only `25-tutorial.js`, which waits on `window.GobboNet.ready`.
   The module headers point to a `REFACTOR-PLAN.md` that is no longer in the
   tree; the order in `chat.html` is what counts.
 - **State:** one `state` object (`js/04-state.js`, versioned by
@@ -139,11 +157,35 @@ and functions rather than line numbers, because line numbers go stale.
   it. Don't copy field lists into docs; read `04-state.js`.
 - **Rendering:** `render()` repaints the sidebar and messages. Streaming tokens
   update the DOM in place rather than re-rendering.
+- **CONFIG** is grouped into Basics, Characters & Chat, Model & Performance,
+  Devices & Network and a closed Advanced section (1.7.9), with a search box
+  (CONFIG SECTIONS & SEARCH, `js/15-cards.js`). A new setting goes in the
+  section a user would look in; `tests/test-config-sections.mjs` holds the
+  inventory, so add its id there too.
+- **Deleting** one thing never asks "are you sure". It happens at once and
+  offers UNDO for 10 seconds (1.7.9; UNDO in `js/18-utils.js`): snapshot what
+  you remove, call `undoable({ label, undo, commit })`, and put anything that
+  cannot be taken back (an IndexedDB delete, a server request) in `commit`.
+  Bulk deletes and PURGE keep their confirm. Add a new delete to the list in
+  `tests/test-undo.mjs`.
+- **Mods** (1.7.9): page code lives in mods on the PC (`internal/mods`, `js/19-extensions.js`), never in `/state`. Anything that can make code run -- writing a mod, switching one on, reordering, removing -- is `fromThisPC` only on the server; any signed-in device may read the list and switch a mod off. `redactedStateMeta()` always sends an empty `extensions`. Keep it that way. Installing from the endorsed list (F6) is `fromThisPC` too, and every file must match its SHA-256 pin or nothing is installed; an update never changes the user's switch. A mod file that fails to load or throws while it first runs switches its mod off (`modFailed`); `?nomods` loads none.
+- **The tour** (`js/25-tutorial.js`, 1.7.9) finds controls by `data-tour="..."`
+  only. Moving a control is safe; renaming or removing its `data-tour` is not,
+  and `tests/test-tutorial.mjs` will say so. A main control a newcomer needs
+  can get a stop: one sentence, a `data-tour` target, and a fallback target if
+  it can be hidden.
 - **Feature notes:** one visible sentence; anything longer goes in a "?"
   tooltip (`.tip-btn` naming a hidden `.tip-body` by `aria-describedby`; see
   HINT TOOLTIPS in `js/18-utils.js`). Keep warnings in the visible sentence.
 - **User content:** goes through `escapeHtml()` before it reaches the DOM.
   Text interpolated into inline handlers goes through `escapeJsAttr()`.
+  Synced numbers are coerced with `Number()` before markup, and ids in URL
+  paths go through `encodeURIComponent()`. `tests/test-render-escaping.mjs`
+  lints the handlers.
+- **Code from outside** (restores, backups, card files) always goes through
+  `neutralizeUntrustedCode()` or `applyImportedCardCode()`, called directly,
+  never behind a `typeof` guard: a missing quarantine must fail the restore.
+  `tests/test-untrusted-code-paths.mjs` holds the list of ways in.
 - **Mods:** user CSS and JS in the MODS panel, and per-character custom code,
   run with full page access. Imported cards arrive with custom code switched
   off.
@@ -176,7 +218,7 @@ and functions rather than line numbers, because line numbers go stale.
 ```sh
 for f in tests/*.mjs; do node "$f" || echo "FAILED: $f"; done   # frontend, no install step
 for f in tests/*.py;  do python3 "$f" || echo "FAILED: $f"; done # launcher, installers, wizards
-bash ./stage-web.sh && go test ./...                            # Go 1.25+
+bash ./scripts/stage-web.sh && go test ./...                            # Go 1.25+
 ```
 
 - **Frontend suites** load the real files out of `js/` and run them in Node's
@@ -185,7 +227,7 @@ bash ./stage-web.sh && go test ./...                            # Go 1.25+
   `tests/test-model-menu-input.py` also runs one `launch.bat` block through a
   small cmd interpreter.
 - **`tests/test-linux-onboarding.py`** needs a built `linux-amd64/gobbonet`
-  and an engine. `./make-zip.sh` produces both.
+  and an engine. `./scripts/make-zip.sh` produces both.
 - **Logs:**
   - **Diagnostics:** `gobbonet doctor` checks the config, engine, storage,
     port, LAN addresses and firewall.
@@ -194,9 +236,9 @@ bash ./stage-web.sh && go test ./...                            # Go 1.25+
 
 ## Building
 
-- **Go:** 1.25 or newer, no cgo. Run `stage-web.sh` before `go build`, or the
+- **Go:** 1.25 or newer, no cgo. Run `scripts/stage-web.sh` before `go build`, or the
   binary has no chat page.
-- **ZIP:** `./make-zip.sh` builds both servers and refuses to produce an
+- **ZIP:** `./scripts/make-zip.sh` builds both servers and refuses to produce an
   archive with a platform missing or a stale version stamp.
 - **Installers:** `installer-win/` (NSIS), `installer-linux/build-deb.sh`,
   `installer-fedora/build-rpm.sh`. All of them read `engine.sha256`.
@@ -212,7 +254,8 @@ Details: [docs/BUILDING.md](docs/BUILDING.md).
 `docs/PURGE.md` and `docs/GO_SERVER.md` up to the Go server. What is still
 historical on purpose:
 
-- `docs/GO_CONFIG_SPLIT.md` is the design note from before the config was
+- `docs/archive/` holds investigations, roadmaps and design notes from past
+  releases (moved there in 1.7.9). `GO_CONFIG_SPLIT.md` is the design note from before the config was
   built. Its status block says what changed; the code wins.
 - `docs/changelog/` records each change as it was made. Old entries name files
   and behaviour that later changed.

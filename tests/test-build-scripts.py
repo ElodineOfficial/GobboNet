@@ -3,9 +3,9 @@
 
 Every build script in the tree was committed 100644 and had been since the day
 it was added -- release commits are made from Windows, where Git does not
-record the bit. So in a fresh clone `./build-release.sh` failed with
+record the bit. So in a fresh clone `./scripts/build-release.sh` failed with
 "Permission denied", and `bash build-release.sh` failed one line later at its
-own `./stage-web.sh`. Worse were the two places that TESTED for the bit
+own `./scripts/stage-web.sh`. Worse were the two places that TESTED for the bit
 instead of running the file: check-rpm.sh skipped its payload verification and
 build-deb.sh skipped regenerating models.ini, both silently, in every checkout.
 
@@ -67,13 +67,13 @@ class BuildScripts(unittest.TestCase):
         # The exact lines this fix replaced. A pattern that quietly matched
         # nothing would pass every tree, so it is tested against them first.
         for line in (
-            './stage-web.sh',
-            '"$ROOT/verify-payload.sh" "$STAGE/usr/lib/gobbonet" "deb payload"',
+            './scripts/stage-web.sh',
+            '"$ROOT/scripts/verify-payload.sh" "$STAGE/usr/lib/gobbonet" "deb payload"',
             '"$ROOT/installer-linux/package-permissions.sh" "$STAGE"',
             'if ! "$HERE/check-rpm.sh" "$RPM"; then',
-            'if report="$("$ROOT/verify-payload.sh" "$TMP$LIB" "packaged payload" 2>&1)"; then',
-            'if [ -x "$ROOT/verify-payload.sh" ]; then',
-            '"$ROOT/installer/gen-catalog.py" "$ROOT/launch.bat" "$ROOT/installer/models.ini"',
+            'if report="$("$ROOT/scripts/verify-payload.sh" "$TMP$LIB" "packaged payload" 2>&1)"; then',
+            'if [ -x "$ROOT/scripts/verify-payload.sh" ]; then',
+            '"$ROOT/catalog/gen-catalog.py" "$ROOT/launch.bat" "$ROOT/catalog/models.ini"',
             './gen-catalog.py "$ROOT/launch.bat" models.ini',
         ):
             with self.subTest(line=line):
@@ -81,14 +81,14 @@ class BuildScripts(unittest.TestCase):
         # ... and the forms that replaced them, plus prose that merely names a
         # script, must not be flagged.
         for line in (
-            'bash ./stage-web.sh',
-            'bash "$ROOT/verify-payload.sh" "$STAGE/usr/lib/gobbonet" "deb payload"',
+            'bash ./scripts/stage-web.sh',
+            'bash "$ROOT/scripts/verify-payload.sh" "$STAGE/usr/lib/gobbonet" "deb payload"',
             'if ! bash "$HERE/check-rpm.sh" "$RPM"; then',
-            'if report="$(bash "$ROOT/verify-payload.sh" "$TMP$LIB" "packaged payload" 2>&1)"; then',
-            'if [ -f "$ROOT/verify-payload.sh" ]; then',
+            'if report="$(bash "$ROOT/scripts/verify-payload.sh" "$TMP$LIB" "packaged payload" 2>&1)"; then',
+            'if [ -f "$ROOT/scripts/verify-payload.sh" ]; then',
             'python3 ./gen-catalog.py "$ROOT/launch.bat" models.ini',
             'fail "icon/gobbonet-256.png is missing - run ./make-icon.sh"',
-            '# ./build-release.sh --allow-dirty  build anyway',
+            '# ./scripts/build-release.sh --allow-dirty  build anyway',
         ):
             with self.subTest(line=line):
                 self.assertFalse(offences(line), 'wrongly flagged: ' + line)

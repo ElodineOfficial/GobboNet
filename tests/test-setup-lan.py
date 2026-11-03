@@ -84,10 +84,20 @@ def main():
           "the later `set` wins in batch, so the current spelling must come second")
 
     print("\nfirewall rules")
+    # 1.7.9 (PR #7): rules take their profiles from GN_PROFILES (or, for the
+    # built-in mDNS rules, one profile at a time from GN_PROFILE_LIST). The
+    # default must still include domain; Public only by choice.
+    default = re.search(r'^set "GN_PROFILES=([^"]*)"', setup, re.M)
+    check("  default profiles are domain,private (Public only by choice)",
+          default is not None and default.group(1) == "domain,private",
+          default.group(1) if default else "GN_PROFILES not set")
+    check("  the per-profile list matches", 'set "GN_PROFILE_LIST=domain private"' in setup)
     for rule in re.findall(r'firewall (?:add|set) rule[^\n]*', setup):
         if "profile=" in rule:
-            check(f"  domain profile included: {rule[:52]}...", "domain" in rule,
-                  "a domain-joined machine otherwise gets no rule and no warning")
+            check(f"  profiles come from the choice: {rule[:52]}...",
+                  "profile=!GN_PROFILES!" in rule or "profile=%%F" in rule,
+                  "a hard-coded profile list bypasses the Public decision")
+            check(f"  never hard-codes public: {rule[:52]}...", "public" not in rule.lower().split("profile=", 1)[1].split()[0])
         if "action=allow" in rule:
             check(f"  scoped to LocalSubnet: {rule[:52]}...", "remoteip=LocalSubnet" in rule,
                   "the chat is password-protected but NOT encrypted -- never open it wide")
@@ -150,6 +160,47 @@ def main():
     check("  mDNS success is judged by netsh exit codes, not its translated output",
           "findstr" not in mdns and mdns.count('set "GN_MDNS_OK=1"') == 3,
           "netsh prints Enabled/Aktiviert/Activé; matching any of them fails on the others")
+
+    print("\nPublic networks (1.7.9, PR #7)")
+    pub = setup.find(":profiles_public")
+    check("  /public is the explicit switch", 'if /i "%~1"=="/public" goto :profiles_public' in setup)
+    check("  public is added only under :profiles_public",
+          setup.count('set "GN_PROFILES=domain,private,public"') == 1 and
+          setup.find('set "GN_PROFILES=domain,private,public"') > pub > 0)
+    check("  a Public network is detected and the user is asked",
+          "Get-NetConnectionProfile" in setup and "choice /c PAS" in setup)
+    check("  an unanswered question times out to skip, never to Public", "/t 60 /d S" in setup)
+    check("  [P] makes the network Private", "-NetworkCategory Private" in setup)
+    check("  the built-in mDNS rules are enabled, never re-scoped",
+          'set rule name="mDNS (UDP-In)" profile=%%F new enable=yes' in setup and
+          not re.search(r'set rule name="mDNS \(UDP-In\)" new [^\n]*profile=', setup))
+
+    print("\nURL reservation (1.7.9, PR #7)")
+    check("  no reservation for Everyone any more", ";;;WD)" not in setup and ";;;WD^)" not in setup)
+    check("  granted to the console user's SID", "sddl=D:(A;;GX;;;!GN_ACL_SID!)" in setup and "Win32_ComputerSystem" in setup)
+    check("  the SID is validated before use", 'findstr /r "^S-1-[0-9][0-9-]*$"' in setup)
+    check("  who gets it is printed", "The reservation will belong to: !GN_ACL_USER!" in setup)
+    check("  no SID: skipped, never widened", "if not defined GN_ACL_SID endlocal & goto :eof" in setup)
+    acl = setup[setup.find(":add_urlacl"):]
+    check("  an existing reservation is replaced, not kept",
+          acl.find("http delete urlacl") != -1 and acl.find("http delete urlacl") < acl.find("http add urlacl"))
+
+    print("\nquoting")
+    check("  no pipe in any PowerShell call (escaping differs between for /f and a plain line)",
+          not [l for l in setup.split("\n") if "powershell" in l.lower() and "|" in l.split("-Command", 1)[-1].split('" 2^>nul')[0].split('" >nul')[0]],
+          [l[:90] for l in setup.split("\n") if "powershell" in l.lower() and "|" in l.split("-Command", 1)[-1].split('" 2^>nul')[0].split('" >nul')[0]])
+    unesc = []
+    depth = 0
+    for line in setup.split("\n"):
+        t = line.strip()
+        if depth > 0 and t.lower().startswith("echo") and re.search(r'(?<!\^)[()]', t[4:].replace("'mDNS ^(UDP-In^)'", "")):
+            unesc.append(t[:80])
+        q = re.sub(r'"[^"]*"', '', t)
+        if not t.lower().startswith(("echo", "rem")):
+            depth += q.count("(") - q.count(")")
+        depth = max(depth, 0)
+    check("  no unescaped ( or ) in an echo inside a block", not unesc, unesc)
+
     doctor = read(os.path.join(ROOT, "cmd", "gobbonet", "doctor.go"))
     check("  gobbonet doctor knows both names",
           'portRuleName    = "GobboNet-Web"' in doctor and 'portRuleOldName = "Gemma4-Web"' in doctor)

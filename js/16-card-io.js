@@ -390,6 +390,11 @@ function _cardDataToInternal(data, spec, imageDataUrl) {
     const ext = data.extensions && data.extensions.gobbonet;
     if (ext && typeof ext.ragStorybook === 'string') ragStorybook = ext.ragStorybook;
   } catch (e) {}
+  let ragWordsToFire = 1;
+  try {
+    const ext = data.extensions && data.extensions.gobbonet;
+    if (ext && ext.ragWordsToFire !== undefined) ragWordsToFire = Math.min(5, Math.max(1, Math.round(Number(ext.ragWordsToFire)) || 1));
+  } catch (e) {}
 
   // Memory files ride the same way (issue #41). Each one goes through
   // memoryPutFile, so a shared card cannot bring in a path for a name, a
@@ -417,6 +422,7 @@ function _cardDataToInternal(data, spec, imageDataUrl) {
     loreEnabled: true,
     startingLore: startingLore,
     ragStorybook: ragStorybook,
+    ragWordsToFire: ragWordsToFire,
     memoryFiles: memoryFiles,
     greeting: greeting,
     altGreetingsEnabled: altList.length > 0,
@@ -775,6 +781,9 @@ function _cardToV3(card) {
     extensions: (() => {
       const g = {};
       if (card.ragStorybook && card.ragStorybook.trim()) g.ragStorybook = card.ragStorybook;
+      // "Plain text fires on" (1.7.9): 1 to 5, only written when not the default.
+      const wordsToFire = Math.min(5, Math.max(1, Math.round(Number(card.ragWordsToFire)) || 1));
+      if (wordsToFire !== 1) g.ragWordsToFire = wordsToFire;
       // Memory files (issue #41): name and text only. Other apps ignore the
       // namespaced key; GobboNet reads it back through memoryPutFile.
       const memory = cardMemoryFiles(card);
@@ -1064,6 +1073,7 @@ function _liveCardSnapshot() {
     startingLore: val('card-starting-lore') ?? card.startingLore,
     ...((typeof readLorePromptEditor === 'function') ? readLorePromptEditor(card) : {}),
     ragStorybook: val('card-rag-storybook') ?? card.ragStorybook,
+    ragWordsToFire: Math.min(5, Math.max(1, Math.round(Number(val('card-rag-words') ?? card.ragWordsToFire)) || 1)),
     // The editor's pending memory list, unsaved imports and removals included.
     memoryFiles: document.getElementById('card-memory-files') ? _memoryEditorFiles() : card.memoryFiles
   };

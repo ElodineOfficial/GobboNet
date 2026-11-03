@@ -103,17 +103,30 @@ function renderLandingPage() {
       // JSON string's leading double-quote closed the attribute, so the click was
       // a no-op. installDefaultChar looks the preset back up by index.
       const hasCardData = !!(p.writingStyle || p.personality);
-      const clickAttr = hasCardData
+      // 1.7.9: one already added says so, and one whose shipped version has
+      // changed since (the Informant, rewritten for each release) offers
+      // UPDATE instead of an "already in your list" dead end.
+      const st = hasCardData ? defaultCharState(p) : 'preset';
+      const clickAttr = st === 'new'
         ? `onclick="installDefaultChar(${i})" title="Install as character card"`
+        : st === 'update'
+        ? `onclick="installDefaultChar(${i})" title="Replace your copy's prompt with the version that ships with GobboNet (UNDO brings yours back)"`
+        : st === 'same'
+        ? `title="Already in your characters; pick it in CHARS"`
         : `title="${name}"`;
+      const badge = {
+        new: '<span class="landing-preset-badge landing-preset-badge-install">+ ADD</span>',
+        update: '<span class="landing-preset-badge landing-preset-badge-update">UPDATE</span>',
+        same: '<span class="landing-preset-badge">ADDED</span>',
+      }[st] || '<span class="landing-preset-badge">PRESET</span>';
       return `
-        <div class="landing-preset-card ${hasCardData ? 'landing-preset-installable' : ''}" ${clickAttr}>
+        <div class="landing-preset-card ${st === 'new' || st === 'update' ? 'landing-preset-installable' : ''}" data-preset="${i}" data-preset-state="${st}" ${clickAttr}>
           <div class="landing-preset-icon">${icon}</div>
           <div class="landing-char-info">
             <div class="landing-char-name">${name}</div>
             <div class="landing-char-desc">${desc}</div>
           </div>
-          ${hasCardData ? '<span class="landing-preset-badge landing-preset-badge-install">+ ADD</span>' : '<span class="landing-preset-badge">PRESET</span>'}
+          ${badge}
         </div>`;
     }).join('');
   }
@@ -143,7 +156,7 @@ function renderLandingPage() {
         <div class="landing-char-list">${charHtml}</div>
       </div>
 
-      <div class="landing-section">
+      <div class="landing-section" data-tour="help">
         <div class="landing-section-header">
           <span>&#128126; DEFAULT CHARACTERS</span>
           <span class="landing-tag">JSON</span>
@@ -235,7 +248,9 @@ function renderMessages() {
   if (thread.forkSource) {
     const sourceThread = state.threads.find(t => t.id === thread.forkSource.threadId);
     const sourceName = sourceThread ? escapeHtml(sourceThread.name.replace(/^⑂\s*/, '')) : '[deleted]';
-    const forkAt = thread.forkSource.at;
+    // Synced data: a peer can put anything here, and it lands in markup as
+    // "at message N". Numbers only.
+    const forkAt = Math.max(0, Math.floor(Number(thread.forkSource.at) || 0));
     const siblings = getSiblingBranches(thread);
     const myIdx = siblings.findIndex(t => t.id === thread.id);
     const totalSibs = siblings.length;
@@ -383,7 +398,7 @@ function renderMessages() {
         <div class="${className} editing">
           <div class="msg-header">
             <span class="msg-avatar">${avatar}</span>
-            <span class="message-role">${roleLabel}</span>
+            <span class="message-role">${escapeHtml(roleLabel)}</span>
           </div>
           <textarea class="edit-textarea" id="edit-area">${escapeHtml(m.content || m.reasoning || '')}</textarea>
           <div class="edit-actions">
@@ -414,12 +429,13 @@ function renderMessages() {
     let genBadges = '';
     if (!isUser) {
       if (isCurrentlyGenerating && m.genStartedAt) {
-        genBadges += `<span class="gen-time gen-time-live" id="gen-live-timer" data-t0="${m.genStartedAt}" title="Generating&hellip;">&#9201; ${escapeHtml(formatGenTime(Date.now() - m.genStartedAt) || '0s')}</span>`;
+        genBadges += `<span class="gen-time gen-time-live" id="gen-live-timer" data-t0="${Number(m.genStartedAt) || 0}" title="Generating&hellip;">&#9201; ${escapeHtml(formatGenTime(Date.now() - m.genStartedAt) || '0s')}</span>`;
       } else if (typeof m.genMs === 'number') {
         genBadges += `<span class="gen-time" title="Response generated in ${escapeHtml(formatGenTime(m.genMs))}">&#9201; ${escapeHtml(formatGenTime(m.genMs))}</span>`;
       }
-      if (m.smartCapped && !isCurrentlyGenerating) {
-        genBadges += `<span class="gen-cap-badge" title="Smart limit: reply capped at ~${m.smartCapped} tokens (est.), cut at the sentence end — adjust in CONFIG">&#9986; ~${m.smartCapped}</span>`;
+      const capped = Math.round(Number(m.smartCapped) || 0);   // synced field: numbers only
+      if (capped > 0 && !isCurrentlyGenerating) {
+        genBadges += `<span class="gen-cap-badge" title="Smart limit: reply capped at ~${capped} tokens (est.), cut at the sentence end — adjust in CONFIG">&#9986; ~${capped}</span>`;
       }
     }
     
@@ -474,7 +490,7 @@ function renderMessages() {
       <div class="${className}" data-index="${i}">
         <div class="msg-header">
           <span class="msg-avatar">${avatar}</span>
-          <span class="message-role">${roleLabel}</span>
+          <span class="message-role">${escapeHtml(roleLabel)}</span>
           ${searchBadge}
           ${genBadges}
         </div>
@@ -783,11 +799,14 @@ function openLoreInspector(opts) {
   // --- growth across passes -------------------------------------------
   if (log.length) {
     html += '<div class="lore-section-label">Size across passes</div>';
-    const max = Math.max.apply(null, log.map(e => e.after).concat([1]));
+    const max = Math.max.apply(null, log.map(e => Number(e.after) || 0).concat([1]));
     html += '<table class="lore-history"><thead><tr>'
           + '<th>#</th><th>time</th><th>folded</th><th>before</th>'
           + '<th>after</th><th>change</th><th></th></tr></thead><tbody>';
-    log.forEach((e, i) => {
+    log.forEach((raw, i) => {
+      // The log travels with the thread through sync, so its counts are
+      // untrusted. They go into markup as numbers or not at all.
+      const e = { ...raw, folded: Number(raw.folded) || 0, before: Number(raw.before) || 0, after: Number(raw.after) || 0 };
       const d = e.after - e.before;
       const cls = d > 0 ? 'lore-grow' : (d < 0 ? 'lore-shrink' : '');
       const t = new Date(e.at).toLocaleTimeString();

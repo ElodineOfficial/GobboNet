@@ -148,6 +148,9 @@ function cancelPersonaEdit() {
 
 function deletePersona() {
   if (state.personaCards.length <= 1) return;
+  const _at = state.personaCards.findIndex(p => p.id === editingPersonaId);
+  const _persona = state.personaCards[_at];
+  const _wasActive = state.activePersonaId === editingPersonaId;
   state.personaCards = state.personaCards.filter(p => p.id !== editingPersonaId);
   if (state.activePersonaId === editingPersonaId) state.activePersonaId = state.personaCards[0].id;
   editingPersonaId = null;
@@ -158,6 +161,22 @@ function deletePersona() {
   document.getElementById('char-close-row').style.display = '';
   renderCardGrid();
   renderPersonaGrid();
+  if (_persona) _offerPersonaUndo(_persona, _at, _wasActive);
+}
+
+/** UNDO for a deleted persona (1.7.9). */
+function _offerPersonaUndo(persona, at, wasActive) {
+  undoable({
+    label: 'Deleted persona "' + String(persona.name || 'Unnamed').slice(0, 40) + '"',
+    undo: () => {
+      if (!state.personaCards.some(p => p.id === persona.id)) {
+        state.personaCards.splice(Math.min(at, state.personaCards.length), 0, persona);
+      }
+      if (wasActive) state.activePersonaId = persona.id;
+      renderPersonaGrid(); renderCardGrid();
+      try { renderMessages(); } catch (_) {}
+    },
+  });
 }
 
 function copyPersona(id) {
@@ -171,11 +190,16 @@ function copyPersona(id) {
 
 function deletePersonaById(id) {
   if (state.personaCards.length <= 1) return;
+  const at = state.personaCards.findIndex(p => p.id === id);
+  if (at < 0) return;
+  const persona = state.personaCards[at];
+  const wasActive = state.activePersonaId === id;
   state.personaCards = state.personaCards.filter(p => p.id !== id);
-  if (state.activePersonaId === id) state.activePersonaId = state.personaCards[0].id;
+  if (wasActive) state.activePersonaId = state.personaCards[0].id;
   saveState();
   renderPersonaGrid();
   renderMessages();
+  _offerPersonaUndo(persona, at, wasActive);
 }
 
 function pickCardBg(color) {
@@ -221,15 +245,56 @@ function getCurrentDateTimeString() {
 /**
  * Resolves all user-defined custom macros in text.
  * Called after the hardcoded macros so user macros can't shadow them.
+ *
+ * A macro can also take text (1.7.9), two ways:
+ *   {{SYSTEM: Foo bar baz}}      the text inside the braces
+ *   {{SYSTEM:}} Foo bar baz      the rest of that line
+ * In the macro's own text, {{input}} is where the passed text goes (as often
+ * as it appears), and {{input1}}, {{input2}}... are its parts split at "|".
+ * A macro with no {{input}} gets the passed text on a new line after it, so
+ * "The following is an out of character directive..." plus {{SYSTEM: ...}}
+ * needs nothing new. A plain {{SYSTEM}} still works; its placeholders come
+ * out empty. Names are matched without regard to case, as before.
  */
+const MACRO_INPUT_RE = /\{\{\s*input(\d?)\s*\}\}/gi;
+
+function macroFind(name) {
+  const key = String(name).toLowerCase();
+  return (state.macros || []).find(m => m && typeof m.trigger === 'string' && m.trigger.toLowerCase() === key) || null;
+}
+
+/** One macro's expansion with the text passed to it ('' for the plain form). */
+function macroExpand(macro, input) {
+  const text = String(macro.text || '');
+  const arg = String(input || '').trim();
+  const parts = arg.split('|').map(s => s.trim());
+  MACRO_INPUT_RE.lastIndex = 0;
+  if (MACRO_INPUT_RE.test(text)) {
+    return text.replace(MACRO_INPUT_RE, (_, n) => n ? (parts[Number(n) - 1] || '') : arg);
+  }
+  return arg ? text + '\n' + arg : text;
+}
+
 function resolveMacros(text) {
   if (!text || !state.macros || !state.macros.length) return text;
+  // 1. Plain {{name}}, as before -- first, so a plain macro can sit inside
+  //    the text passed to another ({{SYSTEM: {{continue}}}}).
   for (const macro of state.macros) {
-    // Escape any regex special chars in the trigger name (underscores are safe, but be defensive)
+    if (!macro || typeof macro.trigger !== 'string') continue;
     const escaped = macro.trigger.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const re = new RegExp('\\{\\{' + escaped + '\\}\\}', 'gi');
-    text = text.replace(re, macro.text);
+    text = text.replace(re, () => macroExpand(macro, ''));
   }
+  // 2. {{name:}} rest of the line.
+  text = text.replace(/\{\{\s*([A-Za-z0-9_]+)\s*:\s*\}\}[ \t]*([^\n]*)/g, (whole, name, rest) => {
+    const m = macroFind(name);
+    return m ? macroExpand(m, rest) : whole;
+  });
+  // 3. {{name: text}}, which may run over several lines.
+  text = text.replace(/\{\{\s*([A-Za-z0-9_]+)\s*:([\s\S]*?)\}\}/g, (whole, name, arg) => {
+    const m = macroFind(name);
+    return m ? macroExpand(m, arg) : whole;
+  });
   return text;
 }
 
@@ -253,10 +318,14 @@ function translateTemplates(text, charName, userName, forDisplay) {
   if (forDisplay) return out;
 
   // Model path: expand everything. {{auto_continue}}/{{auto_continue_N}} →
-  // full chain prompt; then user-defined macros.
+  // full chain prompt; then user-defined macros. A macro's own text may use
+  // {{char}}, {{user}} and {{current_DAT}} too (1.7.9; before, they reached
+  // the model as typed), so those are filled in once more afterwards.
   return resolveMacros(
     out.replace(/\{\{auto_continue(?:_\d+)?\}\}/gi, AUTO_CONTINUE_TEXT)
-  );
+  ).replace(/\{\{char\}\}/gi, () => charName)
+   .replace(/\{\{user\}\}/gi, () => userName)
+   .replace(/\{\{current_DAT\}\}/gi, () => getCurrentDateTimeString());
 }
 
 function applyActiveCardBackground() {

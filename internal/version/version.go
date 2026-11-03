@@ -14,7 +14,7 @@ import (
 
 // Version is the release identity: "<VERSION>-go-<short sha>", e.g.
 // "1.5.8-go-afb7e0d". The release half comes from the VERSION file at the repo
-// root, which build-release.sh and installer/build-installer.sh both read.
+// root, which build-release.sh and the package builders read.
 //
 // That half names the *upstream* release this branch is built on, not a number
 // of our own. TestVersionFileMatchesUpstreamRelease holds it to the nearest

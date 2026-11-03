@@ -170,7 +170,7 @@ func resolveWebIn(cfg config.Config, exe, work string) (webSource, error) {
 	}
 	return webSource{
 		FS:    over,
-		Label: dir + " (unstaged build; run ./stage-web.sh to build the frontend in)",
+		Label: dir + " (unstaged build; run ./scripts/stage-web.sh to build the frontend in)",
 	}, nil
 }
 
@@ -327,5 +327,5 @@ func (s *Server) WebMissing() bool { return s.webSrc.Missing }
 var ErrNoWebAssets = errors.New(
 	"this build has no chat interface in it, and none was found on disk.\n" +
 		"    A release build should never say this — it means the build skipped\n" +
-		"    stage-web.sh. Run ./stage-web.sh and rebuild, or point web_root at a\n" +
+		"    scripts/stage-web.sh. Run ./scripts/stage-web.sh and rebuild, or point web_root at a\n" +
 		"    directory that holds chat.html.")

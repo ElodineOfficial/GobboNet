@@ -133,7 +133,11 @@ function cancelSchedEdit() {
   document.getElementById('sched-footer').style.display = '';
 }
 
+/* Asks first rather than offering UNDO (1.7.9, Elodine's call; see removeTag). */
 function deleteSched(id) {
+  const sched = state.schedules.find(s => s.id === id);
+  if (!sched) return;
+  if (!confirm('Delete the scheduled message at ' + String(sched.time || '?') + '?')) return;
   state.schedules = state.schedules.filter(s => s.id !== id);
   saveState();
   renderSchedList();

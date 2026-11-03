@@ -111,7 +111,7 @@ class ZipEntry(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
 
     def test_make_zip_ships_the_entry_and_never_a_leftover_binary(self):
-        src = (ROOT / 'make-zip.sh').read_text()
+        src = (ROOT / 'scripts' / 'make-zip.sh').read_text()
         loop = re.search(r'for rel in \\\n(.*?)\ndo\n', src, re.S)
         self.assertIsNotNone(loop, 'could not find the copy list in make-zip.sh')
         names = loop.group(1).replace('\\', ' ').split()
@@ -129,7 +129,7 @@ class ZipEntry(unittest.TestCase):
         # it. Release commits are made from the extracted archive, so a credit
         # added to that file -- larckdrakengold's, for 1.7.7 #2 -- would never
         # have reached the repository.
-        src = (ROOT / 'make-zip.sh').read_text()
+        src = (ROOT / 'scripts' / 'make-zip.sh').read_text()
         loop = re.search(r'for rel in \\\n(.*?)\ndo\n', src, re.S)
         names = loop.group(1).replace('\\', ' ').split()
         self.assertIn('CONTRIBUTORS.md', names)

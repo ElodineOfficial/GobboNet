@@ -2439,3 +2439,125 @@ function _scheduleHideTip() {
   window.addEventListener('resize', follow);
   document.addEventListener('scroll', follow, true);
 })();
+
+/* ================================================================
+   UNDO (1.7.9, F8) -- "Deleted 'Tifa' -- Undo" for 10 seconds.
+
+   undoable({ label, undo, commit }) is called by a delete right AFTER it has
+   changed the page. Until the window closes:
+
+     - undo()   puts the thing back exactly where it was;
+     - commit() does whatever cannot be taken back -- removing an IndexedDB
+       record, deleting a server backup. It runs when the window closes, when
+       another delete starts one, or when the page is hidden for good.
+
+   While a delete is pending, the push to other devices is held
+   (undoHoldsSync, read by flushStateSync), so an undone delete never reaches
+   them. Local saves are NOT held: if the tab dies mid-window the delete is
+   already saved here, and anything commit() would have removed is still
+   there -- the safe way round.
+
+   One at a time, like a mail client: a second delete commits the first.
+   Ctrl+Z / Cmd+Z undoes too, when the cursor is not in a text field (where
+   it already means "undo typing").
+================================================================ */
+const UNDO_WINDOW_MS = 10000;
+let _undoPending = null;   // { label, undo, commit, timer }
+
+function undoHoldsSync() { return !!_undoPending; }
+
+function _undoToastEl() {
+  let el = document.getElementById('undo-toast');
+  if (el) return el;
+  el = document.createElement('div');
+  el.id = 'undo-toast';
+  el.setAttribute('role', 'status');
+  el.setAttribute('aria-live', 'polite');
+  const text = document.createElement('span');
+  text.className = 'undo-toast-text';
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'undo-toast-btn';
+  btn.textContent = 'UNDO';
+  btn.addEventListener('click', () => undoLast());
+  const bar = document.createElement('span');
+  bar.className = 'undo-toast-bar';
+  el.appendChild(text); el.appendChild(btn); el.appendChild(bar);
+  document.body.appendChild(el);
+  return el;
+}
+
+function _undoHide() {
+  const el = document.getElementById('undo-toast');
+  if (el) el.classList.remove('visible');
+}
+
+function _undoRelease() {
+  // Whatever the held pushes were waiting for has now happened (or been
+  // taken back), so let sync see the result -- straight away, not after the
+  // usual two-second debounce. A reload in those two seconds used to let the
+  // server's older copy back in: a purge that had just gone final came back
+  // (1.7.8 had the same window right after any purge).
+  try { if (typeof scheduleStateSync === 'function') scheduleStateSync(); } catch (_) {}
+  try { if (typeof flushStateSync === 'function') flushStateSync(); } catch (_) {}
+}
+
+/** Offer UNDO for a change already made. Returns nothing. */
+function undoable(opts) {
+  commitPendingUndo();   // one at a time: the previous delete becomes final
+  const p = {
+    label: String((opts && opts.label) || 'Deleted'),
+    undo: (opts && opts.undo) || (() => {}),
+    commit: (opts && opts.commit) || null,
+    timer: null,
+  };
+  _undoPending = p;
+  p.timer = setTimeout(() => { if (_undoPending === p) commitPendingUndo(); }, UNDO_WINDOW_MS);
+  try {
+    const el = _undoToastEl();
+    el.querySelector('.undo-toast-text').textContent = p.label;
+    const bar = el.querySelector('.undo-toast-bar');
+    // Restart the countdown bar's animation.
+    bar.style.animation = 'none'; void bar.offsetWidth;
+    bar.style.animation = `undo-countdown ${UNDO_WINDOW_MS}ms linear forwards`;
+    el.classList.add('visible');
+  } catch (_) { /* no DOM (tests): the logic above still holds */ }
+}
+
+/** Make the pending delete final now. Safe to call when nothing is pending. */
+function commitPendingUndo() {
+  const p = _undoPending;
+  if (!p) return false;
+  _undoPending = null;
+  clearTimeout(p.timer);
+  _undoHide();
+  try { if (p.commit) p.commit(); } catch (e) { console.error('[undo] commit failed:', e); }
+  _undoRelease();
+  return true;
+}
+
+/** Take back the pending delete. Returns true if there was one. */
+function undoLast() {
+  const p = _undoPending;
+  if (!p) return false;
+  _undoPending = null;
+  clearTimeout(p.timer);
+  _undoHide();
+  try { p.undo(); } catch (e) { console.error('[undo] undo failed:', e); }
+  try { saveState(); } catch (_) {}
+  _undoRelease();
+  return true;
+}
+
+// Ctrl+Z / Cmd+Z outside text fields. Inside one, the browser's own undo of
+// typing is what the person means, so it is left alone.
+if (typeof document !== 'undefined' && document.addEventListener) {
+  document.addEventListener('keydown', (e) => {
+    if (!_undoPending || e.key !== 'z' && e.key !== 'Z') return;
+    if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey) return;
+    const t = e.target;
+    if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName || ''))) return;
+    e.preventDefault();
+    undoLast();
+  });
+}

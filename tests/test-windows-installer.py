@@ -103,7 +103,8 @@ class TheFlow(unittest.TestCase):
         for lnk in ('$SMPROGRAMS\\${APPNAME}\\${APPNAME}.lnk', '$SMPROGRAMS\\${APPNAME}\\Launch ${APPNAME}.lnk',
                     '$DESKTOP\\${APPNAME}.lnk'):
             self.assertEqual(target(lnk), ('$INSTDIR\\${APPEXE}', 'launch'), lnk)
-        self.assertEqual(target('$SMPROGRAMS\\${APPNAME}\\Setup or add a model.lnk'), ('$INSTDIR\\launch.bat', ''))
+        # 1.7.9 (PR #15): setup goes through gobbonet.exe so it runs in a kill-on-close job.
+        self.assertEqual(target('$SMPROGRAMS\\${APPNAME}\\Setup or add a model.lnk'), ('$INSTDIR\\${APPEXE}', 'launch --setup'))
 
     def test_the_console_picks_the_model_then_opens_the_browser(self):
         # launch.bat asks for the model, then hands over to gobbonet.exe with
@@ -124,7 +125,7 @@ class WhatItInstalls(unittest.TestCase):
         # the live list carries the tags (internal/catalog/discover.go).
         self.assertIn('models.ini', installed_root_files())
         self.assertIn('Delete "$INSTDIR\\models.ini"', UNINSTALL)
-        self.assertTrue((ROOT / 'installer' / 'models.ini').is_file(), 'the staged models.ini comes from installer/')
+        self.assertTrue((ROOT / 'catalog' / 'models.ini').is_file(), 'the staged models.ini comes from catalog/')
 
     def test_everything_installed_at_the_root_is_uninstalled(self):
         for name in installed_root_files():
@@ -177,14 +178,15 @@ class TheLanSetupShortcut(unittest.TestCase):
 
 class TheBuildGuide(unittest.TestCase):
     def test_building_md_names_installer_win(self):
-        self.assertIn('**The Windows installer is `installer-win/`, not `installer/`.**', BUILDING)
+        self.assertIn('**The Windows installer is `installer-win/`.**', BUILDING)
         order = BUILDING.split('## Order matters', 1)[1].split('```', 2)[1]
         self.assertIn('installer-win/', order)
         self.assertNotIn('build-installer.sh', order, 'the release build order must not build installer/')
 
-    def test_installer_readme_says_do_not_ship(self):
-        first = (ROOT / 'installer' / 'README.md').read_text(encoding='utf-8').splitlines()[0]
-        self.assertIn('do not ship', first)
+    def test_retired_installer_design_is_gone(self):
+        # 1.7.9: installer/ was an unreleased design that said "do not ship" on
+        # its first line. It is removed; its catalogue moved to catalog/.
+        self.assertFalse((ROOT / 'installer').exists(), 'installer/ was retired in 1.7.9')
 
 
 if __name__ == '__main__':

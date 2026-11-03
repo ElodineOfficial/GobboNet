@@ -33,6 +33,7 @@ import (
 	"github.com/BurntSushi/toml"
 
 	"github.com/ElodineOfficial/GobboNet/internal/catalog"
+	"github.com/ElodineOfficial/GobboNet/internal/mods"
 )
 
 // Mode is what the server does about llama.cpp: supervise it, or just proxy to
@@ -85,6 +86,13 @@ const (
 	DefaultKVCacheType = "q8_0"
 
 	DefaultSessionTTLHours = 12
+
+	// New-password length (1.7.9). Eight by default; min_password_length
+	// lowers or raises it, but never below MinPasswordFloor, a four-digit PIN,
+	// which is where GobboNet started. Applied only where a password is
+	// CHOSEN: one already set signs in whatever its length.
+	DefaultMinPasswordLength = 8
+	MinPasswordFloor         = 4
 
 	// Five minutes, as specified. Long enough that a pause to read a reply or
 	// answer the door does not cost a reload; short enough that walking away
@@ -146,6 +154,17 @@ type Config struct {
 	WebRoot  string `toml:"web_root"`
 	DataDir  string `toml:"data_dir"`
 
+	// --- Models already on this computer (1.7.9, issue #12) -----------------
+	// ModelDirs are extra folders to look in for .gguf files -- LM Studio's,
+	// another app's, a second drive. ScanHFCache adds the HuggingFace cache
+	// (HF_HUB_CACHE, else HF_HOME/hub, else ~/.cache/huggingface/hub). What
+	// is found is offered in Add a Model under "Found on this computer" and
+	// linked into model_dir when picked, never copied: internal/localmodels.
+	// Read only when that window opens; nothing is scanned at start-up and
+	// nothing leaves the machine.
+	ModelDirs   []string `toml:"model_dirs"`
+	ScanHFCache bool     `toml:"scan_hf_cache"`
+
 	// --- Access control ----------------------------------------------------
 	// AccessSecret is either a legacy "salt:hash" SHA-256 pair or an Argon2id
 	// PHC string. See internal/auth: a legacy secret is verified as-is and
@@ -168,6 +187,13 @@ type Config struct {
 	// plain Int, Bool or Slice.
 	ModelCatalogURL    string `toml:"model_catalog_url"`
 	ModelCatalogRemote bool   `toml:"model_catalog_remote"`
+
+	// ModListURL is the list of endorsed mods (1.7.9, F6), browsed from
+	// the MODS panel. Fetched by this binary only when that list is opened,
+	// and each mod's files only when INSTALL is clicked; every file is
+	// checked against the SHA-256 the list pins. Empty switches it off. See
+	// internal/mods/endorsed.go.
+	ModListURL string `toml:"mod_list_url"`
 
 	// RequireChecksum refuses to download a model that no source can vouch
 	// for, instead of falling back to the size floor.
@@ -247,6 +273,7 @@ type Config struct {
 	UI map[string]any `toml:"ui"`
 
 	SessionTTLHours  int `toml:"session_ttl_hours"`
+	MinPasswordLen   int `toml:"min_password_length"`
 	JobMaxConcurrent int `toml:"job_max_concurrent"`
 	JobMaxAgeHours   int `toml:"job_max_age_hours"`
 
@@ -312,6 +339,7 @@ func Default() Config {
 		// prevent. A portable install opts back in by setting a relative path.
 		ModelDir:        "",
 		SessionTTLHours: DefaultSessionTTLHours,
+		MinPasswordLen:  DefaultMinPasswordLength,
 		// On by default, because the problem it solves is one users hit
 		// without knowing it is a setting: several gigabytes of VRAM pinned
 		// against an app nobody is using. The cost of being wrong is one model
@@ -331,10 +359,14 @@ func Default() Config {
 		// config panel makes it one click to turn off.
 		ModelCatalogURL:    catalog.DefaultURL,
 		ModelCatalogRemote: true,
+		ModListURL:         mods.DefaultListURL,
 		// Explicitly false: see the field comment. Stated here rather than
 		// left to the zero value so that flipping the default later is a
 		// visible edit in this list.
 		RequireChecksum: false,
+		// On: it reads folders on this machine and nothing else, and only
+		// when the Add a Model window asks.
+		ScanHFCache: true,
 	}
 }
 
@@ -683,6 +715,13 @@ func (c *Config) normalise() error {
 
 	if c.SessionTTLHours <= 0 {
 		c.SessionTTLHours = DefaultSessionTTLHours
+	}
+	// Unset or zero means the default. Below the floor is lifted to the floor
+	// rather than refused, so a typo cannot stop GobboNet from starting.
+	if c.MinPasswordLen <= 0 {
+		c.MinPasswordLen = DefaultMinPasswordLength
+	} else if c.MinPasswordLen < MinPasswordFloor {
+		c.MinPasswordLen = MinPasswordFloor
 	}
 	if c.JobMaxConcurrent <= 0 {
 		c.JobMaxConcurrent = DefaultJobMaxConcurrent

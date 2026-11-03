@@ -339,8 +339,8 @@ func confirmedPassword(cfg *config.Config) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		if len(first) < minPasswordLength {
-			fmt.Printf("  Too short -- use at least %d characters.\n", minPasswordLength)
+		if len(first) < minPasswordLength(cfg) {
+			fmt.Printf("  Too short -- use at least %d characters.\n", minPasswordLength(cfg))
 			continue
 		}
 		second, err := readPassword("  Confirm password:   ")

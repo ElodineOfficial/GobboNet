@@ -2,7 +2,7 @@
 #
 # Build gobbonet.deb.
 #
-#   ./build-deb.sh                        use dist/ from ../build-release.sh
+#   ./build-deb.sh                        use dist/ from ../scripts/build-release.sh
 #   GOBBONET_BIN=/path/to/gobbonet ./build-deb.sh
 #   SKIP_ENGINE_FETCH=1 ./build-deb.sh    use whatever is already in vendor/
 #
@@ -98,11 +98,8 @@ if SHA="$(cd "$ROOT" && git rev-parse --short HEAD 2>/dev/null)" && [ -n "$SHA" 
         echo "WARNING: building from a modified tree; stamping $SHA" >&2
     fi
 else
-    # A date rather than a stand-in hash. "nogit" plus the day says honestly
-    # that the source could not be identified; a fabricated hash would claim it
-    # had been. SOURCE_DATE_EPOCH is honoured so reproducible builds stay so.
-    SHA="nogit.$(date -u -d "@${SOURCE_DATE_EPOCH:-$(date +%s)}" +%Y%m%d 2>/dev/null || date -u +%Y%m%d)"
-    echo "WARNING: no git metadata in $ROOT; stamping $SHA" >&2
+    # No git: the build id comes from the binary below, as build-rpm.sh does.
+    SHA=""
 fi
 # The Debian revision counts PACKAGING-only changes to one upstream version,
 # and resets whenever upstream moves. 1.7.3 went through three of them — the
@@ -120,10 +117,9 @@ DEB_REVISION="${DEB_REVISION:-1}"
 case "$DEB_REVISION" in
     ''|*[!0-9]*) fail "DEB_REVISION must be a positive integer, got '$DEB_REVISION'" ;;
 esac
-DEB_VERSION="${RELEASE}+go.${SHA}-${DEB_REVISION}"
 
 # ---------------------------------------------------------------------------
-# The Go binary. Built by ../build-release.sh, which refuses a dirty tree and
+# The Go binary. Built by ../scripts/build-release.sh, which refuses a dirty tree and
 # stamps the version with the commit sha.
 # ---------------------------------------------------------------------------
 GOBBONET_BIN="${GOBBONET_BIN:-${GOBBONET_RUNTIME_DIR:+$GOBBONET_RUNTIME_DIR/gobbonet}}"
@@ -132,11 +128,32 @@ if [ -z "$GOBBONET_BIN" ]; then
 fi
 [ -n "$GOBBONET_BIN" ] && [ -f "$GOBBONET_BIN" ] || fail \
 "no linux/amd64 gobbonet binary found.
-       Run ../build-release.sh first, or set GOBBONET_BIN=/path/to/gobbonet
+       Run ../scripts/build-release.sh first, or set GOBBONET_BIN=/path/to/gobbonet
        (build-release.sh archives its output, so you may need to unpack
         dist/<version>/gobbonet-<version>-linux-amd64.tar.gz)"
 
 file "$GOBBONET_BIN" | grep -q 'ELF 64-bit' || fail "$GOBBONET_BIN is not an ELF binary."
+
+# A tree with no .git (a zip, a tarball) takes the build id from the binary it
+# packages: the part after "<VERSION>-go-" in `gobbonet version`, as
+# build-rpm.sh does. The package then names the build inside it. Stamping
+# today's date here instead gave a 1.7.9 package nogit.20261102 around a
+# binary that says nogit.20261101: make-zip.sh dates by local time, this
+# script by UTC, and in the evening west of Greenwich those are different
+# days. A date remains the fallback for a binary that cannot run here, and
+# says honestly that the source could not be identified; a fabricated hash
+# would claim it had been. SOURCE_DATE_EPOCH is honoured.
+if [ -z "$SHA" ]; then
+    BIN_VERSION="$("$GOBBONET_BIN" version 2>/dev/null | awk 'NR == 1 { print $1 }' || true)"
+    case "$BIN_VERSION" in
+        "$RELEASE-go-"?*) SHA="$(printf '%s' "${BIN_VERSION#"$RELEASE-go-"}" | tr -c 'A-Za-z0-9.+~' '.')" ;;
+        "") SHA="nogit.$(date -u -d "@${SOURCE_DATE_EPOCH:-$(date +%s)}" +%Y%m%d 2>/dev/null || date -u +%Y%m%d)" ;;
+        *) fail "$GOBBONET_BIN reports $BIN_VERSION, but VERSION says $RELEASE.
+       Point GOBBONET_BIN at the binary of this release." ;;
+    esac
+    echo "WARNING: no git metadata in $ROOT; stamping $SHA" >&2
+fi
+DEB_VERSION="${RELEASE}+go.${SHA}-${DEB_REVISION}"
 
 # ---------------------------------------------------------------------------
 # Fetch and verify the engines.
@@ -292,10 +309,10 @@ say "libc6 floor from the engine binaries: $LIBC_MIN"
 # -f and python3, not -x and a bare path. The executable bit does not survive a
 # commit made from Windows, and keyed on it this step would skip SILENTLY and
 # ship whatever models.ini was lying around. tests/test-build-scripts.py.
-if [ -f "$ROOT/installer/gen-catalog.py" ] && [ -f "$ROOT/launch.bat" ]; then
-    python3 "$ROOT/installer/gen-catalog.py" "$ROOT/launch.bat" "$ROOT/installer/models.ini"
+if [ -f "$ROOT/catalog/gen-catalog.py" ] && [ -f "$ROOT/launch.bat" ]; then
+    python3 "$ROOT/catalog/gen-catalog.py" "$ROOT/launch.bat" "$ROOT/catalog/models.ini"
 fi
-[ -f "$ROOT/installer/models.ini" ] || fail "installer/models.ini is missing"
+[ -f "$ROOT/catalog/models.ini" ] || fail "catalog/models.ini is missing"
 # No web staging here any more. The chat page is compiled into the gobbonet
 # binary this script is handed (see internal/webui), so the frontend arrives
 # with the binary and there is nothing to copy. build-release.sh runs
@@ -320,7 +337,7 @@ install -m 0755 "$GOBBONET_BIN"        "$STAGE/usr/lib/gobbonet/gobbonet"
 install -m 0644 gobbonet-setup.py wizard.html "$STAGE/usr/lib/gobbonet/"
 
 install -m 0755 gobbonet-launch        "$STAGE/usr/lib/gobbonet/gobbonet-launch"
-install -m 0644 "$ROOT/installer/models.ini" "$STAGE/usr/lib/gobbonet/models.ini"
+install -m 0644 "$ROOT/catalog/models.ini" "$STAGE/usr/lib/gobbonet/models.ini"
 cp -r "$VENDOR/llama-cpp"              "$STAGE/usr/lib/gobbonet/llama-cpp"
 
 # A marker that survives installation, matching the one the Windows payload
@@ -411,7 +428,7 @@ rm -f "$DEB"
 # against, and checked HERE rather than beside any one install line: staging
 # happens across thirty lines, so a check placed next to the first of them
 # reports every later file as missing. It caught exactly that on its first run.
-bash "$ROOT/verify-payload.sh" "$STAGE/usr/lib/gobbonet" "deb payload"
+bash "$ROOT/scripts/verify-payload.sh" "$STAGE/usr/lib/gobbonet" "deb payload"
 
 bash "$ROOT/installer-linux/package-permissions.sh" "$STAGE"
 

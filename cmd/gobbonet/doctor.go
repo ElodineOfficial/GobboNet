@@ -356,9 +356,17 @@ func isLoopbackConfigured(host string) bool {
 // override the port rule setup-lan.bat adds, and setup-lan.bat still reports
 // [OK] for everything it did. Nothing on the machine would say otherwise.
 func reportFirewall(w io.Writer, port int) {
-	reportPortRule(w, port, func(name string) (string, error) {
+	show := func(name string) (string, error) {
 		out, err := exec.Command("netsh", "advfirewall", "firewall", "show",
 			"rule", "name="+name).CombinedOutput()
+		return string(out), err
+	}
+	reportPortRule(w, port, show)
+	rule, _ := show(portRuleName)
+	reportNetworkProfile(w, rule, func() (string, error) {
+		// No pipe, for the same reason setup-lan.bat avoids them.
+		out, err := exec.Command("powershell", "-NoProfile", "-Command",
+			"@(Get-NetConnectionProfile).NetworkCategory").CombinedOutput()
 		return string(out), err
 	})
 
@@ -531,6 +539,46 @@ func reportPortRule(w io.Writer, port int, show func(name string) (string, error
 	fmt.Fprintln(w, "               Scoped to LocalSubnet. A phone on a guest network, a")
 	fmt.Fprintln(w, "               mesh node with its own DHCP scope, or a different band")
 	fmt.Fprintln(w, "               on a split-SSID router is off-subnet and still blocked.")
+}
+
+// reportNetworkProfile catches the one failure 1.7.9's firewall change can
+// cause by itself (PR #7). setup-lan.bat now opens GobboNet on Domain and
+// Private networks only, and Windows often labels a home network Public.
+// On such a network the rule is present, correct, and does nothing, so the
+// phone is refused while every other line here says the firewall is fine.
+//
+// rule is netsh's output for GobboNet-Web; categories reports the active
+// networks' categories, one per line (Get-NetConnectionProfile). Both are
+// parameters so this can be tested without Windows. netsh translates its
+// labels but prints profile values as-is, so the match is on the value.
+func reportNetworkProfile(w io.Writer, rule string, categories func() (string, error)) {
+	if strings.TrimSpace(rule) == "" {
+		return // no rule at all: reportPortRule already said so
+	}
+	out, err := categories()
+	if err != nil && strings.TrimSpace(out) == "" {
+		return
+	}
+	public := false
+	for _, line := range strings.Split(strings.ReplaceAll(out, "\r\n", "\n"), "\n") {
+		if strings.EqualFold(strings.TrimSpace(line), "Public") {
+			public = true
+		}
+	}
+	if !public {
+		return
+	}
+	if strings.Contains(strings.ToLower(rule), "public") {
+		fmt.Fprintln(w, "  network:     this network is marked Public, and the rule covers Public")
+		fmt.Fprintln(w, "               networks (setup-lan.bat was run with /public).")
+		return
+	}
+	fmt.Fprintln(w, "  network:     [!] this network is marked PUBLIC, and GobboNet's rule covers")
+	fmt.Fprintln(w, "               home and work networks only, so phones here are refused.")
+	fmt.Fprintln(w, "               If this is your home network, make it Private:")
+	fmt.Fprintln(w, "                 Settings > Network & internet > your network > Private network")
+	fmt.Fprintln(w, "               or re-run setup-lan.bat as Administrator and choose [P].")
+	fmt.Fprintln(w, "               To allow Public networks too:  setup-lan.bat /public")
 }
 
 // countBlockedGobbonetRules counts inbound Block rules naming our binary.

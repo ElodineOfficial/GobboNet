@@ -302,7 +302,7 @@ list code:
 - **The buttons** are built from existing pieces.
 
 `test-catalog-buckets.py` follows the tags from `launch.bat`'s `MODEL_TAGS`
-through `installer/gen-catalog.py` into `models.ini`. The Go side, including
+through `catalog/gen-catalog.py` into `models.ini`. The Go side, including
 the live list borrowing buckets from the bundled one, is in
 `internal/catalog/buckets_test.go`. Background is in
 [`docs/changelog/CHANGELOG-1.7.7-catalog-filters.md`](../docs/changelog/CHANGELOG-1.7.7-catalog-filters.md).
@@ -454,7 +454,7 @@ testing but not listed as working. It checks four things:
 
 The downloader's own diagnostics are in
 `internal/modelfetch/diagnose_test.go`. Background is in
-[`docs/INVESTIGATION-in-app-downloads.md`](../docs/INVESTIGATION-in-app-downloads.md).
+[`docs/archive/INVESTIGATION-in-app-downloads.md`](../docs/archive/INVESTIGATION-in-app-downloads.md).
 
 ## Launcher invariants
 
@@ -490,7 +490,7 @@ and the hot-swap variables see it, never on the managed hand-off to
 `test-build-scripts.py` holds the rule that no build script runs another as a
 bare path or behind `[ -x ]` — always `bash x.sh` or `python3 x.py`. The
 executable bit does not survive a commit made from Windows, and before this every
-build script had lost it: `./build-release.sh` was refused, and two steps skipped
+build script had lost it: `./scripts/build-release.sh` was refused, and two steps skipped
 themselves silently. It tests its own pattern against the exact lines it
 replaced, so it cannot pass by matching nothing. Background is in
 [`docs/changelog/CHANGELOG-1.7.7-build-scripts.md`](../docs/changelog/CHANGELOG-1.7.7-build-scripts.md).
@@ -579,6 +579,15 @@ gets the setup page and then the chat, as a `.deb` user does. It checks the
 arguments, the symlink and missing-folder cases, and that `make-zip.sh` ships the
 script rather than whatever binary is lying in the tree. Background is in
 [`docs/changelog/CHANGELOG-1.7.7-zip-launcher.md`](../docs/changelog/CHANGELOG-1.7.7-zip-launcher.md).
+
+`test-zip-engine.py` runs `make-zip.sh`'s engine check: a full ZIP must carry
+the Vulkan llama.cpp build, never the CPU-only one, which starts just as well
+and quietly ignores the GPU. `test-deb-stamp.py` runs `build-deb.sh`'s
+version stamp: a package built from a tree with no git names the build of the
+binary inside it, as the `.rpm` does. `test-go-floor.py` runs
+`scripts/go-floor.sh`, which stops a release being built with an older Go
+than the release before (go1.25.14). All three are from
+[`docs/changelog/CHANGELOG-1.7.9-linux-installer.md`](../docs/changelog/CHANGELOG-1.7.9-linux-installer.md).
 
 ## Preview pages (`preview/`)
 

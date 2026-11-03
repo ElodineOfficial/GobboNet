@@ -38,7 +38,12 @@ func TestUninstallRemovesEveryConversationFileAndKeepsModels(t *testing.T) {
 	for _, name := range gone {
 		write(filepath.Join(dataDir, name))
 	}
+	// A real config: since 1.7.9 the command reads the one it finds, and "x"
+	// is not TOML.
 	write(filepath.Join(configDir, "config.toml"))
+	if err := os.WriteFile(filepath.Join(configDir, "config.toml"), []byte("listen_port = 9066\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	write(filepath.Join(configDir, "startup-error.log"))
 	kept := []string{"models/model.gguf", "notes-the-user-made.txt"}
 	for _, name := range kept {
@@ -230,5 +235,74 @@ func TestUninstallRemovesAPointedAtFolderLeftEmpty(t *testing.T) {
 	}
 	if exists(dir) {
 		t.Error("an emptied config folder was left behind")
+	}
+}
+
+// 1.7.9: with no --config the command never read the user's config. The Linux
+// setup wizard always asks where data goes and writes data_dir; the command
+// looked in the default folder instead, removed the config, left every
+// conversation in the chosen folder, and said they were gone. Found by
+// installing the .deb and uninstalling as a user (CHANGELOG-1.7.9-linux-installer.md).
+func TestUninstallFindsTheConfigAndItsDataDir(t *testing.T) {
+	home, write := uninstallEnv(t)
+	chosen := filepath.Join(home, "Gobbo Data") // a space, as the test user had
+	configDir := filepath.Join(home, "config", "gobbonet")
+	write(filepath.Join(configDir, "config.toml"),
+		"listen_port = 9066\ndata_dir = \""+filepath.ToSlash(chosen)+"\"\n")
+	for _, name := range []string{"state.json", ".state.lock", "setup-complete.json", "llama-server.log", "state-phone.json"} {
+		write(filepath.Join(chosen, name), "x")
+	}
+	write(filepath.Join(chosen, "models", "model.gguf"), "x")
+	defaultData := filepath.Join(home, "data", "gobbonet")
+	write(filepath.Join(defaultData, "launch.log"), "x") // the Linux launcher's log stays in the default folder
+
+	if err := cmdUninstall([]string{"--yes", "--keep-models"}); err != nil {
+		t.Fatalf("uninstall: %v", err)
+	}
+	for _, name := range []string{"state.json", ".state.lock", "setup-complete.json", "llama-server.log", "state-phone.json"} {
+		if exists(filepath.Join(chosen, name)) {
+			t.Errorf("left behind in the chosen data folder: %s", name)
+		}
+	}
+	if !exists(filepath.Join(chosen, "models", "model.gguf")) {
+		t.Error("--keep-models removed the model")
+	}
+	if exists(configDir) {
+		t.Error("config folder left behind")
+	}
+	if exists(defaultData) {
+		t.Error("the launcher's log folder was left behind")
+	}
+}
+
+func TestUninstallRemovesTheChosenFolderWhenItEmpties(t *testing.T) {
+	home, write := uninstallEnv(t)
+	chosen := filepath.Join(home, "Gobbo Data")
+	write(filepath.Join(home, "config", "gobbonet", "config.toml"),
+		"data_dir = \""+filepath.ToSlash(chosen)+"\"\n")
+	write(filepath.Join(chosen, "state.json"), "x")
+	write(filepath.Join(chosen, "models", "model.gguf"), "x")
+	if err := cmdUninstall([]string{"--yes", "--remove-models"}); err != nil {
+		t.Fatalf("uninstall: %v", err)
+	}
+	if exists(chosen) {
+		t.Error("the chosen data folder, emptied, was left behind")
+	}
+}
+
+// A config that is there but cannot be read could name a data_dir the command
+// cannot see. It stops and says so, and removes nothing, rather than clearing
+// the default folders and reporting the conversations gone.
+func TestUninstallStopsOnAnUnreadableConfig(t *testing.T) {
+	home, write := uninstallEnv(t)
+	configDir := filepath.Join(home, "config", "gobbonet")
+	write(filepath.Join(configDir, "config.toml"), "data_dir = [this is not toml\n")
+	write(filepath.Join(home, "data", "gobbonet", "state.json"), "x")
+	err := cmdUninstall([]string{"--yes", "--keep-models"})
+	if err == nil || !strings.Contains(err.Error(), "conversations are in is unknown") {
+		t.Fatalf("want a refusal naming the problem, got %v", err)
+	}
+	if !exists(filepath.Join(configDir, "config.toml")) || !exists(filepath.Join(home, "data", "gobbonet", "state.json")) {
+		t.Error("removed files after refusing")
 	}
 }
