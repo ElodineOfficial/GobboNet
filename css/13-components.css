@@ -50,6 +50,56 @@
 }
 .cot-content p { margin: 4px 0; }
 
+/* Tool calls (card-code tools, 23-card-code.js). The same collapsed block as
+   the reasoning above, under its own class names: the streaming painter in
+   14-scroll.js looks a reply's reasoning block up by .cot-block. */
+.tool-block {
+  margin: 4px 0 8px 0;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 6px;
+  background: rgba(255,255,255,0.02);
+  overflow: hidden;
+  font-size: 13px;
+}
+.tool-summary {
+  padding: 6px 12px;
+  cursor: pointer;
+  color: rgba(255,255,255,0.5);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  user-select: none;
+  list-style: none;
+}
+.tool-summary::-webkit-details-marker { display: none; }
+.tool-summary::before { content: '\25B8  '; }
+.tool-block[open] .tool-summary::before { content: '\25BE  '; }
+.tool-content {
+  padding: 8px 12px 12px;
+  max-height: 300px;
+  overflow-y: auto;
+  color: rgba(255,255,255,0.55);
+  font-size: 12px;
+  line-height: 1.5;
+  border-top: 1px solid rgba(255,255,255,0.05);
+}
+.tool-call + .tool-call { margin-top: 10px; }
+.tool-call-name { font-weight: 600; color: rgba(255,255,255,0.7); }
+.tool-call-ms { font-weight: 400; opacity: 0.6; margin-left: 6px; }
+.tool-call pre {
+  margin: 4px 0 0;
+  padding: 6px 8px;
+  background: rgba(0,0,0,0.25);
+  border-radius: 4px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 11px;
+  max-height: 160px;
+  overflow: auto;
+}
+.tool-call-error .tool-call-result { color: var(--red, #ff6b6b); }
+
 /* Archived messages — folded into lore, still visible to the user but
    no longer sent to the model. Dimmed so the live conversation visually
    dominates; click to "wake up" if we ever want that gesture later. */

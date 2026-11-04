@@ -429,7 +429,8 @@ function createCard() {
     contextLimit: 0,
     smartLimitEnabled: false,
     smartLimitTokens: 300,
-    thinkingEnabled: true
+    thinkingEnabled: true,
+    toolsEnabled: false
   };
   state.characterCards.push(card);
   saveState();
@@ -532,6 +533,8 @@ function editCard(id) {
   updateCardCtxHint();
   document.getElementById('card-custom-code').value = card.customCode || '';
   document.getElementById('card-code-enabled').checked = !!card.customCodeEnabled;
+  // `=== true`: a card with no field (older, or imported) offers no tools.
+  document.getElementById('card-tools-enabled').checked = (card.toolsEnabled === true);
   updateCardCodeStatus();
   previewAvatar('card-avatar', 'card-avatar-preview');
   previewBg();
@@ -763,6 +766,7 @@ function saveCard() {
   Object.assign(card, readCardBudgetFields());
   card.customCode = document.getElementById('card-custom-code').value;
   card.customCodeEnabled = document.getElementById('card-code-enabled').checked;
+  card.toolsEnabled = document.getElementById('card-tools-enabled').checked;
   card.name = document.getElementById('card-name').value.trim() || 'Unnamed';
   card.avatar = document.getElementById('card-avatar').value.trim();
   card.writingStyle = document.getElementById('card-style').value;

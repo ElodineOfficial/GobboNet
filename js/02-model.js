@@ -596,6 +596,59 @@ function extractTokenFromLine(rawLine) {
 }
 
 
+/**
+ * The tool-call half of a stream line. extractTokenFromLine above reads the
+ * text; this reads `choices[0].delta.tool_calls` (streamed) or
+ * `choices[0].message.tool_calls` (a non-streamed reply) and the
+ * finish_reason. Returns null, before parsing, when the line carries
+ * neither, so a plain text stream costs a substring test and nothing else.
+ *
+ * Streamed calls arrive in pieces: the id and name once, then the
+ * `arguments` string in fragments, each tagged with the call's `index`.
+ * mergeToolCallDeltas (03-generation.js) joins them.
+ */
+function extractToolCallDeltas(rawLine) {
+  const trimmed = rawLine.trim();
+  if (!trimmed) return null;
+  let jsonStr = trimmed;
+  if (jsonStr.startsWith('data:')) jsonStr = jsonStr.slice(5).trim();
+  if (!jsonStr || jsonStr === '[DONE]') return null;
+  // Every chunk carries "finish_reason":null, so test for a string value, or
+  // a plain text line would be parsed twice (extractTokenFromLine parses it too).
+  if (jsonStr.indexOf('tool_calls') < 0 && !/"finish_reason"\s*:\s*"/.test(jsonStr)) return null;
+  try {
+    const json = JSON.parse(jsonStr);
+    const c = json && json.choices && json.choices[0];
+    if (!c) return null;
+    const streamed = !!(c.delta && Array.isArray(c.delta.tool_calls));
+    const src = streamed ? c.delta.tool_calls
+              : (c.message && Array.isArray(c.message.tool_calls)) ? c.message.tool_calls
+              : null;
+    const finishReason = (typeof c.finish_reason === 'string') ? c.finish_reason : null;
+    if (!src && !finishReason) return null;
+    const toolCalls = (src || []).map((tc, i) => {
+      const fn = (tc && tc.function) || {};
+      let args = fn.arguments;
+      if (args != null && typeof args !== 'string') {
+        try { args = JSON.stringify(args); } catch (e) { args = String(args); }
+      }
+      return {
+        // null when the server sent none (a non-streamed reply, or a server
+        // that omits it); mergeToolCallDeltas then falls back to the id, or
+        // treats a fragment that names a function as a new call.
+        index: (tc && typeof tc.index === 'number') ? tc.index : (streamed ? null : i),
+        id: (tc && typeof tc.id === 'string' && tc.id) ? tc.id : null,
+        name: (typeof fn.name === 'string' && fn.name) ? fn.name : null,
+        arguments: (typeof args === 'string') ? args : ''
+      };
+    });
+    return { toolCalls, finishReason };
+  } catch (e) {
+    return null;
+  }
+}
+
+
 /* ================================================================
    PERFORMANCE TUNING
 

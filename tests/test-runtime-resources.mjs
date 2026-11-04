@@ -52,6 +52,7 @@ const gen=read('03-generation.js');let rendered=0,saved=0,now=3000;
 const msg={content:''},thread={id:'t',messages:[msg]};
 const feederCtx={console:{log(){}},TextDecoder,Date:{now:()=>now},state:{activeThreadId:'t'},document:{visibilityState:'hidden'},
  shouldPaintWhileStreaming:()=>true,extractTokenFromLine:line=>line?{text:line,field:'content'}:null,
+ extractToolCallDeltas:()=>null,mergeToolCallDeltas(){},
  processStreamDelta:(m,text)=>{m.content+=text;},maybeApplySmartLimit:()=>false,
  renderStreamingUpdate:()=>rendered++,saveState:opts=>{saved++;assert.equal(opts.thread,thread);}};
 vm.createContext(feederCtx);vm.runInContext(gen.slice(gen.indexOf('function makeStreamFeeder'),gen.indexOf('async function startGenerationJob')),feederCtx);

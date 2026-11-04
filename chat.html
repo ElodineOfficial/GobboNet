@@ -830,6 +830,12 @@
 // gobbo.on(&#39;activate&#39;,   () =&gt; ...)
 // gobbo.on(&#39;deactivate&#39;, () =&gt; ...)
 //
+// TOOLS (offered to the model only while &quot;Let the model call this card&#39;s tools&quot; is on)
+// gobbo.tool(name, { description, parameters }, (args, ctx) =&gt; result)
+//   parameters is a JSON Schema object; return a string or any JSON value
+//   args is whatever the model sent, parsed but NOT checked against the
+//   schema: validate it before doing anything with side effects
+//
 // ACTIONS
 // await gobbo.ask(prompt, { system, maxTokens, temperature })  -&gt; string
 // gobbo.note(text, { label, open })   collapsed note; model never sees it
@@ -854,12 +860,36 @@ gobbo.every(5, async () =&gt; {
   });
 
   if (plot) gobbo.note(plot, { label: &#39;Plot tracker&#39; });
+});
+
+// Example - dice the model can roll (needs the tools box below ticked):
+gobbo.tool(&#39;roll_dice&#39;, {
+  description: &#39;Roll dice and return each die and the total&#39;,
+  parameters: { type: &#39;object&#39;, properties: {
+    count: { type: &#39;integer&#39;, description: &#39;how many dice&#39; },
+    sides: { type: &#39;integer&#39;, description: &#39;faces per die&#39; } },
+    required: [&#39;sides&#39;] }
+}, (args) =&gt; {
+  // args is what the model sent: check it before trusting it
+  const n = Math.max(1, Math.min(20, Number(args.count) || 1));
+  const sides = Math.max(2, Math.min(1000, Number(args.sides) || 6));
+  const rolls = Array.from({ length: n }, () =&gt; 1 + Math.floor(Math.random() * sides));
+  return { rolls, total: rolls.reduce((a, b) =&gt; a + b, 0) };
 });"></textarea>
         <div class="form-hint">Runs with full page access, and <strong>imported cards arrive with it switched off</strong>.<button type="button" class="tip-btn" aria-label="More about custom code" aria-describedby="tip-card-code" aria-expanded="false">?</button></div>
         <div class="tip-body" id="tip-card-code" hidden><b>Writing this with an AI?</b> Paste the comment block above into it &mdash; that is the whole API, and a model that has not seen it will invent methods that do not exist.<br>
           Runs with full page access &mdash; it is your machine and your code, so there is no sandbox pretending otherwise.
           What it <em>cannot</em> do is break the app: a hook that throws is switched off and logged, and the character keeps working.
           <strong>Cards imported from elsewhere always arrive with their code disabled</strong>, however the file was saved. Read it before you switch it on.</div>
+        <!-- Tool calling. Off by default and read as `=== true`
+             (cardToolDefs in js/23-card-code.js); the loop that runs the
+             calls is runGenerationWithTools in js/03-generation.js. -->
+        <label class="code-enable-row">
+          <input type="checkbox" id="card-tools-enabled">
+          <span>Let the model call this card's tools</span>
+        </label>
+        <div class="form-hint">Needs a model with tool support, and <strong>tools run with full page access</strong>.<button type="button" class="tip-btn" aria-label="More about card tools" aria-describedby="tip-card-tools" aria-expanded="false">?</button></div>
+        <div class="tip-body" id="tip-card-tools" hidden>On, and with the code box above also on, the functions this code registers with <code>gobbo.tool(...)</code> are sent with every request, and the model may call them; each call runs here, in this page, with the same access as the rest of the code, and its result goes back to the model. The arguments are the model's, parsed but not checked against your schema: validate them in the tool before acting on them. The model decides when a tool runs, and text it reads (web search results, the storybook, memory files) can steer that, so a tool that reaches the network or changes state is yours to guard. The calls show in the reply as a collapsed block. Needs a model trained for tool use (Qwen3, Llama 3.x, GLM-4.5 and the like) run with the engine's Jinja templates; a model run without them gets one plain reply and a note instead. Up to five requests per reply. Imported cards arrive with this off.</div>
         <div class="carousel-counter" id="card-code-status"></div>
       </div>
 

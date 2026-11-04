@@ -137,6 +137,9 @@ const DEFAULT_CARD = {
   // Roadmap 1.7.7 #9. Read as `!== false` (cardThinkingEnabled), so a card
   // without the field thinks, as every card did before it existed.
   thinkingEnabled: true,
+  // Tool calling. Read as `=== true` (cardToolDefs, 23-card-code.js): only a
+  // card whose owner ticked the box offers its code's tools to the model.
+  toolsEnabled: false,
   // Roadmap 1.7.7 #6d. null = inherit the setting -- see resolveContextBudget.
   contextInputPercent: null,
   contextReplyPercent: null,

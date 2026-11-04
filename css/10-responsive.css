@@ -324,7 +324,7 @@
   .file-block pre { padding: 10px; }
 
   /* --- Chain of Thought --- */
-  .cot-block { font-size: 12px; }
+  .cot-block, .tool-block { font-size: 12px; }
   .cot-summary { padding: 8px 10px; font-size: 11px; }
   .cot-content { padding: 6px 10px 10px; font-size: 11px; max-height: 200px; }
 

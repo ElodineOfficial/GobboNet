@@ -210,6 +210,24 @@ and functions rather than line numbers, because line numbers go stale.
   rarest word, and common words and short fragments never. Bans are picked
   from `/tokenize` with pieces, cached per model. There is no real CFG:
   llama-server does not expose the logits it would need.
+- **Tools:** a card's custom code can offer the model functions with
+  `gobbo.tool(name, { description, parameters }, fn)` (`js/23-card-code.js`).
+  They are sent as the OpenAI `tools` array only while the card's "Let the
+  model call this card's tools" box is ticked (`toolsEnabled === true`, off
+  by default and cleared on import). `runGenerationWithTools`
+  (`js/03-generation.js`) wraps the transport: the stream feeder collects
+  `tool_calls` deltas, the page runs each call (`runCardTool`, 30 s, result
+  capped at 8,000 chars, errors go back to the model as text), appends the
+  assistant turn and one `tool` message per call after the built context,
+  and asks again, at most five requests per reply, the last without `tools`.
+  The engine must run with `--jinja`; a refusal is retried once without tools
+  and noted in the reply. Consent is re-checked before every request and
+  before calls run, and a call is refused if another card owns the registry
+  by then. Arguments are the model's, parsed but not schema-checked: card
+  authors validate them. Calls are stored on the message as `toolCalls`,
+  kept per variant, and shown as a collapsed block; completed rounds' text
+  rides along as `toolPrefix` so a reload mid-round replays onto it. There
+  are no built-in tools. `tests/test-card-tools.mjs` pins all of it.
 
 ---
 

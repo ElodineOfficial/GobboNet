@@ -236,6 +236,15 @@ card with no field, as from an older install or an import, thinks as it always
 did. Background is in
 [`docs/changelog/CHANGELOG-1.7.7-thinking-switch.md`](../docs/changelog/CHANGELOG-1.7.7-thinking-switch.md).
 
+`test-card-tools.mjs` covers tool calling for card-code tools: `gobbo.tool()`
+registration and its validation, that nothing is sent unless the card's tools
+switch is exactly true and its code is on (imports and restored state clear the
+switch), joining streamed `tool_calls` deltas, the loop around the transport
+(the exact message shape per round, the five-request limit, the retry when the
+engine runs without `--jinja`, Stop between rounds), `runCardTool`'s error
+strings, and the editor, variant and rendering wiring. Background is in
+[`docs/changelog/CHANGELOG-1.7.9-card-tools.md`](../docs/changelog/CHANGELOG-1.7.9-card-tools.md).
+
 `test-context-budget.mjs` covers the four per-character numbers that decide when
 older messages are compressed into lore: input budget, reply room, landing point
 and verbatim reserve. It runs the real `resolveContextBudget`:

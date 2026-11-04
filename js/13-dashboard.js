@@ -462,6 +462,29 @@ function renderMessages() {
         </details>`;
     }
 
+    // Tool calls the reply made through the card's code (runGenerationWithTools).
+    // Its own classes, not .cot-block: renderStreamingUpdate (14-scroll.js)
+    // finds the reasoning block by that class and would paint into this one.
+    let toolBlock = '';
+    if (Array.isArray(m.toolCalls) && m.toolCalls.length) {
+      const names = Array.from(new Set(m.toolCalls.map(c => c.name)));
+      const label = m.toolCalls.length === 1 ? 'used ' + names[0]
+                  : 'used ' + m.toolCalls.length + ' tools';
+      const items = m.toolCalls.map(c => {
+        const ms = (typeof c.ms === 'number' && c.ms > 0) ? ' <span class="tool-call-ms">' + c.ms + ' ms</span>' : '';
+        return `<div class="tool-call${c.error ? ' tool-call-error' : ''}">
+            <div class="tool-call-name">${escapeHtml(c.name)}${ms}</div>
+            <pre class="tool-call-args">${escapeHtml(c.args || '{}')}</pre>
+            <pre class="tool-call-result">${escapeHtml(c.result || '')}</pre>
+          </div>`;
+      }).join('');
+      toolBlock = `
+        <details class="tool-block">
+          <summary class="tool-summary">&#128295; ${escapeHtml(label)}</summary>
+          <div class="tool-content">${items}</div>
+        </details>`;
+    }
+
     // Attachment chips (files the user attached to this message)
     let attachmentsHtml = '';
     if (Array.isArray(m.attachments) && m.attachments.length) {
@@ -495,6 +518,7 @@ function renderMessages() {
           ${genBadges}
         </div>
         ${cotBlock}
+        ${toolBlock}
         ${mainContent}
         <div class="message-actions">${actionsHtml}</div>
       </div>`;
