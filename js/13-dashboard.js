@@ -29,13 +29,28 @@ function offlineStatusHtml() {
     const detail = serverOfflineReason ? ' — ' + escapeHtml(serverOfflineReason.slice(0, MAX)) : '…';
     return `<span class="landing-status-ok">&#9679; LOADING MODEL${detail}</span>`;
   }
-  if (serverOfflineReason) {
-    const full = escapeHtml(serverOfflineReason);
-    const shown = escapeHtml(serverOfflineReason.slice(0, MAX)) +
-                  (serverOfflineReason.length > MAX ? '…' : '');
+  // A known cause (1.8.0, #67): the plain sentence on the pill, and
+  // llama.cpp's own line under "details" (offlineDetailsHtml). Without one,
+  // the line itself, as before.
+  const said = serverOfflineAdvice || serverOfflineReason;
+  if (said) {
+    const full = escapeHtml(serverOfflineReason || said);
+    const shown = escapeHtml(said.slice(0, MAX)) + (said.length > MAX ? '…' : '');
     return `<span class="landing-status-err" title="${full}">&#9679; OFFLINE — ${shown}</span>`;
   }
   return `<span class="landing-status-err">&#9679; OFFLINE — llama-server is not responding</span>`;
+}
+
+/* Under the pill when a load failed: llama.cpp's own line, and where the
+   engine's whole account is. The file is named, not its folder -- this page
+   may be on a phone -- and gobbonet doctor on the PC prints the full path. */
+function offlineDetailsHtml() {
+  if (serverConnected || serverOfflinePhase !== 'error' || !serverOfflineReason) return '';
+  return `<details class="landing-offline-details">` +
+    `<summary>details</summary>` +
+    `<code>${escapeHtml(serverOfflineReason)}</code>` +
+    `<div>The engine's full log is llama-server.log in GobboNet's data folder; <code>gobbonet doctor</code> on the PC shows where.</div>` +
+    `</details>`;
 }
 
 function renderLandingPage() {
@@ -137,6 +152,7 @@ function renderLandingPage() {
       <div class="landing-header">
         <div class="landing-title">GOBBONET_HQ</div>
         <div class="landing-subtitle">// local inference terminal &nbsp;|&nbsp; ${connHtml}</div>
+        ${offlineDetailsHtml()}
         <div class="landing-subtitle" style="margin-top:4px; color:var(--green-dim);">&#128274; llama.cpp — zero telemetry, fully offline</div>
       </div>
 
@@ -155,6 +171,7 @@ function renderLandingPage() {
         </div>
         <div class="landing-char-list">${charHtml}</div>
       </div>
+${(typeof landingGroupsHtml === 'function') ? landingGroupsHtml() : ''}
 
       <div class="landing-section" data-tour="help">
         <div class="landing-section-header">
@@ -172,6 +189,9 @@ function renderMessages() {
   const container = document.getElementById('messages');
   const thread = getActiveThread();
   const title = document.getElementById('thread-title');
+  // The Files panel and its count follow the conversation on screen (1.8.0,
+  // js/27-files-panel.js). It reads the thread, not the DOM, so it can go first.
+  if (typeof filesPanelSync === 'function') { try { filesPanelSync(); } catch (e) { console.error('[files]', e); } }
 
   if (!thread) {
     title.textContent = 'GOBBONET';
@@ -207,10 +227,12 @@ function renderMessages() {
   title.textContent = thread.name;
 
   if (thread.messages.length === 0) {
+    // A group chat can also be started by its members: NEXT, under the chat.
+    const inGroup = typeof threadGroup === 'function' && !!threadGroup(thread);
     container.innerHTML = `
       <div class="welcome">
         <h2>AWAITING INPUT</h2>
-        <p>// type below to begin</p>
+        <p>${inGroup ? '// type below to begin, or press &#9654; NEXT to let them start' : '// type below to begin'}</p>
       </div>`;
     return;
   }
@@ -437,6 +459,7 @@ function renderMessages() {
       if (capped > 0 && !isCurrentlyGenerating) {
         genBadges += `<span class="gen-cap-badge" title="Smart limit: reply capped at ~${capped} tokens (est.), cut at the sentence end — adjust in CONFIG">&#9986; ~${capped}</span>`;
       }
+      if (m.autoReroll && typeof m.autoReroll === 'object' && !isCurrentlyGenerating) genBadges += autoRerollBadge(m.autoReroll);
     }
     
     // Render search results as a visible, linkified block
@@ -459,6 +482,29 @@ function renderMessages() {
         <details class="cot-block${cotStatus}"${cotOpen}>
           <summary class="cot-summary">${cotLabel}</summary>
           <div class="cot-content">${cotParsed}</div>
+        </details>`;
+    }
+
+    // Tool calls the reply made through the card's code (runGenerationWithTools).
+    // Its own classes, not .cot-block: renderStreamingUpdate (14-scroll.js)
+    // finds the reasoning block by that class and would paint into this one.
+    let toolBlock = '';
+    if (Array.isArray(m.toolCalls) && m.toolCalls.length) {
+      const names = Array.from(new Set(m.toolCalls.map(c => c.name)));
+      const label = m.toolCalls.length === 1 ? 'used ' + names[0]
+                  : 'used ' + m.toolCalls.length + ' tools';
+      const items = m.toolCalls.map(c => {
+        const ms = (typeof c.ms === 'number' && c.ms > 0) ? ' <span class="tool-call-ms">' + c.ms + ' ms</span>' : '';
+        return `<div class="tool-call${c.error ? ' tool-call-error' : ''}">
+            <div class="tool-call-name">${escapeHtml(c.name)}${ms}</div>
+            <pre class="tool-call-args">${escapeHtml(c.args || '{}')}</pre>
+            <pre class="tool-call-result">${escapeHtml(c.result || '')}</pre>
+          </div>`;
+      }).join('');
+      toolBlock = `
+        <details class="tool-block">
+          <summary class="tool-summary">&#128295; ${escapeHtml(label)}</summary>
+          <div class="tool-content">${items}</div>
         </details>`;
     }
 
@@ -495,6 +541,7 @@ function renderMessages() {
           ${genBadges}
         </div>
         ${cotBlock}
+        ${toolBlock}
         ${mainContent}
         <div class="message-actions">${actionsHtml}</div>
       </div>`;
@@ -968,6 +1015,9 @@ function updateInputState() {
   // thread-change guard inside updateFollowButton handles the post-render
   // scrollTop=0 transient so it never flashes on a switch.
   updateFollowButton();
+  // The group bar shows who is replying and who is next, both of which
+  // change exactly when this function is called (1.8.0, js/29-groups.js).
+  if (typeof renderGroupBar === 'function') { try { renderGroupBar(); } catch (e) { console.error('[group]', e); } }
 }
 
 /* Who is about to answer, when that is not who last answered.
@@ -1006,6 +1056,9 @@ function updateCastMismatch() {
 
   const thread = getActiveThread();
   if (!thread || !thread.messages || thread.messages.length === 0) return hide();
+  // A group chat changes speaker on purpose, every turn; the bar under the
+  // chat says who is next (1.8.0, js/29-groups.js).
+  if (typeof threadGroup === 'function' && threadGroup(thread)) return hide();
 
   let lastAssistant = null;
   for (let i = thread.messages.length - 1; i >= 0; i--) {
@@ -1052,7 +1105,9 @@ function updateContextInfo() {
   const el = document.getElementById('context-info');
   const thread = getActiveThread();
   if (!thread || thread.messages.length === 0) { el.textContent = ''; return; }
-  const card = getActiveCard();
+  // Whoever replies next: the active character, or in a group chat the
+  // member whose turn it is, since each has its own context settings.
+  const card = (typeof replyCardForThread === 'function') ? replyCardForThread(thread) : getActiveCard();
 
   // Mirror buildContextMessages's accounting exactly. Anything less and
   // the display drifts from the value that actually triggers compression.
@@ -1157,3 +1212,25 @@ function scrollToBottom(opts) {
   }));
 }
 
+/* Auto Reroll's ↻ badge (1.8.0; runGenerationWithReroll in 03-generation.js).
+   msg.autoReroll is synced state, so every part of it is coerced: the count
+   to a number, the words to escaped text, the reason to one of three. */
+function autoRerollBadge(ar) {
+  const n = Math.max(0, Math.min(99, Math.round(Number(ar.rerolls) || 0)));
+  const words = (Array.isArray(ar.words) ? ar.words : []).filter(w => typeof w === 'string').slice(0, 5);
+  const list = words.map(w => '\u201c' + w + '\u201d').join(', ');
+  const kept = { tries: 'tries', tool: 'tool', temperature: 'temperature' }[ar.kept] || '';
+  if (!n && !kept) return '';
+  let title;
+  if (!kept) {
+    title = 'Auto reroll: ' + n + (n === 1 ? ' reply was' : ' replies were') + ' written again for using ' + (list || 'an off-limits word') + '.';
+  } else if (kept === 'tool') {
+    title = 'Auto reroll: this reply uses ' + (list || 'an off-limits word') + ', but it ran a tool, and writing it again would run the tool again, so it was kept.';
+  } else if (kept === 'temperature') {
+    title = 'Auto reroll: this reply uses ' + (list || 'an off-limits word') + '. With Temperature 0 every try is the same, so it was not written again.';
+  } else {
+    title = 'Auto reroll: every try used ' + (list || 'an off-limits word') + ', so the last one was kept after ' + n + (n === 1 ? ' reroll.' : ' rerolls.');
+  }
+  const label = '&#8635; ' + (n ? n + (kept ? ' &middot; kept' : '') : 'kept');
+  return `<span class="gen-reroll-badge${kept ? ' gen-reroll-kept' : ''}" title="${escapeHtml(title)}">${label}</span>`;
+}

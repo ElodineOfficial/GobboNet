@@ -17,7 +17,7 @@ import (
 // Two secret formats are accepted.
 //
 // Legacy — "salt:hash", lowercase hex, hash = SHA-256(salt + password). This is
-// what launch.bat's :setup_password block wrote and what fileserver.ps1 checked.
+// what launch.bat's :setup_password block wrote and what the 1.7 PowerShell server checked.
 // It is a single round of SHA-256, which a consumer GPU brute-forces at billions
 // of guesses per second; it exists here only so an existing install keeps
 // working across the upgrade.

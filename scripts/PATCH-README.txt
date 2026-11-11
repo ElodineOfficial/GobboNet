@@ -1,212 +1,275 @@
-GobboNet 1.7.9
+GobboNet 1.8.0
 
 Everything below is in this release. Details for each change are in
-docs/changelog/CHANGELOG-1.7.9-*.md.
+docs/changelog/CHANGELOG-1.8.0-*.md.
 
 NEW
-- UNDO. Deleting a chat, message, folder, character, memory file, persona,
-  macro, mod or server backup happens at once and shows UNDO for 10
-  seconds. Ctrl+Z (Cmd+Z) works too, outside a text box. One at a time: a
-  second delete makes the first final. Nothing is pushed to your other
-  devices while UNDO is offered. PURGE asks first and then offers UNDO too.
-  Removing a tag or a scheduled message asks first instead. CLEAR ALL in
-  MODS still asks.
-- An optional tour. A fresh install is asked once: "Show me around" or
-  "Skip". Six stops, one sentence each. A profile that already has
-  conversations is never asked. CONFIG > Basics > SHOW ME AROUND replays it;
-  [ui] tour_seen = true in config.toml stops the offer on every device.
-- CONFIG in five sections -- Basics, Characters & Chat, Model &
-  Performance, Devices & Network, Advanced -- with a search box that finds
-  any setting by a word from its title, note or "?" text. Nothing was
-  removed or renamed.
-- More models. Add a Model and the first-run list have sixteen, with
-  Llama 3.2 1B, Mistral Nemo 12B, Phi-4 14B, Mistral Small 3.2 24B,
-  Gemma 4 31B and Qwen3-Coder 30B-A3B new. Filter by use and by size
-  (LIGHT / MEDIUM / HEAVY / MOE). A model with no pinned checksum is marked
-  Unverified and needs a second click.
-- FOUND ON THIS COMPUTER (issue #12): models already in your HuggingFace
-  cache, or in folders you list as model_dirs in config.toml, are offered
-  in Add a Model. USE IT links one into your models folder -- no copy, no
-  download. scan_hf_cache = false leaves the cache out.
-- Mods, each with its own switch and place in the load order. A mod is a
-  folder in GobboNet's mods folder (MODS shows where) with a mod.json. Your
-  extensions from before 1.7.9 become the mod "My extensions" the first
-  time you open 1.7.9 on the PC, switched on or off as they were. Mods are
-  added, changed and switched on only on the PC GobboNet runs on; any
-  device can switch one off. Mod code no longer travels with synced chats.
-- ENDORSED MODS: mods Elodine endorses at goblincorps.com/gobbonet_extras,
-  installed with one click. Every file is checked against the SHA-256 the
-  list pins; one that does not match installs nothing. A new install is
-  switched on once; an update keeps your switch. 18+ mods stay covered until
-  you confirm your age, in that browser only. mod_list_url in config.toml
-  points elsewhere, or empty switches the list off.
-- A mod whose file will not load, or whose script fails as it starts,
-  switches itself off with a notice. http://localhost:9066/?nomods loads no
-  mods at all, to rescue a page a mod broke.
-- The Gobbonet Informant is rewritten for 1.7.9, names every button as it
-  appears, and says "I don't know, check TROUBLESHOOTING.md" rather than
-  guessing. If you added it before, its tile on the home screen says UPDATE:
-  click it for the new notes. Your colours, banned phrases and other extras
-  on the card are kept, and UNDO puts the old one back.
-- Macros can take text. {{SYSTEM:}} Foo bar baz quux -- or
-  {{SYSTEM: Foo bar baz quux}} -- sends the model an out-of-character
-  directive followed by "Foo bar baz quux"; SYSTEM comes ready-made and can
-  be edited. In your own macros, {{input}} marks where passed text goes, and
-  {{input1}}, {{input2}}... take pieces split at "|". With no placeholder,
-  the text goes on the line after the macro. The editor previews it. Old
-  macros work as before; the chat shows what you typed.
-- The password minimum is a setting: 8 characters by default for new
-  passwords, min_password_length in config.toml takes it as low as 4 (a PIN)
-  or higher. A password you already have keeps working.
+- Group chats. + GROUP in the sidebar starts a chat with several
+  characters. A group is made in // CHARS under GROUPS, like a character:
+  its members, their turn order, and a place in it for you or not. Who
+  speaks next: in turn, whoever you name (natural, with a talkativeness
+  slider per member), shuffled, by hand, or a DM -- a short extra request
+  that asks the model who is best to respond. The bar above the message box
+  shows whose turn it is; click a member to have them reply, mute one,
+  press NEXT (or Enter on an empty box) for the next, or AUTO to let them
+  carry on by themselves. A group can carry a scene, choose how much the
+  members know about each other and what a new chat opens with. One model
+  plays everyone, one reply at a time, so a round of four is four replies.
+- The Files panel. The new button in the top bar opens a panel beside the
+  chat with every file in the conversation: what characters write as
+  files, text files you attach, and web pages or pictures written as code.
+  Writing the same file again makes a new version, with arrows to step
+  through them. Markdown and CSV show rendered; a web page previews in a
+  frame that cannot reach the internet or GobboNet, with its scripts off
+  until RUN SCRIPTS. EDIT a file, then USE IN MY NEXT MESSAGE hands your
+  version back; ASK ABOUT THE SELECTION asks about part of it.
+- Auto Reroll. Give a character Off-limits words, and a reply that uses
+  one is stopped and written again, up to the number of tries you choose.
+  It reads the reply, never the thinking. Banned Phrases and Auto Reroll
+  work best together.
+- The update button. ABOUT > CHECK FOR UPDATES asks GitHub for a newer
+  GobboNet, only when you press it. UPDATE NOW asks, downloads the release,
+  checks the maintainer's signature and the checksums, runs the new program
+  once to be sure it starts, and puts it in place; RESTART NOW starts it.
+  It never installs an older version; a later build of the same version
+  (a hotfix) is offered. Only the program file is replaced: chats, models,
+  settings and your password stay. A .deb or .rpm is updated with the new
+  package, so for those the button links the release page. docs/UPDATES.md
+  has the details, and update_releases_url = "" in config.toml switches it
+  off.
+- Model links (issue #52). A chat remembers the model that wrote it, and a
+  character can name the model it was made for (Model for this character,
+  in the character editor). Opening the chat, or starting one with that
+  character, offers to switch. CONFIG > Characters & Chat > Model Switching
+  can make it switch on its own, or never. A group chat keeps to the model
+  it last used.
+- Tools from a character's code (issue #70, PR #71). A character's custom
+  code can offer the model functions to call, with gobbo.tool(...). The
+  model calls them only while "Let the model call this card's tools" is
+  ticked on that card; imported cards arrive with it off. CONFIG >
+  Characters & Chat > Card Tools sets the limits per reply.
+- MCP servers (issue #42). CONFIG > Advanced > MCP Servers sets up MCP
+  servers, small programs on this PC that offer tools: + ADD SERVER, or
+  PASTE A SETUP (JSON) from the block most servers document. CHECK TOOLS
+  starts one and lists what it offers. Servers are added and switched on
+  only on the PC; any signed-in device can switch one off. This release
+  sets them up and checks them; characters calling their tools in a chat
+  comes later.
+- The GPU menu (issue #72). CONFIG > Model & Performance > Performance >
+  GPU chooses the graphics card the engine uses, from the list the engine
+  itself sees. On Linux, a laptop whose engine sees only the integrated GPU
+  is offered the NVIDIA one through PRIME offload. gobbonet doctor says
+  which card and which engine build are in use, and why.
+- Why a model failed to load (issue #67). The chat, the home screen and
+  gobbonet doctor say why in plain words -- not enough memory, an
+  incomplete or damaged download, a model this engine cannot read, a
+  missing file -- with what to try, instead of "EXITING DUE TO MODEL
+  LOADING ERROR" and a 503. CHECK FILE in Add a Model tests a download
+  against its checksum.
+- Every model in the catalogue has a pinned checksum, so none is marked
+  Unverified.
+- Setup asks for a data folder and a models folder (issue #68, Linux). A
+  folder that already holds GGUF models says how many, and the models
+  folder can be the one your models are already in. CONFIG > Model &
+  Performance > Model Folders changes it later, on the PC. Uninstalling
+  never empties a models folder you chose: asked to delete models, it takes
+  only the .gguf files directly in it.
+- open_browser (PR #58). CONFIG > Basics > When GobboNet Starts, or
+  open_browser = false in config.toml, starts GobboNet without opening a
+  new browser tab.
+- The embedding server (PR #56). GobboNet starts the small second engine
+  that lets the RAG Storybook and memory files match by meaning, and
+  restarts it if it stops. CONFIG > Privacy Status says whether matching by
+  meaning is on, and why not.
+- My extensions has a switch for each stylesheet and script in it (from
+  Larck Drakengold's commit 4db2469), so one that misbehaves can be turned
+  off without the rest.
+- The Gobbonet Informant knows 1.8.0. If you added it before, its tile on
+  the home screen says UPDATE.
 
 FIXED
-- The RAG Storybook. Lore written either way now fires:
-    # Selah, [.7 wing, .3 light, 1.0 angel]      (labelled)
-    Selah is an angel wandering the world...      (plain text)
-  A labelled entry fires on its name, or when its tags add up to 1.0
-  (.7 wing + .3 light). Plain text is split into entries of up to four
-  sentences, each firing on a name in it or one of its distinctive words --
-  with or without the embedding model. "Plain text fires on" under the
-  field asks for 2 or 3 words instead, per character. "wing" matches
-  "wings". The header
-  line and its weights never reach the model. Older storybook syntax works
-  as before. docs/RAG_INFO.md has the details.
-- Saving a character ended with an error in the browser console (since the
-  UNDO change). Nothing was lost; it no longer happens.
-- Deleting or purging several chats and then closing or reloading the page
-  within a few seconds brought all but one back from the server (1.7.8
-  too). All the deletions now go out together as the page closes.
-- Tekken models (Mistral Nemo and its family) answered as if every message
-  were about the video game. A built-in chat template now always goes out
-  with --no-jinja, and Tekken models are recognised by their tokenizer, not
-  only their names.
-- Escaping (PR #4): a character or persona name could run script from a
-  message header, and thread and folder ids reached drag handlers
-  unescaped. Fixed at every sink found, with a lint test.
-- Synced and imported code (PR #5): if the check that switches imported
-  code off is ever missing, a restore now refuses instead of going ahead.
-- Windows (PR #15): closing the setup window also ends the embedding server
-  it started. "Setup or add a model" runs gobbonet.exe launch --setup.
-- LAN (PR #7): setup-lan.bat opens GobboNet on Private and Domain networks
-  only, and on a Public one asks [P] make it Private, [A] allow Public too,
-  or [S] skip; setup-lan.bat /public allows Public without asking. The URL
-  reservation belongs to your account, not Everyone. Re-run setup-lan.bat as
-  Administrator once to apply this.
-- gobbonet uninstall left your conversations behind when they were in a
-  folder you chose (the Linux setup always asks), and said they were gone
-  (1.7.8 too). It now reads your config and clears that folder. The Windows
-  uninstaller runs the same command.
-- A profile with no conversations showed "syncing..." forever.
-- A split model showed every part in the model menu; a broken link in the
-  models folder was listed as a model.
-- Notes in the page that described older versions: the Personality hint,
-  the web search key's note, and Privacy Status.
+- Macro names typed with braces (issue #69, PR #73). {{skip}} or skip: in
+  Trigger name saves as skip, and the note under the field says so.
+- A model name is a file in the models folder and nothing else (security).
+  Switching models used to accept a path, so any signed-in device could
+  make the engine load a file from anywhere. Only a plain .gguf name is
+  accepted now.
+- gobbonet uninstall left the folder the update button downloads into, so
+  the data folder stayed behind after an uninstall. It removes it now, and
+  the Linux launcher's engine-choice note with it. On Linux it also left
+  behind the embedding model that setup downloads (in the data folder's
+  embeddings folder); that goes now too, even when you keep your models,
+  and anything else in that folder stays. The Windows uninstaller runs the
+  same command, and also removes what an update leaves beside the program
+  (gobbonet.exe.old and an unfinished gobbonet.new.exe).
+- On Linux, a first run stopped before setup finished left a setup.XXXXXX
+  file in ~/.local/share/gobbonet, which kept that folder after gobbonet
+  uninstall, and could leave the setup page running. The launcher now stops
+  the page and removes the file however the first run ends, and gobbonet
+  uninstall removes the ones older versions left.
+- The AppImage's Start at login named the launcher inside the AppImage's
+  temporary mount, so it did nothing at the next login. It starts the
+  AppImage file itself now; if you move the file, run its
+  autostart --enable again.
 
 CHANGED
-- File layout: the retired installer/ design is gone; the model catalogue is
-  in catalog/, build scripts in scripts/, old investigations in
-  docs/archive/. Windows files you run (launch.bat and the rest) stay where
-  they were.
-- fileserver.ps1, the legacy PowerShell server, says it is deprecated when it
-  runs. It goes in 1.8, and only runs without gobbonet.exe.
+- The legacy PowerShell server, fileserver.ps1, is gone. launch.bat asks
+  the first-run questions and hands over to gobbonet.exe; without
+  gobbonet.exe it stops at the start and says how to get it back.
+  setup-lan.bat makes no URL reservation (gobbonet.exe never needed one)
+  and removes the ones older versions left.
+- Classifier-free guidance (issue #51) was checked against this release's
+  engine: it still cannot be done, so Banned Phrases and Auto Reroll remain
+  the way to keep words out.
 - Privacy: besides web search (when on) and downloads you start, GobboNet
-  fetches two small public lists: the model list, when Add a Model or setup
-  needs it (model_catalog_remote = false stops it), and the endorsed mod
-  list, only when you click BROWSE. Neither carries anything about you. No
-  telemetry.
+  goes online for the model list and the endorsed mod list, as before, and
+  for update checks, only when you press CHECK FOR UPDATES. None of them
+  carries anything about you. No telemetry.
+- The Windows installer's header says v1.8.
+- For contributors: issue forms and a pull request template (issue #62),
+  and every documented build command works without the executable bit.
 
 WINDOWS UPDATE
-Close GobboNet. Back up your installation and data. Extract this complete
-update over the existing GobboNet application folder. Keep your configuration,
-engine, models and history. Then run "Repair Windows shortcuts.bat" once:
-it points "Setup or add a model" at the new command. Run setup-lan.bat as
-Administrator once if you use GobboNet from your phone. Use Launch GobboNet
-from the Start menu as before.
+With the installer: close GobboNet and run GobboNetSetup-1_8_0.exe. It
+installs over your current copy, keeps your models, conversations and
+password, and deletes the old fileserver.ps1.
+With the zip: close GobboNet, extract this complete update over the
+GobboNet folder, and keep your configuration, engine, models and history.
+A zip cannot delete files, so fileserver.ps1 and fileserver.log stay in
+the folder; nothing runs them now, and you can delete them (gobbonet
+doctor lists them under LEFTOVERS FROM 1.7).
+If you use GobboNet from your phone, run setup-lan.bat as Administrator
+once: it removes the URL reservation older versions made. From 1.8.0 on,
+ABOUT > CHECK FOR UPDATES does the update for you.
 
 LINUX UPDATE
-Close GobboNet. Replace the linux-amd64 folder with the one from this zip;
-keep your configuration, models and data. The full zip carries the
-llama.cpp engine (linux-amd64/llama-cpp, unchanged since 1.7.8); the
--update zip leaves it out (see NO-ENGINE-IN-THIS-ZIP.txt).
+With the .deb or the .rpm: close GobboNet and install the new package over
+the old one, sudo apt install ./gobbonet_1.8.0*_amd64.deb or
+sudo dnf install ./gobbonet-1.8.0-*.fedora.x86_64.rpm, from the folder you
+downloaded it to. Your settings, models and conversations are not part of the
+package, and stay.
+With the zip: close GobboNet, replace the linux-amd64 folder with the one
+from this zip, and keep your configuration, models and data. The full zip
+carries the llama.cpp engine (linux-amd64/llama-cpp, unchanged since
+1.7.8); the -update zip leaves it out (see NO-ENGINE-IN-THIS-ZIP.txt). From
+1.8.0 on, ABOUT > CHECK FOR UPDATES updates the zip and the AppImage.
 
 FOR THE GIT REPOSITORY
-Extracting a zip cannot move or delete files. Run git-apply-1.7.9-layout.sh
-(handed over beside this zip) once in a 1.7.8 checkout BEFORE extracting,
-then extract, then git add -A.
+Extracting a zip cannot delete files. In a 1.7.9 checkout, run
+  git rm fileserver.ps1
+then extract this zip over it, then git add -A.
 
 CHECKING IT
 With the chat page open and signed in, paste these into the browser console
-(F12 -> Console). None of them changes your data; the ones that make
-throwaway chats, characters or mods remove them at the end.
-  tests/console/1.7.9-steps-1-3.js   (load a Tekken model for its checks)
-  tests/console/1.7.9-steps-4-6.js   (step 6 is listed as a by-hand check)
-  tests/console/1.7.9-step-7.js      (layout and password setting)
-  tests/console/1.7.9-step-8.js      (LAN; run it on the phone too)
-  tests/console/1.7.9-step-9.js      (UNDO; about 15 seconds)
-  tests/console/1.7.9-step-10.js     (CONFIG sections and search)
-  tests/console/1.7.9-step-11.js     (the tour; puts "seen" back after)
-  tests/console/1.7.9-step-12.js     (catalogue and found models; links nothing)
-  tests/console/1.7.9-step-13.js     (mods; run it on the PC; removes what it makes)
-  tests/console/1.7.9-step-14.js     (endorsed mods; installs nothing; one red
-                                      "deliberate" error is expected)
-  tests/console/1.7.9-step-15.js     (the Informant; run it on the home screen;
-                                      does not touch your own Informant)
-  tests/console/1.7.9-step-16.js     (page, server and ABOUT all say 1.7.9)
-  tests/console/1.7.9-rag-storybook.js  (both ways of writing lore fire;
-                                      changes nothing)
-  tests/console/1.7.9-macro-input.js    (macros that take text; changes nothing)
+(F12 -> Console). None of them changes your data unless it says so at the
+top; the ones that make throwaway chats or characters remove them.
+  tests/console/1.8.0-round-1.js     (macro names with braces)
+  tests/console/1.8.0-round-2.js     (the model name check)
+  tests/console/1.8.0-round-3.js     (open_browser, and the two folders)
+  tests/console/1.8.0-round-4.js     (card tools, model links)
+  tests/console/1.8.0-round-5.js     (why a model failed to load, CHECK FILE,
+                                      the GPU menu)
+  tests/console/1.8.0-round-6.js     (the legacy server is gone)
+  tests/console/1.8.0-round-7.js     (entry switches in My extensions)
+  tests/console/1.8.0-round-8.js     (the embedding server)
+  tests/console/1.8.0-round-9.js     (MCP servers; run it on the PC)
+  tests/console/1.8.0-auto-reroll.js
+  tests/console/1.8.0-files-panel.js
+  tests/console/1.8.0-update-button.js
+  tests/console/1.8.0-group-chats.js
+  tests/console/1.8.0-version.js     (page, server and ABOUT say 1.8.0, the
+                                      Informant, and with GN_UPDATE_CHECK
+                                      the update key; asks GitHub only then)
 
-VALIDATION (run on Linux x64, Go 1.25.14, engine b10456, PowerShell 7.4)
-- Go: all 24 packages pass; go vet clean for linux and windows; the
-  Windows-only tests compile.
-- JavaScript: 60 of 60 suites. Python: 34 of 34, including the PowerShell
-  half of test-stop-script.py and test-linux-onboarding.py run from the
-  extracted zip with the engine in place.
-- Console blocks on this build: steps 1-3 7/7, steps 4-6 14/14, step 7 3/3,
-  step 8 (by-hand checklist; the page reports LAN state), step 9 38/38,
-  step 10 15/15, step 11 22/22, step 12 15/15, step 13 15/15,
-  step 14 14/14, step 15 13/13, step 16 4/4, RAG storybook 13/13, macro input 10/10.
-- The full zip, extracted to an empty folder with no config, ran its
-  first-run setup and served the chat with the bundled engine.
-- The Windows installer, GobboNetSetup-1_7_9.exe (NSIS 3.12, large strings):
-  its 61 files are byte-for-byte the zip's, and its file list is the
-  official 1.7.8 installer's plus the three new page files. Decompressed
-  and compared with 1.7.8's script compiled the same way, it differs only in
-  the version, the 8-character password minimum, the "Setup or add a model"
-  shortcut and the three new page files. The uninstaller is unchanged.
-- Built with Go 1.25.14, the Go 1.7.8 was built with (the first 1.7.9 test
-  builds had 1.25.0). scripts/go-floor.sh now refuses an older one.
-- The .rpm, built by rpm 4.19.1 as 1.7.8's was, against the official 1.7.8
-  package: same requirements, scriptlets and 79 files; five files changed,
-  each by a 1.7.9 change. dnf install, first run, a chat, removal and the
-  upgrade from 1.7.8 on Fedora 43, 44, 45 and Rawhide roots; on 44 and 45
-  also as a user in a browser, the 1.7.8 conversation kept across the upgrade.
-- The .deb, built from this zip with the pinned Vulkan engine, against
-  the official 1.7.8 package: same control fields, maintainer scripts and 88
-  entries; five files changed, each by a 1.7.9 change. Installed with apt on
-  Ubuntu 24.04 and used as an ordinary user: the setup page walked with
-  Enter, a chat with the bundled engine, an upgrade from 1.7.8 keeping its
-  conversation, remove and purge keeping your data, gobbonet uninstall
-  clearing it.
-- The AppImage, built reproducibly from the .deb with the pinned, signature-
-  checked runtime, against the official 1.7.8 AppImage: same runtime and 92
-  entries; six files changed, each by a 1.7.9 change. Run as a user through
-  FUSE: a fresh first run and a chat; the upgrade from the 1.7.8 AppImage
-  keeping its conversation; switching to and from the .deb; gobbonet
-  uninstall clearing your data and naming the file to delete.
-- In Chromium against the real server: found models linked and generating;
-  the old extensions migrating to a mod; endorsed mods installed from a local
-  HTTPS copy of the site, a tampered file refused, a broken mod switching
-  itself off; the Informant's UPDATE and UNDO; a storybook typed into the
-  card editor firing on a name, on tags adding up to 1.0, and on plain
-  text's names and words, with nothing for an unrelated line.
+VALIDATION (run on Linux x64, Go 1.25.14, engine b10456)
+- Go: the 25 packages with tests pass; internal/version's check against the
+  release tag passes once v1.8.0 is tagged (docs/BUILDING.md). go vet clean
+  for linux and windows; the Windows test binaries compile; the race detector
+  on cmd/gobbonet and internal/update.
+- JavaScript: 73 of 73 suites. Python: 40 of 40.
+- Each feature's console check and live browser checks ran when it was built
+  (each changelog has them): group chats 43 live checks in Chromium against a
+  stand-in engine, the Files panel's preview isolation in Chromium, the
+  update button installing and restarting into a signed build from a local
+  release list, a tampered build refused.
+- The update signing key: its public half is built in, and a file it signs
+  verifies while a changed one does not.
+- The Windows installer, GobboNetSetup-1_8_0.exe (NSIS 3.12, large strings,
+  built from the v312 source with MinGW-w64 GCC):
+  - The same toolchain rebuilds the official GobboNetSetup-1_7_9.exe from
+    the v1.7.9 script and its own payload byte for byte, and 1.8.0's stub and
+    plugins are 1.7.9's very files.
+  - Its 66 files are byte-for-byte this zip's. Its file list is 1.7.9's
+    without fileserver.ps1, plus the six new page files.
+  - Decompressed and compared with the official 1.7.9, it differs only in the
+    version (title, DisplayVersion, version resource), fileserver.ps1 being
+    deleted instead of installed, and the six files. The uninstaller differs
+    only in removing what the update button leaves.
+  - Under Wine 9.0, page by page beside 1.7.9: only the version marks and the
+    install's size differ. A fresh install, an upgrade over 1.7.9 (models,
+    engine and password kept) and an uninstall after an update, which left
+    nothing behind.
+- The Linux .deb, gobbonet_1.8.0+go.<commit>-1_amd64.deb, built from this
+  zip with the pinned engine:
+  - The same way of building rebuilds the official 1.7.9 .deb byte for byte
+    from its sources and program.
+  - Against the official 1.7.9: the same 88 entries, modes, owners and
+    links; 81 byte-identical, the engine among them; the other 7 are this
+    zip's files and ENGINE.txt's "bundled by" line. The same scripts and
+    dependencies, and lintian finds the same.
+  - Installed with apt on Ubuntu 24.04 and used as ordinary users: an
+    upgrade over 1.7.9 (conversation, password, config and model kept);
+    first runs whose pages match 1.7.9's but for the location page and the
+    model page's note; chats answered by the bundled engine; a first run
+    stopped part way; tests/test-linux-onboarding.py; apt remove and purge,
+    which left the home folders untouched; and gobbonet uninstall, which
+    left nothing of GobboNet's.
+- The Fedora .rpm, gobbonet-1.8.0-1.go.<commit>.fedora.x86_64.rpm, built
+  from this zip with the pinned engine and rpm 4.19.1, as 1.7.9's was:
+  - The same toolchain rebuilds the official 1.7.9 .rpm with every header
+    field and file the same but the build time and the file times the
+    build sets (1.7.9 was built without SOURCE_DATE_EPOCH).
+  - Against the official 1.7.9: the same 72 requirements, recommends,
+    scriptlets and 79 files, folders and links; 72 files byte-identical,
+    the engine among them; the other 7 are this zip's files, ENGINE.txt's
+    "bundled by" line and FEDORA.md. check-rpm.sh passes, and rpmlint
+    finds the same in both.
+  - test-in-fedora.sh on Fedora 43, 44, 45 and Rawhide, upgrading from the
+    official 1.7.9: 20/20, 20/20, 21/21, 21/21.
+  - On Fedora 44 and 45, as ordinary users in a browser, 35 checks like
+    the .deb's, all passing: an upgrade from 1.7.9 keeping the
+    conversation, password, config and model; first runs; chats; a first
+    run stopped part way; dnf remove; gobbonet uninstall.
+- The AppImage, GobboNet-1.8.0go.<commit>-1-x86_64.AppImage, made from
+  that .deb with the pinned type 2 runtime:
+  - The same way rebuilds the official 1.7.9 AppImage byte for byte from
+    its .deb.
+  - Against the official 1.7.9: the same runtime and the same 92 entries,
+    modes and links. What differs is six of this zip's files and two
+    version lines, in the menu entry and the engine's ENGINE.txt. Every
+    file under usr/ is the .deb's.
+  - Run by ordinary users through FUSE, 33 checks: from the 1.7.9
+    AppImage to this one (conversation, password and model kept, the
+    engine path healed); first runs; chats; Start at login, which now
+    starts the AppImage after it has closed; a first run stopped part
+    way; tests/test-linux-onboarding.py through it; gobbonet uninstall;
+    without FUSE, --appimage-extract-and-run.
+  - The update button replacing it: a test build offered a later one by
+    a stand-in release list, signed with a throwaway key. UPDATE NOW put
+    the new AppImage in place of the old file, RESTART NOW came back on
+    it, and Start at login still started it. 15 checks.
+  - In Fedora 44 and 45 root filesystems, without FUSE: on 44 its engine
+    starts with the system's libraries; on 45 it starts once OpenSSL 3 is
+    there (Fedora 44's libraries standing in for openssl3-libs), and not
+    without it.
 
 NOT RUN HERE
-Anything in a Windows console: setup-lan.bat and teardown-lan.bat as
-Administrator, the job object closing the tree, the "Setup or add a model"
-shortcut, launch.bat, the installer itself (it is also unsigned, as
-before, so SmartScreen will ask). A real Tekken model generating
-text. The Informant answering on a real chat model. The real embedding
-model (Nomic): matching by meaning is unchanged and was tested with a
-stand-in. A GPU. On Fedora: SELinux and a real desktop session (the packages
-were tested in chroots of the official Fedora roots).
+Windows itself: the installer ran under Wine, which draws the pages without
+the Windows visual style and has no PowerShell (so the password store and
+part of stop-gobbonet.bat did not run there), SmartScreen or Defender. The
+installer is unsigned, as before, so SmartScreen will ask. Launch GobboNet
+from the finish page and the shortcuts were read, not started. A GPU. A real
+chat model answering in a group chat or through card tools. On Linux: a
+desktop (the .deb, .rpm and AppImage were installed and run in a container
+and in Fedora root filesystems, with the browser driven headless), and
+SELinux.

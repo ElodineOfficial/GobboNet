@@ -36,16 +36,15 @@ The temptation, when a scanner flags your clean code, is to cry false positive a
 GobboNet is malware-shaped. Not "technically, if you squint." Actually. Here is the résumé, and every line of it is real:
 
 - **It downloads an executable from the internet and runs it.** `launch.bat` builds a `Net.WebClient`, forces TLS 1.2, and calls `DownloadFile` under `-ExecutionPolicy Bypass` to pull down the llama.cpp release. That is the textbook first act of a dropper.
-- **It binds a listener and serves traffic.** `fileserver.ps1` stands up a `System.Net.HttpListener` and serves content over the network. That is the resident half of a remote-access tool.
-- **It opens holes in your firewall while elevated.** `setup-lan.bat` demands Administrator, then runs `netsh advfirewall firewall add rule ... dir=in action=allow` and reserves an all-interfaces URL namespace with `netsh http add urlacl url=http://+:PORT/ sddl=D:(A;;GX;;;<SID>)`. (Since 1.7.9 that SID is yours, the account signed in at the console; before, it was `WD`, Everyone.) That is backdoor provisioning.
+- **It binds a listener and serves traffic.** `gobbonet.exe` opens a socket on your network and serves content over it. That is the resident half of a remote-access tool.
+- **It opens holes in your firewall while elevated.** `setup-lan.bat` demands Administrator, then runs `netsh advfirewall firewall add rule ... dir=in action=allow`. (Up to 1.7.9 it also reserved an all-interfaces URL namespace with `netsh http add urlacl`, granted to Everyone before that. Only the PowerShell server needed it; 1.8 removed that server, stopped making the reservation, and deletes the old one.) That is backdoor provisioning.
 - **It fingerprints your hardware.** `hardware-probe.ps1` enumerates `Win32_VideoController`, dumps `dxdiag /x`, and reads GPU and CPU identifiers straight out of the registry. That is host reconnaissance.
 - **It reaches into a `SecureString` and marshals your password back out to plaintext.** `launch.bat` calls `Marshal::SecureStringToBSTR` and `PtrToStringBSTR`. That is the exact API sequence a credential stealer uses.
-- **It compiles native interop on the fly.** `launch.bat` runs `Add-Type` with `[DllImport("kernel32.dll")]` and `[DllImport("user32.dll")]` to get `GetConsoleWindow` and `ShowWindow`. Inline P/Invoke into `kernel32` is how in-memory loaders declare their tools.
-- **It POSTs an authenticated body to an outside host.** `fileserver.ps1` forwards a request — Authorization header and all — to an external API over TLS. That is a beacon shape.
-- **It enumerates running processes and force-kills them by command line.** `launch.bat` pipes `Get-CimInstance Win32_Process` into `Stop-Process -Force`. That is what malware does to the thing trying to stop it.
-- **It generates cryptographic key material and hashes secrets.** `fileserver.ps1` pulls bytes from a CSPRNG and runs `SHA256` over a salted password. To a classifier, that reads like the opening move of ransomware.
+- **It POSTs an authenticated body to an outside host.** `gobbonet.exe` forwards a request — Authorization header and all — to an external API over TLS. That is a beacon shape.
+- **It enumerates running processes and force-kills them by command line.** `stop-gobbonet.bat` pipes `Get-CimInstance Win32_Process` into `Stop-Process -Force`. That is what malware does to the thing trying to stop it.
+- **It generates cryptographic key material and hashes secrets.** `launch.bat` pulls bytes from a CSPRNG and runs `SHA256` over a salted password. To a classifier, that reads like the opening move of ransomware.
 
-Nine capabilities. Download-and-execute, listener, firewall modification, hardware recon, credential handling, native interop, outbound beacon, process termination, crypto. If you handed that capability list to a malware analyst with the names stripped off, they would not blink. They would start writing the report.
+Eight capabilities. Download-and-execute, listener, firewall modification, hardware recon, credential handling, outbound beacon, process termination, crypto. (There were nine until 1.8 removed the launcher's inline P/Invoke, which only its old minimised-window path used.) If you handed that capability list to a malware analyst with the names stripped off, they would not blink. They would start writing the report.
 
 The classifier is not hallucinating. The shape is really there but because it makes things easier on new users, less confusing, and allocates logs to specified places for easy access.
 
@@ -57,14 +56,13 @@ For the record, here is the shape we present, weighted roughly the way an ML eng
 
 | The construct | Where it lives | The benign job it does | The shape it shares |
 |---|---|---|---|
-| `Add-Type` + `DllImport(kernel32/user32)` | `launch.bat` | Minimize the launcher's own console window | In-memory loader declaring native imports |
 | `Marshal::SecureStringToBSTR` → plaintext | `launch.bat` | Compare a typed password to the local access secret | Credential dumper lifting secrets from memory |
 | `Net.WebClient.DownloadFile` + `-ExecutionPolicy Bypass` + TLS 1.2 | `launch.bat` | Fetch the llama.cpp release | Stage-two dropper |
-| `HttpListener` + `netsh advfirewall add rule` + `urlacl http://+:` (elevated) | `fileserver.ps1`, `setup-lan.bat` | Serve the UI to your own phone, subnet-scoped, behind your password | Backdoor install and listener |
-| `Invoke-WebRequest -Method POST`, forwards `Authorization`, to an outside host | `fileserver.ps1` | Proxy a web search so the browser skips a CORS hop | C2 beacon |
-| `Get-CimInstance Win32_Process` → `Stop-Process -Force` | `launch.bat` | Kill the right model server on shutdown | Terminating the AV that's watching |
+| Network listener + `netsh advfirewall add rule` (elevated) | `gobbonet.exe`, `setup-lan.bat` | Serve the UI to your own phone, subnet-scoped, behind your password | Backdoor install and listener |
+| HTTPS POST that forwards `Authorization` to an outside host | `gobbonet.exe` | Proxy a web search so the browser skips a CORS hop | C2 beacon |
+| `Get-CimInstance Win32_Process` → `Stop-Process -Force` | `stop-gobbonet.bat` | Stop this install's own servers, and nothing else, on shutdown | Terminating the AV that's watching |
 | `Win32_VideoController` + `dxdiag /x` + registry GPU/CPU reads | `hardware-probe.ps1` | Measure your VRAM to recommend a model that fits | Host fingerprinting / sandbox detection |
-| `SHA256` + `RandomNumberGenerator` | `fileserver.ps1` | Log you in and mint a session token | Ransomware key setup |
+| `SHA256` + `RandomNumberGenerator` | `launch.bat` | Store a salted hash of the password you choose, never the password | Ransomware key setup |
 
 Now the column the classifier never fills in.
 
@@ -102,7 +100,7 @@ Which is the uncomfortable structural truth underneath the whole quarantine: **t
 
 Here is where it stops being merely wrong and starts being backwards.
 
-GobboNet used to have a genuinely damning construct. The web search feature was once a separate PowerShell process, started with `-WindowStyle Hidden` and `-EncodedCommand`, carrying a **4,656-character base64 blob**, opening its own listener and relaying authenticated traffic to an external host. Committed to the repo: *"indistinguishable in shape from a command-and-control relay."* So we removed it. It is now a plain function in `fileserver.ps1` that does the same thing in readable code. Same destination, same request, same header — one fewer encoded process, and the single strongest malware signal in the project, gone.
+GobboNet used to have a genuinely damning construct. The web search feature was once a separate PowerShell process, started with `-WindowStyle Hidden` and `-EncodedCommand`, carrying a **4,656-character base64 blob**, opening its own listener and relaying authenticated traffic to an external host. Committed to the repo: *"indistinguishable in shape from a command-and-control relay."* So we removed it. It became a plain function in the PowerShell server, and since 1.8 it is a route in `gobbonet.exe`, doing the same thing in readable code. Same destination, same request, same header — one fewer encoded process, and the single strongest malware signal in the project, gone.
 
 Here is what we wrote next to that change:
 

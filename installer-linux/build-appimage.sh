@@ -2,9 +2,9 @@
 #
 # Build GobboNet as an AppImage, from the .deb (issue #53).
 #
-#   ./build-deb.sh && ./build-appimage.sh      the newest dist/gobbonet_*_amd64.deb
-#   ./build-appimage.sh path/to/gobbonet_<version>_amd64.deb
-#   SKIP_RUNTIME_FETCH=1 ./build-appimage.sh   use the runtime already in vendor/
+#   bash ./build-deb.sh && bash ./build-appimage.sh  the newest dist/gobbonet_*_amd64.deb
+#   bash ./build-appimage.sh path/to/gobbonet_<version>_amd64.deb
+#   SKIP_RUNTIME_FETCH=1 bash ./build-appimage.sh    use the runtime already in vendor/
 #
 # Needs squashfs-tools with zstd (`mksquashfs`), python3, and dpkg-deb or
 # ar + tar to unpack the .deb.
@@ -101,7 +101,7 @@ if [ -z "$DEB" ]; then
     DEB="$(ls -t "$OUT"/gobbonet_*_amd64.deb 2>/dev/null | head -1 || true)"
 fi
 [ -n "$DEB" ] && [ -f "$DEB" ] || fail "no .deb to build from.
-       Run ./build-deb.sh first, or name one:  ./build-appimage.sh path/to/gobbonet_X_amd64.deb"
+       Run bash ./build-deb.sh first, or name one:  bash ./build-appimage.sh path/to/gobbonet_X_amd64.deb"
 DEB="$(cd "$(dirname "$DEB")" && pwd)/$(basename "$DEB")"
 say "from $(basename "$DEB")"
 
@@ -196,7 +196,14 @@ say "runtime $RUNTIME_TAG: SHA-256 matches the pin -- ok"
 # timestamp in the image, so a reproducible build stays one.
 # ---------------------------------------------------------------------------
 mkdir -p "$OUT"
-APPIMAGE="$OUT/GobboNet-${VERSION}-x86_64.AppImage"
+# Named for the package it was made from, without the "+" (1.8.0). GitHub
+# drops a "+" from the name of a file attached to a release -- 1.7.9's went up
+# as GobboNet-1.7.9go.nogit.20261102-1-x86_64.AppImage -- and the update file
+# (scripts/make-update-manifest.sh) names the AppImage as the release lists
+# it, so it is built under that name: the one users download, and the one the
+# update button looks for.
+NAME_VERSION="$(printf '%s' "$VERSION" | tr -d '+')"
+APPIMAGE="$OUT/GobboNet-${NAME_VERSION}-x86_64.AppImage"
 SQFS="$STAGE/image.sqfs"
 mksquashfs "$APPDIR" "$SQFS" -comp zstd -all-root -noappend -no-xattrs -quiet >/dev/null
 rm -f "$APPIMAGE"

@@ -54,29 +54,65 @@ func Enabled() bool {
 	return true
 }
 
-// LauncherPath finds the desktop launcher to run at login.
+// LauncherPath finds the desktop launcher to run at login, and what to pass
+// it.
 //
 // The launcher rather than `gobbonet serve` directly, because starting the
 // server is only part of the job: the engine still has to be chosen, and the
 // launcher is the thing that knows how. --no-browser is what makes this
 // tolerable at login — a browser window opening by itself every time you sign
 // in would be a good reason to uninstall the program.
-func LauncherPath() string {
+func LauncherPath() (path, args string) {
+	exe, _ := os.Executable()
+	if exe != "" {
+		if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+			exe = resolved
+		}
+	}
+	return launcherFor(exe, os.Getenv("APPIMAGE"), os.Getenv("APPDIR"), func(p string) bool {
+		st, err := os.Stat(p)
+		return err == nil && !st.IsDir()
+	})
+}
+
+func launcherFor(exe, appImage, appDir string, isFile func(string) bool) (string, string) {
+	// From an AppImage, the launcher beside the binary is inside the image's
+	// mount (/tmp/.mount_...), which is gone once GobboNet closes: an entry
+	// naming it did nothing at the next login (1.7.8 to 1.8.0). The AppImage
+	// file itself is what starts GobboNet; its AppRun hands --no-browser to the
+	// same launcher. The runtime gives APPIMAGE and APPDIR to everything it
+	// starts, so the binary has to be inside APPDIR for them to be about
+	// GobboNet -- the same test as update.Locate and `gobbonet uninstall`.
+	if appImage != "" && appDir != "" && exe != "" {
+		if rel, err := filepath.Rel(filepath.Clean(appDir), filepath.Clean(exe)); err == nil &&
+			rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return appImage, "--no-browser"
+		}
+	}
 	candidates := []string{"/usr/lib/gobbonet/gobbonet-launch"}
-	if exe, err := os.Executable(); err == nil {
+	if exe != "" {
 		candidates = append(candidates, filepath.Join(filepath.Dir(exe), "gobbonet-launch"))
 	}
 	for _, c := range candidates {
-		if st, err := os.Stat(c); err == nil && !st.IsDir() {
-			return c
+		if isFile(c) {
+			return c, "--no-browser"
 		}
 	}
 	// No packaged launcher — a source checkout. `serve` alone still works
 	// because setup has already run by the time anyone enables this.
-	if exe, err := os.Executable(); err == nil {
-		return exe + " serve"
+	if exe != "" {
+		return exe, "serve"
 	}
-	return "gobbonet serve"
+	return "gobbonet", "serve"
+}
+
+// execQuote quotes a program path for a desktop entry's Exec key: in double
+// quotes, with the four characters the specification reserves inside them
+// escaped, and % doubled. An AppImage is often in a folder of the user's own
+// naming, and a space in its path split the command in two.
+func execQuote(path string) string {
+	r := strings.NewReplacer(`\`, `\\`, `"`, `\"`, "`", "\\`", `$`, `\$`, `%`, `%%`)
+	return `"` + r.Replace(path) + `"`
 }
 
 // Enable writes the autostart entry.
@@ -84,10 +120,8 @@ func Enable() error {
 	if err := os.MkdirAll(Dir(), 0o700); err != nil {
 		return fmt.Errorf("could not create %s: %w", Dir(), err)
 	}
-	exec := LauncherPath()
-	if !strings.HasSuffix(exec, " serve") {
-		exec += " --no-browser"
-	}
+	path, args := LauncherPath()
+	exec := execQuote(path) + " " + args
 	body := "[Desktop Entry]\n" +
 		"Type=Application\n" +
 		"Version=1.0\n" +

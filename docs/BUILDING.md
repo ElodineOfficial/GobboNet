@@ -16,10 +16,10 @@ against the tree as it ships except where marked.
 `build-release.sh` produces the binaries the other two package. Run it first.
 
 ```sh
-./scripts/build-release.sh                    # Go binaries, stamped from VERSION
+bash ./scripts/build-release.sh               # Go binaries, stamped from VERSION
 # Windows: installer-win/ -- stage the payload, then makensis (installer-win/README.md)
-cd installer-linux && ./build-deb.sh  # gobbonet_<VERSION>+go.<sha>-1_amd64.deb
-./build-appimage.sh                   # GobboNet-<deb version>-x86_64.AppImage, from that .deb
+cd installer-linux && bash ./build-deb.sh  # gobbonet_<VERSION>+go.<sha>-1_amd64.deb
+bash ./build-appimage.sh                   # GobboNet-<deb version, no +>-x86_64.AppImage, from that .deb
 ```
 
 The AppImage is made from the `.deb`, not beside it, so the two carry the same
@@ -48,15 +48,15 @@ new release resets it with nobody having to remember; a packaging-only rebuild
 of the same upstream version passes the next number:
 
 ```sh
-DEB_REVISION=2 ./build-deb.sh
+DEB_REVISION=2 bash ./build-deb.sh
 ```
 
 It used to be the literal `-3`, left over from 1.7.3's three packaging repairs,
 which meant 1.7.4 shipped claiming two earlier Debian revisions that never
 existed.
 
-`VERSION` is the single input to all three. Tag `v` + `VERSION` (for 1.7.9,
-`v1.7.9`) before building, or `TestVersionFileMatchesUpstreamRelease` will fail:
+`VERSION` is the single input to all three. Tag `v` + `VERSION` (for 1.8.0,
+`v1.8.0`) before building, or `TestVersionFileMatchesUpstreamRelease` will fail:
 it compares `VERSION` against the nearest git tag, on purpose.
 
 Two places carry the number as a literal and move with `VERSION`. A test fails
@@ -126,8 +126,8 @@ Windows payload also carries `llama-cpp/ENGINE.txt`, so the bundled engine is
 still identifiable after installation. To reuse an engine you already have:
 
 ```sh
-SKIP_ENGINE_FETCH=1 ./build-deb.sh          # uses installer-linux/vendor/
-BUNDLE_CPU_ENGINE=1  ./build-deb.sh         # also ship the CPU-only archive
+SKIP_ENGINE_FETCH=1 bash ./build-deb.sh     # uses installer-linux/vendor/
+BUNDLE_CPU_ENGINE=1  bash ./build-deb.sh    # also ship the CPU-only archive
 
 ```
 

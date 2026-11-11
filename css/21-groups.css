@@ -1,0 +1,225 @@
+/* ========================================================
+   GROUP CHATS (1.8.0, js/29-groups.js)
+
+   Four places: the new-chat row in the sidebar, the bar under a group
+   chat, the Groups list and editor in CAST, and the home screen.
+
+   No new colour. CAST already reads magenta for characters and green for
+   you; groups take the app's own cyan, which keeps the three lists apart
+   at a glance. In the chat bar the member being written is magenta, as a
+   character's messages are, and your own place in the order is green.
+======================================================== */
+:root { --group: var(--cyan-bright); --group-dim: var(--cyan-dim); }
+
+/* ---- Sidebar: + THREAD and + GROUP share what + NEW_THREAD had ---- */
+.sidebar-new-row { display: flex; gap: 6px; margin-bottom: 8px; }
+.sidebar-new-row .btn { flex: 1 1 0; min-width: 0; padding-left: 6px; padding-right: 6px; }
+.thread-group-badge { font-size: 11px; margin-left: 4px; opacity: 0.85; flex-shrink: 0; }
+
+/* The picker the + GROUP button opens. */
+.group-picker { min-width: 240px; max-width: 320px; }
+.group-picker-item { display: flex; align-items: center; gap: 10px; text-align: left; }
+.group-picker-text { display: flex; flex-direction: column; min-width: 0; }
+.group-picker-name { font-weight: 700; color: var(--white); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.group-picker-who { font-size: 11px; color: var(--cyan-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.group-picker .group-avatar { width: 30px; height: 30px; flex-shrink: 0; }
+
+/* ---- Faces ----------------------------------------------------------
+   .group-face is one small round face: a picture or an initial.
+   .group-avatar is a group's own picture, or up to four faces in a square. */
+.group-face {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  overflow: hidden;
+  flex-shrink: 0;
+  background: var(--black);
+  border: 1px solid var(--cyan-dim);
+  color: var(--cyan-bright);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  text-transform: uppercase;
+}
+.group-face img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+.group-avatar {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border-radius: 4px;
+  font-weight: 700;
+  color: var(--group);
+  text-transform: uppercase;
+}
+.group-avatar > img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.group-avatar-stack { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--black); }
+.group-avatar-stack.group-avatar-n1 { grid-template-columns: 1fr; }
+.group-avatar-stack .group-face {
+  width: 100%;
+  height: 100%;
+  border-radius: 0;
+  border: none;
+  font-size: 0.6em;
+  aspect-ratio: 1 / 1;
+}
+.group-avatar-stack.group-avatar-n3 .group-face:first-child { grid-column: span 2; aspect-ratio: 2 / 1; }
+
+/* ---- The bar under a group chat ------------------------------------ */
+.group-bar {
+  padding: 7px 16px 6px;
+  font-family: var(--font);
+  font-size: 11px;
+  background: linear-gradient(90deg, rgba(0, 243, 255, 0.07), rgba(0, 243, 255, 0.02));
+  border-top: 1px solid var(--group-dim);
+  border-bottom: 1px solid rgba(0, 243, 255, 0.12);
+}
+.group-bar-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.group-bar-name {
+  background: none;
+  border: none;
+  padding: 2px 0;
+  color: var(--group);
+  font-family: var(--font);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  cursor: pointer;
+  max-width: 34ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.group-bar-name:hover, .group-bar-name:focus-visible { color: var(--white); text-decoration: underline; }
+.group-bar-members { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; flex: 1 1 auto; min-width: 0; }
+.group-bar-controls { display: flex; gap: 6px; margin-left: auto; }
+.group-bar-controls .btn { padding: 3px 9px; font-size: 11px; }
+.group-bar-controls .btn:disabled { opacity: 0.4; cursor: default; transform: none; box-shadow: none; }
+.group-bar-status { margin-top: 4px; min-height: 14px; color: var(--cyan-mid); letter-spacing: 0.5px; }
+
+.group-chip {
+  display: inline-flex;
+  align-items: stretch;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.4);
+  overflow: hidden;
+  max-width: 100%;
+}
+.group-chip-talk, .group-chip-mute {
+  background: none;
+  border: none;
+  font-family: var(--font);
+  font-size: 11px;
+  color: var(--white);
+  cursor: pointer;
+  padding: 2px 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.group-chip-talk { padding-left: 3px; min-width: 0; }
+.group-chip-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 16ch; }
+.group-chip-mute { border-left: 1px solid var(--border); padding: 2px 6px; opacity: 0.7; }
+.group-chip-talk:hover:not(:disabled), .group-chip-talk:focus-visible { background: rgba(0, 243, 255, 0.12); }
+.group-chip-mute:hover, .group-chip-mute:focus-visible { background: rgba(255, 255, 255, 0.08); opacity: 1; }
+.group-chip-talk:disabled { cursor: default; opacity: 0.75; }
+.group-chip-muted { opacity: 0.55; }
+.group-chip-muted .group-chip-label { text-decoration: line-through; }
+.group-chip-next { border-color: var(--group); box-shadow: 0 0 6px rgba(0, 243, 255, 0.25); }
+.group-chip-speaking { border-color: var(--magenta); box-shadow: var(--glow-magenta); }
+.group-chip-speaking .group-chip-label { color: var(--white); font-weight: 700; }
+.group-chip-user { align-items: center; gap: 5px; padding: 2px 8px 2px 3px; color: var(--green-neon); border-style: dashed; }
+.group-chip-user .group-face { border-color: var(--green-dim); color: var(--green-neon); }
+
+/* ---- CAST: the Groups list ------------------------------------------ */
+.cast-section-header-group { border-bottom-color: var(--group-dim); }
+.cast-section-header-group .cast-section-title { color: var(--group); text-shadow: 0 0 4px rgba(0, 243, 255, 0.3); }
+.card-grid-group .card-item .card-avatar { border-color: var(--group-dim); color: var(--group); }
+.card-grid-group .card-move-btn:hover:not(:disabled) { background: var(--group); color: var(--black); box-shadow: 0 0 8px rgba(0, 243, 255, 0.4); }
+.btn.btn-group { background: rgba(0, 243, 255, 0.08); border-color: var(--group-dim); color: var(--group); text-shadow: none; }
+.btn.btn-group:hover { background: rgba(0, 243, 255, 0.16); border-color: var(--group); color: var(--white); }
+
+/* ---- CAST: the group editor ------------------------------------------ */
+.group-editor-header { border-color: var(--group-dim); background: rgba(0, 243, 255, 0.05); }
+.group-editor-header .persona-editor-tag { color: var(--group); text-shadow: 0 0 4px rgba(0, 243, 255, 0.3); }
+
+.group-member-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
+.group-member-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: rgba(0, 0, 0, 0.3);
+  font-size: 13px;
+}
+.group-member-row .card-move { display: flex; flex-direction: column; gap: 2px; flex-shrink: 0; }
+.group-member-row .group-face { width: 28px; height: 28px; font-size: 13px; }
+.group-member-num { width: 1.6em; text-align: right; color: var(--cyan-dim); font-size: 11px; flex-shrink: 0; }
+.group-member-name { flex: 1 1 auto; min-width: 0; color: var(--white); font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.group-member-note { font-size: 11px; color: var(--green-neon); opacity: 0.8; white-space: nowrap; }
+.group-member-muted .group-member-name { opacity: 0.5; text-decoration: line-through; }
+.group-member-user { border-style: dashed; border-color: var(--green-dim); background: rgba(0, 255, 115, 0.04); }
+.group-member-user .group-face { border-color: var(--green-dim); color: var(--green-neon); }
+/* The rows' own labels sit inside a .form-group, whose labels are headings
+   (css/05-modals.css); these are not, so the id outranks that rule. */
+#group-editor .group-member-talk, #group-editor .group-member-mute {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--cyan-mid);
+  margin: 0;
+  cursor: pointer;
+  flex-shrink: 0;
+  text-transform: none;
+  letter-spacing: 0;
+  text-shadow: none;
+}
+#group-editor label.code-enable-row {
+  display: flex;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--cyan-mid);
+  text-transform: none;
+  letter-spacing: 0;
+  text-shadow: none;
+}
+/* A checkbox row that stands between two fields, not inside one. */
+#group-editor #group-self-wrap { margin: 0 0 18px; }
+.group-member-talk input[type="range"] { width: 84px; accent-color: var(--group); }
+.group-member-talk span { width: 4.2em; }
+.group-member-mute input { accent-color: var(--group); }
+.group-add-row { display: flex; gap: 8px; align-items: center; }
+.group-add-row select { flex: 1 1 auto; min-width: 0; }
+
+/* ---- Home screen: YOUR GROUPS --------------------------------------- */
+.landing-group-list { display: flex; flex-direction: column; gap: 8px; }
+.landing-group-card .group-avatar { width: 44px; height: 44px; flex-shrink: 0; border: 1px solid var(--group-dim); }
+.landing-group-card:hover { border-color: var(--group); }
+.landing-char-badge.landing-group-badge { color: var(--group); border-color: var(--group-dim); background: rgba(0, 243, 255, 0.08); }
+
+@media (max-width: 700px) {
+  .group-bar { padding: 6px 12px 5px; font-size: 10px; }
+  .group-bar-row { gap: 6px; }
+  .group-bar-controls { margin-left: 0; }
+  .group-bar-name { max-width: 22ch; }
+  /* Fingers: the chip's two halves are what gets pressed. */
+  .group-chip-talk, .group-chip-mute { padding-top: 6px; padding-bottom: 6px; font-size: 12px; }
+  .group-chip-mute { padding-left: 9px; padding-right: 9px; }
+  .group-chip-label { max-width: 11ch; }
+  .group-bar-controls .btn { padding: 7px 12px; }
+  .group-member-row { flex-wrap: wrap; gap: 8px; }
+  .group-member-name { flex-basis: 40%; }
+  .group-member-note { white-space: normal; }
+}

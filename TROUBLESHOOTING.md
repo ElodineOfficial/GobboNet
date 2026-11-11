@@ -17,11 +17,12 @@ open it for you: **CONFIG > Advanced > Config File**, in a browser on the PC Gob
 on. It checks a save before writing it and keeps the previous version, and the
 change applies the next time GobboNet starts.
 
-Since 1.7 the server is `gobbonet.exe` (Linux: `gobbonet`). `launch.bat` asks
-its questions, then hands over to it in the same window. The older PowerShell
-file server, `fileserver.ps1`, runs only when `gobbonet.exe` is missing or
-`GOBBONET_LEGACY_SERVER=1` is set. Anything below about `fileserver.ps1` or
-`fileserver.log` applies to that fallback only.
+The server is `gobbonet.exe` (Linux: `gobbonet`). `launch.bat` asks its
+questions, then hands over to it in the same window. Since 1.8 it is the only
+server: the older PowerShell file server was removed, and `launch.bat` stops
+with a message if `gobbonet.exe` is missing. If you updated by extracting a
+ZIP, a `fileserver.ps1` from 1.7 may still be in the install folder. Nothing
+runs it, and you can delete it; `gobbonet doctor` points it out.
 
 Most problems land in one of four buckets. Work down in order — the first
 one is far more common than people expect.
@@ -168,17 +169,6 @@ window, so look in `~/.local/share/gobbonet/launch.log`.
 | `LAN ACCESS IS OFF` with `Network bind failed: ...` | Working, but this PC only — the network address was refused, so it fell back to this PC |
 | `access_secret ... is malformed`, or `no password is set` | Not a port problem at all — see *Password* below |
 
-With the legacy PowerShell server, the same reasons go to `fileserver.log` in
-the install folder instead:
-
-| What `fileserver.log` says | What it means |
-|---|---|
-| `[FATAL] No access secret provided` | See *Password* below |
-| `[fatal] cannot create System.Net.HttpListener` | PowerShell is in a restricted language mode (WDAC/AppLocker) |
-| `[warn] could not bind ... [ok] listening on 127.0.0.1` | Working, but this PC only — run `setup-lan.bat` for phone access |
-| `[fatal] could not bind ... either` | Port genuinely unavailable — checklist below |
-| *(no log file at all)* | PowerShell never ran the script: AppLocker policy or antivirus quarantine |
-
 ### "netstat says nothing is using the port"
 
 That can be true and the port still unbindable. **netstat cannot see
@@ -213,13 +203,15 @@ reach it until that is fixed. On Windows, run `setup-lan.bat` as
 Administrator: it adds the firewall rule for the port. `gobbonet doctor`
 reports the rule under LAN ACCESS.
 
-The legacy PowerShell server also needs a URL reservation, and can lose the
-port to another HTTP.SYS service:
+Another HTTP.SYS service (IIS, VMware, Citrix) can own the port first:
 
 ```
-netsh http show urlacl url=http://+:9066/     :: missing reservation? run setup-lan.bat as admin
-netsh http show servicestate                  :: another service (IIS, VMware, Citrix) owning it?
+netsh http show servicestate                  :: another service owning the port?
 ```
+
+GobboNet needs no URL reservation (`netsh http ... urlacl`). Versions up to
+1.7.9 made one for the PowerShell server; since 1.8, `setup-lan.bat` and
+`teardown-lan.bat` both remove it.
 
 ---
 
@@ -287,32 +279,6 @@ starting `[auth] signed out:`. Both lines are worth including in a bug report.
 
 ---
 
-## The console says "Waiting for server to come back up..." forever
-
-*Legacy PowerShell server only. `gobbonet.exe` supervises llama-server
-itself and has no such loop.*
-
-If the chat works in the browser but the launcher window keeps printing
-dots, the monitor and the server disagree about what "up" means.
-
-`/health` answers `ok` only when llama-server is idle and loaded. While it
-is loading a model, or busy with the reply you are reading, it answers
-something else. The monitor used to treat that as death: it killed a
-perfectly good server, restarted it, then asked the same question and got
-the same answer, forever.
-
-Fixed in 1.5.8. The monitor now separates three states — healthy, running
-but not ready, and not running at all — and only the last one justifies a
-restart. A server that is running and serving is left alone.
-
-The same change stopped the monitor killing the **embedding server**. Both
-it and the chat model are `llama-server.exe`, and the old
-`taskkill /f /im llama-server.exe` took out both, silently disabling RAG
-until you restarted the launcher. The kill now targets the chat model's
-port specifically.
-
----
-
 ## "llama-server already running" but nothing works
 
 If you have **Ollama** installed, older versions of GobboNet mistook it for
@@ -377,6 +343,94 @@ raise `reply_start_timeout_seconds`.
 
 ---
 
+## "Matching by meaning is off"
+
+The RAG Storybook and memory files can match by meaning through a small
+embedding model. CONFIG > Privacy Status and the line under the storybook say
+whether it is running, and why not. Names, tags and shared words keep matching
+either way, so chat is never blocked by it.
+
+Since 1.8.0 GobboNet starts the embedding server itself, restarts it if it
+crashes, and rests it with the chat model; `gobbonet doctor` has an EMBEDDING
+SERVER section. The reasons it shows:
+
+- **No embedding model.** It is optional, about 140 MB. On Windows, run
+  *Setup or add a model* (or `launch.bat`) once and it is downloaded; on Linux,
+  run `gobbonet setup` and choose *Download Nomic*. Then restart GobboNet.
+- **It does not match its pinned SHA-256.** The file is damaged or not the one
+  GobboNet expects, so it is not started. Delete it (the path is in the
+  message) and download it again as above.
+- **Restarting.** It stopped and GobboNet is bringing it back, waiting a little
+  longer after each try. `embed-server.log`, beside `llama-server.log`, says
+  why it stopped.
+- **Something else is on its port** (11436). An embedding server GobboNet did
+  not start is used as it is, and GobboNet starts its own when that one goes.
+  Anything else holding the port: see the netstat line above.
+- **Off.** `embed_mode = "off"` in `config.toml` (CONFIG > Advanced > Config
+  File). `"managed"` is the default; `"external"` uses a server of your own at
+  `embed_url`. On Windows, `EMBED_ENABLE=0` in `launch.bat` writes `"off"`.
+
+---
+
+## An MCP server says "Not working"
+
+An MCP server is a program on this PC that gives characters tools (1.8.0).
+CONFIG > Advanced > MCP Servers lists each one with its state, and the reason
+when it is not working; `gobbonet doctor` has an MCP SERVERS section, and each
+server's own error output is in `mcp-<name>.log` beside `llama-server.log`.
+
+- **"... was not found on this PC's PATH".** The program is not installed, or
+  GobboNet cannot see it. `npx` and `uvx` come with Node.js and uv. Install it,
+  or give the program's full path as the command. GobboNet started from the
+  Start menu or a desktop file may have a shorter PATH than your terminal.
+- **"Could not start it: it exited (exit status 1): ..."** The program started
+  and stopped. The end of the line is the last thing it printed; the log has
+  the rest. A wrong argument, such as a folder that does not exist, is the
+  usual cause.
+- **"no answer within 2m0s".** The program is running but is not speaking MCP
+  over stdin and stdout. Check its instructions for a `--stdio` option. A
+  server that is only reachable at a web address (a `url`) is not supported in
+  1.8.0.
+- **"tries again in ... s".** It failed and GobboNet waits a little longer
+  after each try. The next use after that starts it again, or SWITCH OFF and
+  SWITCH ON there and then.
+- **No ADD SERVER or SWITCH ON.** Those work only in a browser on the PC
+  GobboNet runs on, at `http://localhost`, because they decide which programs
+  run there. Any device can switch one off.
+
+---
+
+## CHECK FOR UPDATES says something other than "UPDATE NOW"
+
+ABOUT > CHECK FOR UPDATES (1.8.0) asks GitHub when you press it. What it can
+say instead of offering UPDATE NOW, and what to do:
+
+- **"Updates are installed from GobboNet on the PC it runs on."** You are on a
+  phone or another device. Open ABOUT on the PC, at `http://localhost`.
+- **"This copy was installed from a .deb or .rpm package."** Install the new
+  package from the release page over the old one. Your chats, models and
+  settings are kept.
+- **"GobboNet cannot write to its own folder."** It is in a folder your user
+  cannot change. Replace `gobbonet.exe` by hand (README.md, *Updating to a
+  newer version*), or move the GobboNet folder somewhere you own.
+- **"...built without the update signing key."** That build cannot check where
+  a download came from, so it installs nothing. Update by hand once; the
+  release builds after that can update themselves.
+- **"GitHub is limiting how often this network can ask."** GitHub allows about
+  60 checks an hour from one address, shared by everything on your network.
+  Try again later.
+- **"The update was not installed, and nothing was changed: ..."** A check
+  failed: the download did not match what the release promised, or the new
+  program would not start. Your copy is as it was. CHECK AGAIN tries a fresh
+  download. If it fails the same way twice, download the release by hand and
+  report it.
+- **It restarted but the page did not come back.** Start GobboNet again as you
+  usually do; the new version is the one that runs. If anything is wrong with
+  it, the one it replaced is beside it as `gobbonet.exe.old` until GobboNet has
+  started once. Rename it back to `gobbonet.exe` to undo the update.
+
+---
+
 ## Mods
 
 **"Mods are managed from GobboNet on the PC it runs on."** Adding, changing,
@@ -402,6 +456,12 @@ switched off.
 **I switched a mod off but it is still doing something.** A stylesheet goes
 away at once. A script that has already run keeps running until the page
 reloads.
+
+**One stylesheet or script in My extensions is the problem.** Each entry has
+its own **Enabled** switch, beside its name, so you can turn just that one off
+and keep the rest. Like the mod switches, it takes effect at once, and a phone
+can switch an entry off but only the PC can switch one on. A new entry's switch
+is kept when you press SAVE.
 
 **My extensions from before 1.7.9.** They became the mod "My extensions" the
 first time you opened 1.7.9 on the PC, switched on or off as they were. A phone
@@ -494,8 +554,8 @@ only GobboNet there, and don't save other downloads into it.
 - **`gobbonet.exe` or a script is missing from the install folder.**
   Antivirus quarantine, or an AppLocker/WDAC policy blocking it. Check your
   antivirus protection history first — a quarantined file is listed there
-  with a timestamp. (With the legacy server, the same thing shows up as a
-  `fileserver.log` that is never created.)
+  with a timestamp. `launch.bat` says so by name when it is `gobbonet.exe`
+  that is gone.
 - **A model that loaded yesterday will not load today.** Check the models
   folder still contains the `.gguf`. A quarantined file disappears silently.
 
@@ -544,6 +604,37 @@ written before the update keeps what it has. To clear it:
 
 A character can also be given its own summary instructions: tick **Edit the
 lore summary prompt** in the character editor, next to RAG Storybook.
+
+---
+
+## A group chat waits before every reply, or a member speaks for the others
+
+**The wait.** In a group chat (1.8.0) one model plays every member, one reply
+at a time, and each member's turn begins with that member's own card. So the
+prompt changes from its first lines at every change of speaker, and the model
+reads the whole conversation again before each reply, where a chat with one
+character only reads what is new. With **DM decides**, the DM's question is
+one more short request before each reply. On a long chat with a big model
+that is a pause before every member, and nothing in the chat is wrong.
+
+What shortens it: fewer **Replies per round** in the group's editor, so a
+round is two members instead of five; **Turn order**, **Natural** or
+**Manual** in place of the DM; and a lower **Context limit** on the members'
+cards, which caps how much of the chat each one reads.
+
+**A member writes somebody else's lines.** The group's **End a reply where it
+starts writing another member's lines** box (on by default) ends a reply at a
+line that begins with another member's name, and takes a member's own name
+off the front. It cannot catch a member narrating what the others do inside
+its own prose. A line in the group's **Scene** helps most models: *Each
+character speaks and acts only for themselves.* **Cap this character's reply
+length** on the talkative character's card helps too.
+
+**"The DM gave no clear answer, so the turn order decided."** The DM is the
+loaded model, asked to answer with one name. A small model sometimes answers
+with a sentence that names nobody on the list, or with nothing; the round
+then carries on in turn order and the bar says so. Keep **How the DM should
+choose** to a line or two, or use Natural order, which needs no extra request.
 
 ---
 

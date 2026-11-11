@@ -86,7 +86,24 @@
 
   <!-- 1. password ------------------------------------------------------- -->
   <section class="step active" id="welcome"><div class="card"><h2>Welcome to GobboNet setup</h2><p>Choose where your models and chats live, secure your chat, then set up your engine and model.</p><div class="row"><button onclick="showSetupStep('location')">Set up GobboNet</button></div></div></section>
-<section class="step" id="location"><form class="card" novalidate><h2>Install location</h2><p>The Debian package manages program files in /usr/lib/gobbonet. Choose the folder for your models, chats and downloads below.</p><label for="data-path">Data and model folder</label><input type="text" id="data-path"><div class="row"><button id="save-location">Continue</button></div></form></section>
+<section class="step" id="location"><form class="card" novalidate><h2>Install location</h2><p>The Debian package manages program files in /usr/lib/gobbonet. Choose where your chats and settings live, and where your models live. They can be the same folder.</p>
+      <label for="data-path">Data folder</label>
+      <input type="text" id="data-path" spellcheck="false" autocomplete="off">
+      <p class="note" style="margin-top:6px">Your chats, and GobboNet's own files such as its logs and the optional embeddings model.</p>
+      <div id="data-has-models" style="display:none">
+        <div class="choice sel" id="c-usedata">
+          <div class="t" id="usedata-t">Use this folder for models</div>
+          <div class="d">Your GGUF files stay where they are, and GobboNet lists them.</div>
+        </div>
+        <div class="choice" id="c-subdir">
+          <div class="t">Keep GobboNet's models in a models subfolder</div>
+          <div class="d" id="subdir-d"></div>
+        </div>
+      </div>
+      <label for="model-path">Models folder</label>
+      <input type="text" id="model-path" spellcheck="false" autocomplete="off">
+      <p class="note" id="model-note" style="margin-top:6px" aria-live="polite"></p>
+      <div class="row"><button id="save-location">Continue</button></div></form></section>
 <section class="step" id="port"><form class="card" novalidate><h2>Choose the web port</h2><label for="web-port">Port</label><input type="text" id="web-port" inputmode="numeric" value="9066"><div class="row"><button id="save-port">Continue</button></div></form></section>
 <section class="step" id="network"><div class="card"><h2>Firewall and network access</h2><p>Linux has no Windows Defender prompt. Local chat needs no inbound firewall rule. For LAN access, allow the selected TCP port in your firewall on your trusted home network. GobboNet will not change firewall rules automatically.</p><p id="firewall-command" class="log"></p><p>LAN chat uses HTTP. Anyone on your network with the password can access it.</p><div class="row"><button id="local-launch">Launch on this machine</button><button class="ghost" id="lan-launch">Set up LAN and launch</button></div></div></section>
 <section class="step" id="extras"><div class="card"><h2>Optional additions</h2><p>Nomic embeddings power semantic retrieval. Download the extra model (about 140 MB) or skip it.</p><p id="extra-status" class="log"></p><div class="row"><button id="extra-download">Download Nomic</button><button class="ghost" id="extra-continue">Skip / continue</button></div></div></section>
@@ -207,10 +224,84 @@
      used to keep naming the folder (and the disk) from before. */
   function setNote(s) {
     $("freenote").textContent = "About " + s.free_gb.toFixed(1) + " GB free on this disk." +
-      " Existing GGUF models belong in: " + s.model_dir;
+      " Existing GGUF models belong in: " + s.model_dir +
+      (s.models_found > 0 ? " (" + plural(s.models_found, "model") + " already there: " +
+        "\u201cI already have one\u201d skips the download.)" : "");
   }
+
+  /* Install location: two folders since 1.8.0 (issue #68). The models folder
+     follows the data folder (<data>/models) until it is typed into. A data
+     folder that already holds GGUF models offers to use it for models, so
+     pointing setup at a collection no longer gives an empty models subfolder. */
+  var modelsTouched = false, dataChoice = "use", scanSeq = { data: 0, model: 0 };
+  function plural(n, word) { return n + " " + word + (n === 1 ? "" : "s"); }
+  function trimSlash(p) { return p.length > 1 ? p.replace(/\/+$/, "") : p; }
+  function defaultModels(data) { var d = trimSlash(data.trim()); return d ? (d === "/" ? "/models" : d + "/models") : ""; }
+  function scan(path) {
+    return fetch("/api/scan?path=" + encodeURIComponent(path.trim()))
+      .then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; });
+  }
+  function noteModels() {
+    var seq = ++scanSeq.model, path = $("model-path").value;
+    if (!path.trim()) { $("model-note").textContent = ""; return; }
+    scan(path).then(function (r) {
+      if (seq !== scanSeq.model || !r) return;
+      var n = r.models, sub = r.models_sub, text;
+      if (!r.absolute) text = "Use a full path, starting with / (or ~/).";
+      else if (!r.exists) text = "This folder will be created.";
+      else if (n > 0) text = plural(n, "GGUF model") + " found here. " + (n === 1 ? "It" : "They") + " will be in the model menu." +
+        (sub > 0 ? " " + sub + " more in its subfolders will be under Add a Model \u203a Found on this computer." : "");
+      else if (sub > 0) text = plural(sub, "GGUF model") + " found in its subfolders. The model menu lists the top of this folder, " +
+        "so " + (sub === 1 ? "it" : "they") + " will be under Add a Model \u203a Found on this computer, where one click links " +
+        (sub === 1 ? "it" : "one") + " in.";
+      else text = "No models here yet. You can download one in a moment.";
+      $("model-note").textContent = text;
+    });
+  }
+  function pickDataChoice(which) {
+    dataChoice = which;
+    $("c-usedata").classList.toggle("sel", which === "use");
+    $("c-subdir").classList.toggle("sel", which === "sub");
+    $("model-path").value = which === "use" ? trimSlash($("data-path").value.trim()) : defaultModels($("data-path").value);
+    noteModels();
+  }
+  function followData() {
+    if (modelsTouched) return;
+    var seq = ++scanSeq.data, data = $("data-path").value;
+    $("model-path").value = defaultModels(data);
+    $("data-has-models").style.display = "none";
+    noteModels();
+    if (!data.trim()) return;
+    Promise.all([scan(data), scan(defaultModels(data))]).then(function (rs) {
+      var r = rs[0], own = rs[1];
+      if (seq !== scanSeq.data || modelsTouched || !r || !r.exists) return;
+      var found = r.models + r.models_sub;
+      if (!found) return;
+      // Models only in the data folder's own models subfolder are already
+      // where GobboNet keeps them -- put there before setup (1.7.9's wizard
+      // said they belong there), kept by gobbonet uninstall, or setup run
+      // again -- and the default models folder lists them. Offering the data
+      // folder itself, pre-selected, took them out of the model menu, and
+      // GobboNet then started with no model.
+      if (own && own.exists && own.models >= found) return;
+      $("usedata-t").textContent = "Use this folder for models (" + found + " found)";
+      $("subdir-d").textContent = "New downloads go to " + defaultModels(data) + ". The models already in this folder are not listed.";
+      $("data-has-models").style.display = "block";
+      pickDataChoice(dataChoice);
+    });
+  }
+  var dataTimer = null, modelTimer = null;
+  $("data-path").addEventListener("input", function () { clearTimeout(dataTimer); dataTimer = setTimeout(followData, 300); });
+  $("model-path").addEventListener("input", function () {
+    modelsTouched = true;
+    $("data-has-models").style.display = "none";
+    clearTimeout(modelTimer); modelTimer = setTimeout(noteModels, 300);
+  });
+  $("c-usedata").onclick = function () { pickDataChoice("use"); };
+  $("c-subdir").onclick = function () { pickDataChoice("sub"); };
+
   $('save-location').onclick = function() {
-    post('/api/location', {path: $('data-path').value}).then(function(){
+    post('/api/location', {data: $('data-path').value, models: $('model-path').value}).then(function(){
       show(1);
       fetch("/api/state").then(function (r) { return r.json(); }).then(setNote).catch(function () {});
     }).catch(function(e){ fail(e.message); });
@@ -290,6 +381,11 @@
       if (m.index === s.default) pick = m.index;
     });
     $('data-path').value = s.data_dir;
+    $('model-path').value = s.model_dir;
+    // A models folder set before (by an earlier run, or by hand) is a choice
+    // already made: keep it rather than following the data folder.
+    modelsTouched = trimSlash(s.model_dir || "") !== defaultModels(s.data_dir || "");
+    if (modelsTouched) noteModels(); else followData();
     $('web-port').value = s.listen_port;
     setNote(s);
   

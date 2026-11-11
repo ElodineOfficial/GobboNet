@@ -258,7 +258,9 @@ console.log('\n=== E. wiring ===');
 
   ok(/case path == "\/ui-defaults\.json":/.test(server), 'the server serves the table');
   ok(/UI map\[string\]any `toml:"ui"`/.test(cfg), 'and carries it without interpreting it');
-  ok(/reflect\.Map/.test(file),
+  // 1.8.0 (#16): by isTableField, which also covers [[mcp_server]], a list of tables.
+  ok(/isTableField\(t\.Field\(i\)\.Type\)/.test(file) &&
+     /t\.Kind\(\) == reflect\.Map/.test(fs.readFileSync(ROOT + '/internal/config/mcp.go', 'utf8')),
      'config keys skips table-valued fields, so it does not advertise a command that cannot work');
   ok(/\[ui\]/.test(file), 'and the written template documents the section');
 }

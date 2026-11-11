@@ -111,10 +111,21 @@ def main(argv):
         ])),
         ("models", models),
     ])
+    pinned = sum(1 for m in models if m["sha256"])
+    # Unchanged apart from the timestamp: leave the file as it is, so running
+    # this has no diff to review and the served copy's date stays meaningful.
+    try:
+        with open(dst, encoding="utf-8") as f:
+            old = json.load(f, object_pairs_hook=OrderedDict)
+        same = dict(old, generated=None) == dict(doc, generated=None)
+    except (OSError, ValueError):
+        same = False
+    if same:
+        print("gen-remote-catalog: %s is already current (%d models, %d pinned)" % (dst, len(models), pinned))
+        return 0
     with open(dst, "w", encoding="utf-8", newline="\n") as f:
         json.dump(doc, f, indent=2)
         f.write("\n")
-    pinned = sum(1 for m in models if m["sha256"])
     print("gen-remote-catalog: wrote %s (%d models, %d pinned)" % (dst, len(models), pinned))
     return 0
 

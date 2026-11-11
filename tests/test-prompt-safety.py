@@ -33,7 +33,6 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LAUNCH = os.path.join(ROOT, "launch.bat")
 IDENTIFY = os.path.join(ROOT, "identify-model.ps1")
-FILESERVER = os.path.join(ROOT, "fileserver.ps1")
 failures = []
 
 
@@ -68,7 +67,6 @@ def code(block):
 def main():
     launch = read(LAUNCH)
     identify = read(IDENTIFY)
-    fileserver = read(FILESERVER)
 
     print("prompt hygiene (item 1)")
     for label in ("prompt_yn", "prompt_confirm"):
@@ -146,9 +144,10 @@ def main():
                   "ConvertTo-BatchPathSafe" in line,
                   "it is a path; the arg sanitizer would corrupt it")
 
-    print("\n  fileserver.ps1 keeps both halves (the file this was learned on)")
-    for fn in ("ConvertTo-CmdArgSafe", "ConvertTo-CmdPathSafe"):
-        check(f"    {fn} still present", f"function {fn}" in fileserver)
+    # The PowerShell server this was first learned on was removed in 1.8.0;
+    # identify-model.ps1 is the copy of the lesson that still ships.
+    check("  the PowerShell server it was learned on is gone (1.8.0)",
+          not os.path.exists(os.path.join(ROOT, "fileserver.ps1")))
 
     print()
     if failures:

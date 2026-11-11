@@ -107,7 +107,7 @@ func cmdDoctor(argv []string) error {
 	fmt.Printf("  listen:      %s:%d\n", cfg.ListenHost, cfg.ListenPort)
 
 	// The sidecar is the file setup-lan.bat reads to decide which port to open
-	// in the firewall and reserve with HTTP.SYS. A disagreement here is the
+	// in the firewall. A disagreement here is the
 	// exact shape of "the firewall rule is on a port nothing listens on".
 	sidecar := config.PortFilePath()
 	switch recorded := config.ReadPortFile(); {
@@ -140,9 +140,9 @@ func cmdDoctor(argv []string) error {
 	case recorded != cfg.ListenPort:
 		fmt.Printf("  .gobbonet-port: %d  -- DISAGREES with listen_port %d\n", recorded, cfg.ListenPort)
 		fmt.Printf("               %s\n", sidecar)
-		fmt.Println("               The firewall rule and URL reservation were made for the")
-		fmt.Println("               first, but the server binds the second. Start the server")
-		fmt.Println("               once to rewrite it, then re-run setup-lan.bat.")
+		fmt.Println("               The firewall rule was made for the first, but the server")
+		fmt.Println("               binds the second. Start the server once to rewrite it,")
+		fmt.Println("               then re-run setup-lan.bat.")
 	default:
 		fmt.Printf("  .gobbonet-port: %d (agrees)\n", recorded)
 	}
@@ -174,9 +174,26 @@ func cmdDoctor(argv []string) error {
 		fmt.Println()
 	}
 
+	reportGPU(os.Stdout, cfg, cfg.ServerExe, config.EngineChoicePath())
+	fmt.Println()
+
+	reportLastLoad(os.Stdout, cfg.LogFile())
+	fmt.Println()
+
+	reportEmbedding(os.Stdout, cfg)
+	fmt.Println()
+
+	reportMCP(os.Stdout, cfg)
+	fmt.Println()
+
 	fmt.Println("LOGS")
 	fmt.Printf("  llama-server:  %s\n", cfg.LogFile())
 	fmt.Printf("  startup fail:  %s\n", startupLogPath())
+
+	// Windows only: the PowerShell server and its log were never on Linux.
+	if runtime.GOOS == "windows" {
+		reportLegacyLeftovers(os.Stdout, installDir())
+	}
 	return nil
 }
 
@@ -615,15 +632,14 @@ func reportURLACL(port int) {
 	// nothing and the output has to be read.
 	if strings.Contains(string(out), fmt.Sprintf(":%d/", port)) {
 		fmt.Printf("  reserved:    YES for %s\n", url)
-		fmt.Println("               Made by setup-lan.bat. Harmless while GobboNet is")
-		fmt.Println("               running; if nothing is listening, HTTP.SYS answers")
-		fmt.Println("               this port with 503 by itself -- which looks exactly")
-		fmt.Println("               like a broken install and survives reinstalling.")
-		fmt.Println("               Remove it (as Administrator) with:")
+		fmt.Println("               Left by GobboNet 1.7 or earlier, for the PowerShell")
+		fmt.Println("               server 1.8 removed. Nothing uses it now, and while")
+		fmt.Println("               nothing is listening HTTP.SYS can answer this port")
+		fmt.Println("               with 503 by itself. Run setup-lan.bat or")
+		fmt.Println("               teardown-lan.bat as Administrator to remove it, or:")
 		fmt.Printf("                 netsh http delete urlacl url=%s\n", url)
-		fmt.Println("               or run teardown-lan.bat from the install folder.")
 	} else {
-		fmt.Printf("  reserved:    no reservation for %s\n", url)
+		fmt.Printf("  reserved:    none for %s (GobboNet needs none)\n", url)
 	}
 }
 

@@ -15,6 +15,7 @@ import subprocess
 import sys
 import threading
 import urllib.error
+import urllib.parse
 import urllib.request
 
 PREFIX = Path(__file__).resolve().parent
@@ -26,6 +27,7 @@ upstream = ''
 mode = ''
 extra = {'state': 'idle'}
 lock = threading.RLock()
+added_dirs = []   # model_dirs entries this run added, so a changed mind takes them back
 
 def cli(*args, data=None):
     p = subprocess.run([BIN, *args], input=data, text=True, capture_output=True)
@@ -38,6 +40,81 @@ def get(key):
 
 def put(key, value):
     cli('config', 'set', key, str(value))
+
+def get_list(key):
+    # --json, because a folder name can hold a space ("My Models") and the
+    # plain form is space-separated (1.8.0, issue #68).
+    return json.loads(cli('config', 'get', '--json', key))
+
+def put_list(key, items):
+    cli('config', 'set', key, json.dumps([str(i) for i in items]))
+
+# What counts as a model is what the model menu lists (internal/models
+# ScanDir): a .gguf file in any case, the first part of a split one only,
+# no vision projector. A link counts when its target is there.
+SPLIT = re.compile(r'(?i)^.*-(\d{5})-of-\d{5}\.gguf$')
+SCAN_CAP = 5000   # entries read per folder; a scan answers a typed path, it must not crawl a disk
+SUB_CAP = 200     # subfolders looked into, one level down
+
+def model_files(folder):
+    found = []
+    try:
+        with os.scandir(folder) as it:
+            for i, e in enumerate(it):
+                if i >= SCAN_CAP:
+                    break
+                name = e.name
+                if not name.lower().endswith('.gguf') or 'mmproj' in name.lower():
+                    continue
+                m = SPLIT.match(name)
+                if m and int(m.group(1)) != 1:
+                    continue
+                try:
+                    if e.is_file():
+                        found.append(Path(e.path))
+                except OSError:
+                    pass
+    except OSError:
+        pass
+    return found
+
+def count_models(folder):
+    """GGUF models directly in folder, and in its subfolders one level down."""
+    top = len(model_files(folder))
+    sub = 0
+    try:
+        with os.scandir(folder) as it:
+            looked = 0
+            for e in it:
+                if looked >= SUB_CAP:
+                    break
+                try:
+                    if e.is_dir() and not e.name.startswith('.'):
+                        looked += 1
+                        sub += len(model_files(e.path))
+                except OSError:
+                    pass
+    except OSError:
+        pass
+    return top, sub
+
+def is_gguf(path):
+    try:
+        with path.open('rb') as f:
+            return f.read(4) == b'GGUF' and path.stat().st_size > 1024
+    except OSError:
+        return False
+
+def writable(folder, what):
+    try:
+        folder.mkdir(parents=True, exist_ok=True, mode=0o700)
+        probe = folder / f'.gobbonet-write-test-{os.getpid()}'
+        with probe.open('x') as out:
+            out.write('test')
+        probe.unlink()
+    except OSError as e:
+        raise ValueError(f'GobboNet cannot write to the {what} folder {folder}: {e.strerror or e}. '
+                         'Choose a folder you own.')
 
 def start():
     global child, upstream
@@ -95,6 +172,17 @@ def nomic():
         part.unlink(missing_ok=True)
         extra = dict(state='error', message=str(e))
 
+def login_program():
+    """What the login entry starts: this launcher -- or from an AppImage, the
+    AppImage file. PREFIX is then inside the image's temporary mount, which is
+    gone once GobboNet closes, so an entry naming it did nothing at the next
+    login (1.7.8 to 1.8.0). The runtime gives APPIMAGE and APPDIR to everything
+    it starts; PREFIX has to be inside APPDIR for them to be about GobboNet."""
+    image, appdir = os.environ.get('APPIMAGE', ''), os.environ.get('APPDIR', '')
+    if image and appdir and Path(appdir).resolve() in PREFIX.parents:
+        return image
+    return str(PREFIX / 'gobbonet-launch')
+
 class Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self, *_):
         pass
@@ -119,12 +207,26 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.wfile.write((PREFIX / 'wizard.html').read_bytes())
             return
         try:
-            if self.path == '/api/extras':
+            route = urllib.parse.urlsplit(self.path)
+            if route.path == '/api/scan':
+                # The Install location step asks what a typed folder holds, so
+                # someone pointing it at a model collection sees it was found.
+                # Counts only -- never names -- and only on the PC (Host check).
+                raw = urllib.parse.parse_qs(route.query).get('path', [''])[0]
+                folder = Path(raw).expanduser() if raw.strip() else None
+                if folder is None or not folder.is_absolute():
+                    self.reply(200, {'absolute': False, 'exists': False, 'models': 0, 'models_sub': 0})
+                    return
+                top, sub = count_models(folder) if folder.is_dir() else (0, 0)
+                self.reply(200, {'absolute': True, 'exists': folder.is_dir(),
+                                 'models': top, 'models_sub': sub})
+            elif self.path == '/api/extras':
                 self.reply(200, extra)
             elif self.path == '/api/state':
                 code, state = proxy(self.path)
                 state.update(data_dir=get('data_dir'), listen_port=int(get('listen_port')),
                              model_dir=get('model_dir'))
+                state['models_found'], state['models_sub'] = count_models(Path(state['model_dir']))
                 self.reply(code, state)
             elif self.path in ('/api/download', '/api/gpu'):
                 self.reply(*proxy(self.path))
@@ -134,7 +236,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.reply(500, {'error': str(e)})
 
     def do_POST(self):
-        global mode, extra
+        global mode, extra, added_dirs
         origin = f'http://127.0.0.1:{self.server.server_port}'
         if (self.headers.get('Host') != origin[7:] or
             self.headers.get('Origin', origin) != origin or
@@ -149,20 +251,43 @@ class Handler(http.server.BaseHTTPRequestHandler):
             req = json.loads(body)
             with lock:
                 if self.path == '/api/location':
-                    path = Path(req['path']).expanduser()
-                    if not path.is_absolute():
-                        raise ValueError('Choose an absolute folder path.')
-                    if path != Path(get('data_dir')) and (Path(get('data_dir')) / 'setup-complete.json').exists():
+                    # Two folders since 1.8.0 (issue #68): data (chats, config
+                    # state, downloads) and models. model_dir is stored exactly
+                    # as chosen -- it used to be <folder>/models whatever was
+                    # chosen, so pointing setup at a model collection gave an
+                    # empty subfolder. {path} alone is the old one-folder form.
+                    data_raw = req.get('data', req.get('path')) or ''
+                    models_raw = req.get('models') or ''
+                    data = Path(data_raw).expanduser()
+                    if not data_raw.strip() or not data.is_absolute():
+                        raise ValueError('Choose an absolute path for the data folder, like /home/you/GobboNet.')
+                    models = Path(models_raw).expanduser() if models_raw.strip() else data / 'models'
+                    if not models.is_absolute():
+                        raise ValueError('Choose an absolute path for the models folder, like /home/you/models.')
+                    if data != Path(get('data_dir')) and (Path(get('data_dir')) / 'setup-complete.json').exists():
                         raise ValueError('Existing installation: keep this folder to preserve your data. Move it separately before changing it.')
-                    path.mkdir(parents=True, exist_ok=True, mode=0o700)
-                    probe = path / '.gobbonet-write-test'
-                    with probe.open('x') as out:
-                        out.write('test')
-                    probe.unlink()
-                    put('data_dir', path)
-                    put('model_dir', path / 'models')
+                    writable(data, 'data')
+                    # Downloads land in the models folder, so it is write-tested
+                    # too. Nothing already in it is touched.
+                    writable(models, 'models')
+                    top, sub = count_models(models)
+                    put('data_dir', data)
+                    put('model_dir', models)
+                    # The model menu lists the top of the models folder. Models
+                    # one folder down (a collection sorted by maker) are offered
+                    # under Add a Model > Found on this computer, which reads
+                    # model_dirs, and are linked into the models folder from there.
+                    before = get_list('model_dirs')
+                    dirs = [d for d in before if d not in added_dirs]
+                    added_dirs = []
+                    if sub and str(models) not in dirs:
+                        dirs.append(str(models))
+                        added_dirs = [str(models)]
+                    if dirs != before:
+                        put_list('model_dirs', dirs)
                     start()
-                    self.reply(200, {'ok': True})
+                    self.reply(200, {'ok': True, 'model_dir': str(models),
+                                     'models_found': top, 'models_in_subfolders': sub})
                 elif self.path == '/api/port':
                     port = int(req['port'])
                     if not 1024 <= port <= 65535 or port in (11436, 11437):
@@ -191,19 +316,26 @@ class Handler(http.server.BaseHTTPRequestHandler):
                             code, download = proxy('/api/download')
                             if download.get('state') in ('running', 'error'):
                                 raise ValueError('Finish or retry the model download first.')
-                            models = list(Path(get('model_dir')).glob('*.gguf'))
-                            valid = False
-                            for model in models:
-                                with model.open('rb') as f:
-                                    valid |= f.read(4) == b'GGUF' and model.stat().st_size > 1024
+                            folder = Path(get('model_dir'))
+                            valid = any(is_gguf(m) for m in model_files(folder))
+                            # A collection one folder down is enough when setup
+                            # put it in model_dirs: the chat opens with it under
+                            # Add a Model > Found on this computer.
+                            if not valid and str(folder) in get_list('model_dirs'):
+                                try:
+                                    subs = [e.path for e in os.scandir(folder)
+                                            if e.is_dir() and not e.name.startswith('.')][:SUB_CAP]
+                                except OSError:
+                                    subs = []
+                                valid = any(is_gguf(m) for d in subs for m in model_files(d))
                             if not valid:
-                                raise ValueError('Download a model, or put your GGUF in ' + get('model_dir'))
+                                raise ValueError('Download a model, or put your GGUF in ' + str(folder))
                     result = proxy(self.path, body)
                     if self.path == '/api/backend' and result[0] == 200:
                         mode = req['mode']
                     if self.path == '/api/finish' and result[0] == 200 and req.get('autostart'):
                         desktop = Path(os.environ.get('XDG_CONFIG_HOME', str(Path.home() / '.config'))) / 'autostart/gobbonet.desktop'
-                        launcher = str(PREFIX / 'gobbonet-launch')
+                        launcher = login_program()
                         escaped = launcher.replace('\\', '\\\\').replace('"', '\\"').replace('`', '\\`').replace('$', '\\$').replace('%', '%%')
                         try:
                             text = desktop.read_text()

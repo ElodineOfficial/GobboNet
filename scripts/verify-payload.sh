@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Check a staged package payload against payload.manifest.
 #
-#   ./verify-payload.sh <libdir> <label>
+#   bash ./verify-payload.sh <libdir> <label>
 #
 # <libdir> is the directory that becomes /usr/lib/gobbonet on Debian or
 # /usr/lib64/gobbonet on Fedora. <label> is what to call it in messages.

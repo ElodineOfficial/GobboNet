@@ -76,7 +76,24 @@ func minPasswordLength(cfg *config.Config) int {
 }
 
 func main() {
-	if err := run(os.Args[1:]); err != nil {
+	err := run(os.Args[1:])
+	// RESTART NOW (the update button, 1.8.0). Here, after cmdServe has
+	// returned, because its deferred clean-up -- the engine, the history
+	// lock -- has to be finished before the new program starts.
+	var restart errRestart
+	if errors.As(err, &restart) {
+		if rerr := restartInto(restart); rerr != nil {
+			fmt.Fprintf(os.Stderr, "\n [ERROR] the update is installed, but it could not be started: %v\n", rerr)
+			fmt.Fprintf(os.Stderr, "         Start GobboNet again as you usually do; the new version will run.\n")
+			os.Exit(1)
+		}
+		// Windows only: elsewhere restartInto does not return. 3 tells
+		// launch.bat, which ran this process and waits on it, that the new
+		// one has taken over the window rather than that GobboNet stopped.
+		fmt.Println(" [OK] the updated GobboNet is starting in this window")
+		os.Exit(exitRestarted)
+	}
+	if err != nil {
 		// A silent error is a status answer, not a failure to report: the
 		// caller wants the exit code and nothing on the terminal.
 		if _, quiet := err.(errSilent); quiet {
@@ -179,8 +196,16 @@ func run(argv []string) error {
 	case "decrypt":
 		return cmdDecrypt(argv)
 	case "version", "-v", "--version":
+		// --json is what the updater runs a new program with before it puts
+		// it in place (cmd/gobbonet/update.go).
+		if len(argv) == 1 && argv[0] == "--json" {
+			printVersionJSON(os.Stdout)
+			return nil
+		}
 		fmt.Println(version.Full())
 		return nil
+	case "update":
+		return cmdUpdate(argv)
 	case "help", "-h", "--help":
 		usage()
 		return nil
@@ -196,7 +221,8 @@ func usage() {
   gobbonet [serve] [--config PATH] [--no-auth] [--host H] [--port N] [--open]
                    [--model FILE.gguf]
   gobbonet set-password [--config PATH] [--stdin]
-  gobbonet launch [--config PATH] [--setup]  (desktop launch; opens the browser.
+  gobbonet launch [--config PATH] [--setup] [--no-browser]  (desktop launch;
+                   opens the browser unless open_browser = false.
                    --setup: Windows engine and model setup)
   gobbonet setup [--config PATH] [--catalog PATH] [--server-exe PATH]
                  [--no-browser] [--force]
@@ -205,12 +231,14 @@ func usage() {
   gobbonet check [--config PATH]
   gobbonet doctor [--config PATH]
   gobbonet engine install|status [--config PATH] [--dir PATH]
-  gobbonet config get [--config PATH] <key>
-  gobbonet config set [--config PATH] <key> <value>
+  gobbonet config get [--config PATH] [--json] <key>
+  gobbonet config set [--config PATH] <key> <value>   (a list: words, or a JSON array)
   gobbonet config keys
   gobbonet keyring init|list|set-recovery|recover [--config PATH]
   gobbonet decrypt [--config PATH] [--yes]
-  gobbonet version
+  gobbonet update check [--config PATH]    (what ABOUT > CHECK FOR UPDATES finds)
+  gobbonet update keygen|manifest|sign|verify  (publishing a release; docs/UPDATES.md)
+  gobbonet version [--json]
 `)
 }
 
@@ -374,7 +402,10 @@ func cmdServe(argv []string) error {
 
 	var sup *supervisor.Supervisor
 	if mode == config.ModeLocal {
+		device := startupDevice(cfg)
 		sup, err = supervisor.New(supervisor.Options{
+			Device:        device,
+			PrimeOffload:  cfg.GPUPrimeOffload && runtime.GOOS == "linux",
 			ServerExe:     cfg.ServerExe,
 			GPUReserveMiB: cfg.GPUReserveMiB,
 			ModelDir:      cfg.ModelDir,
@@ -458,6 +489,13 @@ func cmdServe(argv []string) error {
 			// user can pick a different model from the dropdown — which is more
 			// useful than exiting and making them read a log.
 			fmt.Printf(" [!]  llama-server did not start: %v\n", err)
+			// The plain sentence for a known cause (1.8.0, #67), and where the
+			// engine's whole account is.
+			var le *supervisor.LoadError
+			if errors.As(err, &le) && supervisor.CauseAdvice(le.Cause) != "" {
+				fmt.Printf("      %s\n", supervisor.CauseAdvice(le.Cause))
+			}
+			fmt.Printf("      The engine's full log: %s\n", cfg.LogFile())
 		} else {
 			fmt.Printf(" [OK] model loaded: %s\n", sup.CurrentFile())
 		}
@@ -481,6 +519,10 @@ func cmdServe(argv []string) error {
 			fmt.Printf(" [OK] model: %s (family=%s, thinking=%s)\n", rec.Name, rec.Family, rec.ThinkingFormat)
 		}
 	}
+
+	// After the chat model, so it is fitted to the GPU first (embed.go).
+	startEmbedding(os.Stdout, cfg, srv, sup)
+	reportMCPStartup(os.Stdout, cfg)
 
 	// Bind before the banner. A port that is already taken is the single most
 	// common startup failure and it used to print underneath "[OK] serving on
@@ -554,7 +596,33 @@ func cmdServe(argv []string) error {
 		os.Exit(0)
 	}()
 
-	return srv.Serve(bind.Listener)
+	// The update button (1.8.0). An earlier update kept the program it
+	// replaced until this one was serving; it can go now. RESTART NOW stops
+	// serving and returns errRestart, which main acts on once every defer
+	// above has run.
+	finishUpdate(os.Stdout, srv.UpdatePlace())
+	restartWanted := make(chan struct{}, 1)
+	srv.SetRestart(func() {
+		select {
+		case restartWanted <- struct{}{}:
+		default:
+		}
+	})
+	served := make(chan error, 1)
+	go func() { served <- srv.Serve(bind.Listener) }()
+	select {
+	case err := <-served:
+		return err
+	case <-restartWanted:
+	}
+	fmt.Println("\n [..] restarting into the update")
+	signal.Stop(stop)
+	// A reply still streaming gets a few seconds; the page that pressed the
+	// button has already had its answer.
+	srv.StopServing(5 * time.Second)
+	<-served
+	place := srv.UpdatePlace()
+	return errRestart{path: place.Path, args: restartArgs(os.Args[1:])}
 }
 
 // lanAddrNote is the parenthetical after an address: which adapter it belongs
@@ -982,14 +1050,32 @@ func cmdConfig(argv []string) error {
 		return nil
 
 	case "get":
-		if len(rest) < 1 {
-			return errors.New("usage: gobbonet config get [--config PATH] <key>")
+		asJSON := false
+		keys := rest[:0:0]
+		for _, a := range rest {
+			if a == "--json" || a == "-json" {
+				asJSON = true
+				continue
+			}
+			keys = append(keys, a)
+		}
+		if len(keys) < 1 {
+			return errors.New("usage: gobbonet config get [--config PATH] [--json] <key>")
 		}
 		cfg, err := loadConfig(configPath)
 		if err != nil {
 			return err
 		}
-		value, err := cfg.Get(rest[0])
+		if asJSON {
+			// Lists as a JSON array, so an item with a space in it survives.
+			raw, err := cfg.GetJSON(keys[0])
+			if err != nil {
+				return err
+			}
+			fmt.Println(string(raw))
+			return nil
+		}
+		value, err := cfg.Get(keys[0])
 		if err != nil {
 			return err
 		}
@@ -1187,4 +1273,27 @@ func workDirOf() string {
 		return ""
 	}
 	return wd
+}
+
+// startupDevice resolves gpu_device for this start (1.8.0, #72). "auto" -- the
+// default -- needs no probe at all; a named device is checked against the
+// engine's own list first, and one that is not there falls back to automatic
+// with a warning, so a card that was removed never stops GobboNet starting.
+func startupDevice(cfg config.Config) string {
+	want := strings.TrimSpace(cfg.GPUDevice)
+	if want == "" || strings.EqualFold(want, "auto") || strings.EqualFold(want, "none") {
+		arg, _ := engine.ResolveDevice(want, nil, nil)
+		if arg == "none" {
+			fmt.Println(" [OK] gpu_device = none: the model runs on the CPU only")
+		}
+		return arg
+	}
+	devs, perr := engine.ProbeDevices(cfg.ServerExe)
+	arg, warning := engine.ResolveDevice(want, devs, perr)
+	if warning != "" {
+		fmt.Printf(" [!]  %s\n", warning)
+	} else {
+		fmt.Printf(" [OK] gpu_device = %s\n", arg)
+	}
+	return arg
 }

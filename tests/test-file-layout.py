@@ -64,12 +64,13 @@ check('scripts/stage-web.sh works when called from another directory', out.retur
 mz = (ROOT / 'scripts' / 'make-zip.sh').read_text()
 check('make-zip.sh puts PATCH-README.txt at the archive root', 'cp scripts/PATCH-README.txt "$TOP/PATCH-README.txt"' in mz)
 check('make-zip.sh ships catalog/ and scripts/', ' scripts engine.sha256 .gitignore catalog ' in mz)
+check('make-zip.sh ships .github/ (the issue forms and PR template, 1.8.0)', ' CONTRIBUTING.md .github ' in mz and '\n.github/\n' in mz)
 check('make-zip.sh no longer copies installer/', ' internal installer ' not in mz)
 
 print('root')
 for rel in ('launch.bat', 'setup-lan.bat', 'teardown-lan.bat', 'stop-gobbonet.bat', 'Repair Windows shortcuts.bat',
             'repair-windows-shortcuts.ps1', 'hardware-probe.ps1', 'hw-recommend.ps1', 'identify-model.ps1',
-            'fileserver.ps1', 'chat.html', 'engine.sha256', 'VERSION'):
+            'chat.html', 'engine.sha256', 'VERSION'):
     check(f'{rel} stays at the root (Windows runtime / shared pin)', (ROOT / rel).is_file())
 gi = (ROOT / '.gitignore').read_text()
 for rel in ('/NO-ENGINE-IN-THIS-ZIP.txt', '/SHA256SUMS.txt', '/START-HERE.md'):
@@ -80,9 +81,29 @@ arch = ROOT / 'docs' / 'archive'
 check('investigations and roadmaps are archived', len(list(arch.glob('INVESTIGATION-*.md'))) >= 5 and len(list(arch.glob('ROADMAP-*.md'))) >= 2)
 check('none left at docs/', not list((ROOT / 'docs').glob('INVESTIGATION-*.md')) and not list((ROOT / 'docs').glob('ROADMAP-*.md')))
 
-print('legacy server')
-check('launch.bat warns the PowerShell server is deprecated', 'DEPRECATED: the legacy PowerShell server' in (ROOT / 'launch.bat').read_bytes().decode('latin-1'))
-check('fileserver.ps1 says so when it starts', 'DEPRECATED: fileserver.ps1' in (ROOT / 'fileserver.ps1').read_text())
+print('legacy server (removed in 1.8.0; tests/test-legacy-removal.py has the rest)')
+check('fileserver.ps1 is gone from the tree', not (ROOT / 'fileserver.ps1').exists())
+check('make-zip.sh neither requires nor copies it', 'fileserver' not in mz)
+
+print('gitignore')
+# A source file that .gitignore swallows is dropped, silently, by the `git add
+# -A` that follows extracting a release zip over a checkout. The bare `models/`
+# pattern did this to every new file in internal/models/ (fb9d56c, "Restore
+# missing internal/models source files"; again in 1.8.0 round 2).
+gi_lines = [l.strip() for l in (ROOT / '.gitignore').read_text().splitlines()]
+check('.gitignore keeps internal/models/ (the Go package) out of the models/ rule',
+      'models/' not in gi_lines or '!internal/models/' in gi_lines[gi_lines.index('models/'):])
+if (ROOT / '.git').exists() and subprocess.run(['git', '--version'], capture_output=True).returncode == 0:
+    SOURCE = ('*.go', '*.js', '*.mjs', '*.py', '*.css', '*.html', '*.md', '*.sh', '*.bat', '*.ps1', '*.yml', '*.json', '*.nsi', '*.spec')
+    out = subprocess.run(['git', '-C', str(ROOT), 'ls-files', '--others', '--ignored', '--exclude-standard', '--', *SOURCE],
+                         capture_output=True, text=True)
+    # Generated or scratch on purpose: the staged page, build output, caches.
+    meant = ('internal/webui/assets/', 'dist/', 'linux-amd64/web/', 'installer-linux/vendor/', 'installer-linux/stage',
+             'installer-linux/dist/', 'installer-fedora/rpmbuild/', 'installer-fedora/dist/', 'installer-win/payload/')
+    hidden = [f for f in out.stdout.splitlines() if f and not f.startswith(meant) and '/__pycache__/' not in f and not f.startswith('tmp')]
+    check('no source file in the tree is hidden by .gitignore', out.returncode == 0 and not hidden, ', '.join(hidden[:10]))
+else:
+    print('  SKIP    no git checkout here, so nothing for .gitignore to hide')
 
 print('\n%s' % ('all passed' if not failures else '%d FAILED' % failures))
 sys.exit(1 if failures else 0)

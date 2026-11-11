@@ -15,6 +15,13 @@ interpreter (`bash x.sh`, `python3 x.py`), never as a bare path and never
 behind `[ -x ... ]`. That is what this file pins.
 
 Roadmap 1.7.7 item #11; see docs/changelog/CHANGELOG-1.7.7-build-scripts.md.
+
+1.8.0 adds the other half (roadmap item #2): the COMMANDS WE TELL PEOPLE TO
+TYPE. 1.7.7 left `./scripts/make-zip.sh` in the docs on the grounds that the bit
+would make it work, and by 1.7.9 every build script had lost the bit again. So
+every documented run of a repo script goes through its interpreter too --
+`bash ./scripts/make-zip.sh` -- which works whatever the file mode is. See
+docs/changelog/CHANGELOG-1.8.0-script-modes.md.
 """
 from pathlib import Path
 import re
@@ -48,6 +55,46 @@ def build_scripts():
             continue
         out.append(p)
     return out
+
+
+# A repo script named as ./path.sh or ./path.py in text a PERSON reads: docs,
+# usage comments, the messages a script prints, ../x.sh as much as ./x.sh. It
+# is fine only when the word before it is its interpreter (`bash ./x.sh`,
+# `sudo bash ./x.sh`, `python3 ./x.py`). Prose that merely names a script
+# leaves off the ./ (`scripts/make-zip.sh builds both`).
+DOC_PATH = re.compile(r'(?<![\w./-])\.\.?/[\w./-]+\.(?:sh|py)\b')
+INTERPRETER = re.compile(r'(?:^|[\s`(])(?:bash|python3)\s+$')
+
+# History is left as it was written: changelogs and archived notes quote the
+# commands of their day. tests/ holds the patterns themselves as test data;
+# its README is a doc like any other and is checked.
+DOC_SKIP = (('docs', 'changelog'), ('docs', 'archive'), ('tests',))
+
+
+def doc_files():
+    out = []
+    for pattern in ('*.md', '*.txt', '*.sh'):
+        for p in ROOT.rglob(pattern):
+            rel = p.relative_to(ROOT)
+            if SKIP_DIRS.intersection(rel.parts[:-1]):
+                continue
+            if rel.parts[:3] == ('internal', 'webui', 'assets'):
+                continue
+            if any(rel.parts[:len(s)] == s for s in DOC_SKIP) and rel != Path('tests', 'README.md'):
+                continue
+            out.append(p)
+    return sorted(set(out))
+
+
+def doc_offences(text):
+    """(line number, line) for every ./script a person is told to run bare."""
+    found = []
+    for n, line in enumerate(text.splitlines(), 1):
+        for m in DOC_PATH.finditer(line):
+            if not INTERPRETER.search(line[:m.start()]):
+                found.append((n, line.strip()))
+                break
+    return found
 
 
 def offences(text):
@@ -102,6 +149,48 @@ class BuildScripts(unittest.TestCase):
                 bad.append(f'{p.relative_to(ROOT)}:{n}: {code}')
         self.assertEqual(bad, [], '\nrun scripts through bash/python3, not as a path '
                          'or behind [ -x ]:\n  ' + '\n  '.join(bad))
+
+    def test_the_docs_check_recognises_what_it_exists_to_catch(self):
+        # Lines from the 1.7.9 tree that told people to run a script bare.
+        for line in (
+            '- **ZIP:** `./scripts/make-zip.sh` builds both servers and refuses to produce an',
+            'cd installer-linux && ./build-deb.sh  # gobbonet_<VERSION>+go.<sha>-1_amd64.deb',
+            'SKIP_ENGINE_FETCH=1 ./build-deb.sh          # uses installer-linux/vendor/',
+            '#   ./scripts/make-zip.sh --no-engine     same, without the bundled llama.cpp engine',
+            '#   sudo ./test-in-fedora.sh --root DIR --rpm PKG.rpm --python CPYTHON.tar.gz \\',
+            'pip install gguf numpy && ./make-test-model.py test-model.gguf   # < 1 MB',
+            'echo "  Other platforms (linux/arm64, darwin) come from ./scripts/build-release.sh."',
+            '#   ./build-deb.sh && ./build-appimage.sh      the newest dist/gobbonet_*_amd64.deb',
+            'bash ./build-deb.sh && ./build-appimage.sh',
+            '../scripts/build-release.sh          # produces dist/<version>/...-linux-amd64.tar.gz',
+        ):
+            with self.subTest(line=line):
+                self.assertTrue(doc_offences(line), 'not recognised as a bare command: ' + line)
+        for line in (
+            'bash ./scripts/make-zip.sh --no-engine',
+            '- **ZIP:** `bash ./scripts/make-zip.sh` builds both servers',
+            'cd installer-linux && bash ./build-deb.sh',
+            'SKIP_ENGINE_FETCH=1 bash ./build-deb.sh',
+            '#   sudo bash ./test-in-fedora.sh --root DIR',
+            'pip install gguf numpy && python3 ./make-test-model.py test-model.gguf',
+            'bash ./build-deb.sh && bash ./build-appimage.sh',
+            'Other platforms come from scripts/build-release.sh.',
+            'bash ../scripts/build-release.sh     # produces dist/<version>/...',
+            'use dist/ from scripts/build-release.sh',
+            'cd GobboNet && ./gobbonet',
+        ):
+            with self.subTest(line=line):
+                self.assertFalse(doc_offences(line), 'wrongly flagged: ' + line)
+
+    def test_no_doc_tells_people_to_run_a_script_by_its_executable_bit(self):
+        files = doc_files()
+        self.assertTrue(any(p.name == 'BUILDING.md' for p in files), 'docs/BUILDING.md is not being checked')
+        bad = []
+        for p in files:
+            for n, line in doc_offences(p.read_text(errors='replace')):
+                bad.append(f'{p.relative_to(ROOT)}:{n}: {line}')
+        self.assertEqual(bad, [], '\nwrite these as `bash ./x.sh` or `python3 ./x.py` '
+                         '(or name the script without ./):\n  ' + '\n  '.join(bad))
 
     def test_every_build_script_parses(self):
         for p in build_scripts():

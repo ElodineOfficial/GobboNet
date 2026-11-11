@@ -3,7 +3,7 @@
 //
 // This replaces three scattered sources that used to disagree with each other:
 // the CONFIG block at the top of launch.bat, the Get-EnvOrDefault block at the
-// top of fileserver.ps1, and the GEMMA_* environment variables launch.bat
+// top of the 1.7 PowerShell server, and the GEMMA_* environment variables launch.bat
 // exported to bridge the two. One file, one parser, one source of truth.
 //
 // Discovery order (first hit wins):
@@ -33,7 +33,9 @@ import (
 	"github.com/BurntSushi/toml"
 
 	"github.com/ElodineOfficial/GobboNet/internal/catalog"
+	"github.com/ElodineOfficial/GobboNet/internal/engine"
 	"github.com/ElodineOfficial/GobboNet/internal/mods"
+	"github.com/ElodineOfficial/GobboNet/internal/update"
 )
 
 // Mode is what the server does about llama.cpp: supervise it, or just proxy to
@@ -142,12 +144,43 @@ type Config struct {
 	// rebinding attack can't reach a server bound to 0.0.0.0.
 	AllowedHosts []string `toml:"allowed_hosts"`
 
+	// OpenBrowser opens the chat in a browser when GobboNet starts (1.8.0, PR
+	// #58): `gobbonet launch` (the shortcuts), launch.bat's hand-over, "Setup or
+	// add a model", the Linux launcher and `gobbonet setup` all read it, and a
+	// --no-browser flag beats it. Off is for someone who keeps a tab open or
+	// uses GobboNet from a phone. CONFIG > Basics sets it from any signed-in
+	// device: it decides nothing but whether a tab opens on the PC.
+	//
+	// A plain bool for the same reason as ModelCatalogRemote: Load seeds from
+	// Default(), so an absent key keeps the default (true) and `config set`
+	// can format it.
+	OpenBrowser bool `toml:"open_browser"`
+
 	// --- Local backend (hot-swap) ------------------------------------------
 	ServerExe     string `toml:"server_exe"`
 	GPULayers     int    `toml:"gpu_layers"`
 	GPUReserveMiB int    `toml:"gpu_reserve_mib"`
 	CtxSize       int    `toml:"ctx_size"`
 	KVCacheType   string `toml:"kv_cache_type"`
+	// GPUDevice is which GPU the engine uses (1.8.0, #72): "auto", "none", or
+	// device IDs as llama-server --list-devices names them ("Vulkan1",
+	// "CUDA0,CUDA1"). See internal/engine/gpuchoice.go.
+	GPUDevice string `toml:"gpu_device"`
+	// GPUPrimeOffload sets the PRIME render-offload pair on the engine process,
+	// so a hybrid laptop's NVIDIA card is used from a menu launch, which never
+	// goes through prime-run. Linux only; off by default.
+	GPUPrimeOffload bool `toml:"gpu_prime_offload"`
+
+	// --- Embedding server (1.8.0, #15) ---------------------------------------
+	// EmbedMode is who runs the embedding server semantic search uses:
+	// "managed" (this program starts and watches it on embed_url's port),
+	// "external" (something else does; embed_url as is), or "off".
+	EmbedMode string `toml:"embed_mode"`
+	// EmbedModel is the embedding GGUF. Empty means GobboNet's own
+	// (EmbedModelFile), found by EmbedModelPath and checked against its pin.
+	EmbedModel     string `toml:"embed_model"`
+	EmbedGPULayers int    `toml:"embed_gpu_layers"`
+	EmbedCtx       int    `toml:"embed_ctx"`
 
 	// --- Directories -------------------------------------------------------
 	ModelDir string `toml:"model_dir"`
@@ -194,6 +227,13 @@ type Config struct {
 	// checked against the SHA-256 the list pins. Empty switches it off. See
 	// internal/mods/endorsed.go.
 	ModListURL string `toml:"mod_list_url"`
+
+	// UpdateReleasesURL is the release list ABOUT > CHECK FOR UPDATES asks
+	// (1.8.0): GitHub's, or one shaped like it. Asked only when the button is
+	// pressed, as a plain GET with nothing about the install; only a release
+	// signed with a key built into the program can be installed from it. See
+	// internal/update. Empty switches the button off.
+	UpdateReleasesURL string `toml:"update_releases_url"`
 
 	// RequireChecksum refuses to download a model that no source can vouch
 	// for, instead of falling back to the size floor.
@@ -287,6 +327,13 @@ type Config struct {
 	// it no longer applies; the gap between chunks has its own watchdog.
 	ReplyStartTimeoutSeconds int `toml:"reply_start_timeout_seconds"`
 
+	// MCPCallTimeoutSeconds bounds one MCP tool call (1.8.0, #16). The call is
+	// cancelled at the server and the character is told it ran out of time.
+	MCPCallTimeoutSeconds int `toml:"mcp_call_timeout_seconds"`
+	// MCPServers are the [[mcp_server]] tables: programs GobboNet may start
+	// to give characters tools. See mcp.go and internal/mcp.
+	MCPServers []MCPServer `toml:"mcp_server"`
+
 	// --- Not from the file -------------------------------------------------
 	// AutoCtxSize, AutoGPULayers and AutoKVCacheType are what config.toml said
 	// before perf.toml was overlaid — the hardware-detected baseline the
@@ -326,10 +373,13 @@ func Default() Config {
 		LLMURL:        DefaultLLMURL,
 		SearchURL:     DefaultSearchURL,
 		EmbedURL:      DefaultEmbedURL,
+		EmbedMode:     EmbedManaged,
+		EmbedCtx:      DefaultEmbedCtx,
 		ListenHost:    DefaultListenHost,
 		ListenPort:    DefaultListenPort,
 		GPULayers:     DefaultGPULayers,
 		GPUReserveMiB: 1024,
+		GPUDevice:     "auto",
 		CtxSize:       DefaultCtxSize,
 		KVCacheType:   DefaultKVCacheType,
 		// Left empty on purpose: normalise() then resolves it to
@@ -351,6 +401,7 @@ func Default() Config {
 		JobMaxAgeHours:           DefaultJobMaxAgeHours,
 		ModelLoadTimeoutSeconds:  DefaultModelLoadTimeoutSeconds,
 		ReplyStartTimeoutSeconds: DefaultReplyStartTimeoutSeconds,
+		MCPCallTimeoutSeconds:    DefaultMCPCallTimeoutSeconds,
 		RequireAuth:              true,
 		// The catalogue fetch is on by default. It is the only thing besides
 		// web search that leaves the machine, it is a plain GET of a static
@@ -360,6 +411,7 @@ func Default() Config {
 		ModelCatalogURL:    catalog.DefaultURL,
 		ModelCatalogRemote: true,
 		ModListURL:         mods.DefaultListURL,
+		UpdateReleasesURL:  update.DefaultReleasesURL,
 		// Explicitly false: see the field comment. Stated here rather than
 		// left to the zero value so that flipping the default later is a
 		// visible edit in this list.
@@ -367,6 +419,8 @@ func Default() Config {
 		// On: it reads folders on this machine and nothing else, and only
 		// when the Add a Model window asks.
 		ScanHFCache: true,
+		// On, as every launcher behaved before the setting existed.
+		OpenBrowser: true,
 	}
 }
 
@@ -489,6 +543,8 @@ func Load(path string) (Config, error) {
 			key := k.String()
 			if near := nearestKey(key); near != "" {
 				typos = append(typos, key+" (did you mean "+near+"?)")
+			} else if near := mcpTypo(key); near != "" {
+				typos = append(typos, key+" (did you mean "+near+"?)")
 			} else {
 				future = append(future, key)
 			}
@@ -587,7 +643,7 @@ func editDistance(a, b string) int {
 }
 
 // applyEnv lets environment variables override the file. GOBBONET_* is the
-// current spelling; the GEMMA_* names fileserver.ps1 read are still honoured so
+// current spelling; the GEMMA_* names the 1.7 PowerShell server read are still honoured so
 // an existing Windows-side setup carries over, but each one warns once.
 func (c *Config) applyEnv() {
 	envStr := func(key string, dst *string) {
@@ -625,6 +681,7 @@ func (c *Config) applyEnv() {
 	envStr("LLM_URL", &c.LLMURL)
 	envStr("SEARCH_URL", &c.SearchURL)
 	envStr("EMBED_URL", &c.EmbedURL)
+	envStr("EMBED_MODE", &c.EmbedMode)
 	envStr("LLM_API_KEY", &c.LLMAPIKey)
 	envStr("LISTEN_HOST", &c.ListenHost)
 	envInt("LISTEN_PORT", &c.ListenPort)
@@ -655,6 +712,18 @@ func warnDeprecated(old, current string) {
 func (c *Config) normalise() error {
 	if c.GPUReserveMiB < 0 || c.GPUReserveMiB > 65536 {
 		return fmt.Errorf("gpu_reserve_mib must be between 0 and 65536")
+	}
+	if strings.TrimSpace(c.GPUDevice) == "" {
+		c.GPUDevice = "auto"
+	}
+	if !engine.ValidDeviceSetting(c.GPUDevice) {
+		return fmt.Errorf(`gpu_device must be "auto", "none", or device IDs as llama-server --list-devices names them (like "Vulkan1" or "CUDA0,CUDA1"), not %q`, c.GPUDevice)
+	}
+	if err := c.normaliseEmbed(); err != nil {
+		return err
+	}
+	if err := c.normaliseMCP(); err != nil {
+		return err
 	}
 	base := filepath.Dir(c.Path)
 
@@ -691,6 +760,9 @@ func (c *Config) normalise() error {
 	}
 	if c.ChatTemplateFile != "" {
 		c.ChatTemplateFile = resolveAgainst(base, c.ChatTemplateFile)
+	}
+	if c.EmbedModel != "" {
+		c.EmbedModel = resolveAgainst(base, c.EmbedModel)
 	}
 
 	if c.LLMAPIKeyFile != "" {
@@ -1065,6 +1137,11 @@ func dirWritable(dir string) (bool, error) {
 
 func (c *Config) StatePath() string { return filepath.Join(c.DataDir, "state.json") }
 func (c *Config) LogFile() string   { return filepath.Join(c.DataDir, "llama-server.log") }
+
+// EngineChoicePath is where the Linux launcher notes which engine build it
+// picked and why (1.8.0, #72): beside launch.log in the default data folder,
+// which the launcher knows before any config exists.
+func EngineChoicePath() string { return filepath.Join(DataDir(), "engine-choice") }
 
 // KeyringPath is the sidecar holding the wrapped data key. Its presence is what
 // "this install is encrypted" means: there is no flag in the config saying so,

@@ -11,6 +11,7 @@
 package server
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -29,6 +30,7 @@ import (
 
 	"github.com/ElodineOfficial/GobboNet/internal/auth"
 	"github.com/ElodineOfficial/GobboNet/internal/config"
+	"github.com/ElodineOfficial/GobboNet/internal/supervisor"
 )
 
 // newTestServer builds a server with auth disabled and temp directories.
@@ -685,12 +687,54 @@ func TestSwapInRemoteMode(t *testing.T) {
 	}
 }
 
+// The traversal case for /swap-model (1.8.0): through the real route, on a
+// server that has an engine to swap, a name that leaves the models folder is
+// refused with 400 before anything starts, and the answer does not say where
+// the models folder is. Before 1.8.0 "../outside.gguf" here was dispatched.
+func TestSwapRefusesNamesOutsideTheModelsFolder(t *testing.T) {
+	_, cfg := newTestServer(t)
+	if err := os.MkdirAll(cfg.ModelDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Dir(cfg.ModelDir)
+	if err := os.WriteFile(filepath.Join(root, "outside.gguf"), []byte("GGUF"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sup, err := supervisor.New(supervisor.Options{ModelDir: cfg.ModelDir, LLMURL: cfg.LLMURL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv, err := New(cfg, config.ModeLocal, sup)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, name := range []string{"../outside.gguf", `..\outside.gguf`, "sub/../../outside.gguf", filepath.Join(root, "outside.gguf"), "missing.gguf"} {
+		body, _ := json.Marshal(map[string]string{"file": name})
+		rec := do(t, srv, http.MethodPost, "/swap-model", bytes.NewReader(body))
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("POST /swap-model %q: got %d, want 400", name, rec.Code)
+		}
+		out := decode(t, rec)
+		if out["phase"] != "error" {
+			t.Errorf("POST /swap-model %q: phase %v, want error", name, out["phase"])
+		}
+		if msg, _ := out["message"].(string); strings.Contains(msg, cfg.ModelDir) || strings.Contains(msg, root) {
+			t.Errorf("POST /swap-model %q: the answer names a path on this PC: %q", name, msg)
+		}
+		st := decode(t, do(t, srv, http.MethodGet, "/swap-status", nil))
+		if st["phase"] != "idle" {
+			t.Errorf("after POST /swap-model %q, /swap-status phase is %v: something was started", name, st["phase"])
+		}
+	}
+}
+
 // --- Perf ------------------------------------------------------------------
 
 // js/02-model.js reads p.current.ctxSize, p.auto.gpuLayers, p.overridden and
 // p.modelMaxCtx by name. These are upstream's spellings, they are camelCase in
 // a codebase that is otherwise snake_case on the wire, and one shared frontend
-// file drives both this server and fileserver.ps1 — so they are pinned here
+// file drove both this server and the 1.7 PowerShell server — so they are pinned here
 // rather than left to whichever casing felt natural on the day.
 func TestPerfGetContract(t *testing.T) {
 	srv, cfg := newTestServer(t)
@@ -994,7 +1038,7 @@ func TestJobLifecycleAgainstDeadUpstream(t *testing.T) {
 			t.Errorf("poll response is missing the %q field", field)
 		}
 	}
-	// Chunks must be framed the way fileserver.ps1 frames them. js/03-generation.js
+	// Chunks must be framed the way the 1.7 PowerShell server framed them. js/03-generation.js
 	// reads chunk_b64 and nothing else, and its failure mode for an unrecognised
 	// payload is an infinite poll with no error — so pin the field name here
 	// rather than discover it as a hung UI.

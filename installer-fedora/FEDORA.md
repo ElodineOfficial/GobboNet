@@ -2,7 +2,7 @@
 
 Install the package with dnf:
 
-    sudo dnf install ./gobbonet-1.7.9-*.fedora.x86_64.rpm
+    sudo dnf install ./gobbonet-1.8.0-*.fedora.x86_64.rpm
 
 Then run `gobbonet` as yourself (not with sudo), or open GobboNet from the
 application menu. The first launch opens the setup wizard in your browser.
@@ -35,7 +35,8 @@ package never changes firewalld or SELinux policy. Keep SELinux enabled.
 Reference: https://docs.fedoraproject.org/en-US/quick-docs/firewalld/
 
 `gobbonet setup` reruns setup, `gobbonet doctor` provides diagnostics, and
-`gobbonet --no-browser` suppresses browser opening. If clicking the icon seems
+`gobbonet --no-browser` suppresses browser opening (`open_browser = false` in
+config.toml, or CONFIG > Basics, makes that the default). If clicking the icon seems
 to do nothing, the reason is in ~/.local/share/gobbonet/launch.log.
 
 **Removing.** `sudo dnf remove gobbonet` removes the program and leaves your
@@ -44,7 +45,7 @@ first -- it asks about the models separately -- and then remove the package.
 `gobbonet uninstall` ends by naming that command.
 
 This is an unsigned local RPM for Fedora x86_64. Its dependency resolution,
-installation, upgrade from 1.7.8, removal, first-run setup and a chat answered
+installation, upgrade from 1.7.9, removal, first-run setup and a chat answered
 by the bundled engine were tested against Fedora 43, 44, 45 and Rawhide.
 SELinux on a real desktop and GPU inference on real hardware still need testing
 on Fedora hardware.

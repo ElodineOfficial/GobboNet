@@ -10,7 +10,7 @@ nothing can clear.
 
 | Location | What is there | Cleared by |
 |---|---|---|
-| Browser storage on this PC | every thread, character, persona, macro, plus cached embeddings and retrieval telemetry | **Data → PURGE ALL** in the app |
+| Browser storage on this PC | every thread, character, group, persona, macro, plus cached embeddings and retrieval telemetry | **Data → PURGE ALL** in the app |
 | `state.json` in GobboNet's data folder, plus `state-<name>.json` device-sync backups | the server's mirror of the above, so a reload never loses a thread; encrypted if you turned encryption on | `gobbonet uninstall` (the Windows uninstaller runs it) |
 | `.gobbonet-state.json` and `.jobs\` in the install folder | the same mirror and generation spool from before 1.7; 1.7 reads the mirror in once and leaves the file | the Windows uninstaller |
 | Browser storage on a **phone or tablet** that connected | a full copy, held by that device | only that device |
@@ -30,7 +30,7 @@ LAN IP are four separate buckets. Clearing one does not touch the others.
 
 ### 1. In the app — the fast path
 
-**Data → PURGE ALL.** This deletes threads, characters, personas,
+**Data → PURGE ALL.** This deletes threads, characters, groups, personas,
 schedules, folders, macros, extensions, cached embeddings and retrieval
 telemetry from this browser, then resets to a clean install.
 
@@ -48,9 +48,11 @@ mirror or any other device.
 
 ### 2. The server-side mirror
 
-`gobbonet uninstall` removes it, along with the config and stored password,
-and asks before touching your models. The Windows uninstaller runs it for
-you, and asks about the models itself. Run it yourself to clear everything without
+`gobbonet uninstall` removes it, along with the config and stored password
+and the files GobboNet keeps beside them (its logs, what the update button
+downloads, and on Linux the embedding model setup fetched), and asks before
+touching your models. The Windows uninstaller runs it for you, and asks
+about the models itself. Run it yourself to clear everything without
 uninstalling the program: stop GobboNet first, then from the install folder
 on Windows,
 

@@ -94,8 +94,15 @@ function forkAt(messageIndex) {
     tags: [...(thread.tags || [])],
     forkSource: { threadId: thread.id, at: cutoff }
   };
+  // A branch of a group chat is a group chat, with the same group (1.8.0).
+  if (thread.groupId) {
+    newThread.groupId = thread.groupId;
+    newThread.groupName = thread.groupName;
+  }
 
   state.threads.unshift(newThread);
+  // A group round or AUTO belongs to the chat it began in (js/29-groups.js).
+  if (typeof groupLeftThread === 'function') groupLeftThread(newThread.id);
   state.activeThreadId = newThread.id;
 
   if (window.innerWidth <= 700 && state.sidebarOpen) {
@@ -152,6 +159,7 @@ function switchToBranch(threadId) {
   if (autoContinue && autoContinue.threadId !== threadId) {
     cancelAutoContinue('user switched to a branch');
   }
+  if (typeof groupLeftThread === 'function') groupLeftThread(threadId);
   state.activeThreadId = threadId;
   if (window.innerWidth <= 700 && state.sidebarOpen) {
     state.sidebarOpen = false;
@@ -211,7 +219,11 @@ function makeCastResolver(thread) {
         const found = cardById.get(stamped);
         if (found) return found;
         if (thread && thread.cardName) {
-          return { ...DEFAULT_CARD, id: null, name: thread.cardName, avatar: '' };
+          // cardName is the name of the conversation's OWN card. In a group
+          // chat a message stamped with another member's id is somebody
+          // else, and must not be shown under the first member's name.
+          const own = !(m && m.cardId) || m.cardId === thread.cardId || !thread.groupId;
+          return { ...DEFAULT_CARD, id: null, name: own ? thread.cardName : 'Former member', avatar: '' };
         }
       }
       return activeCard;
@@ -230,7 +242,70 @@ function makeCastResolver(thread) {
   };
 }
 
-function createThread() {
+/* ── Group chats (1.8.0) ──────────────────────────────────────────
+   A conversation started from a group carries `groupId`, and `groupName` as
+   the tombstone cardName is for a character. Nothing else about the group is
+   copied onto it: the members and their turn order are read from the group
+   as it is now, so editing the group changes its chats, as editing a
+   character does. A chat whose group was deleted is an ordinary chat again
+   -- its messages keep their own cardId, so the history still shows who
+   said what. The group itself is in js/04-state.js (GROUPS); whose turn it
+   is, js/29-groups.js. */
+
+/** The group a conversation belongs to, or null. */
+function threadGroup(thread) {
+  if (!thread || !thread.groupId || !Array.isArray(state.groups)) return null;
+  return state.groups.find(g => g && g.id === thread.groupId) || null;
+}
+
+/** Start a chat with a group: its members' opening messages, then your turn
+ *  (or theirs: js/29-groups.js). Returns the new conversation, or null when
+ *  the group has nobody in it who still exists. */
+function createGroupThread(groupId) {
+  const group = (state.groups || []).find(g => g && g.id === groupId);
+  if (!group) return null;
+  const present = (typeof groupMembers === 'function') ? groupMembers(group) : [];
+  if (!present.length) return null;
+  const host = present[0].card;
+  const persona = getActivePersona();
+  const thread = {
+    id: generateId(),
+    // Named after the group until your first message names it, as any chat's.
+    name: group.name || 'New Thread',
+    messages: [],
+    groupId: group.id,
+    groupName: group.name,
+    // The first member, for the paths that fall back to the conversation's
+    // own card: a message nothing stamped, and the export's cast list.
+    cardId: host.id,
+    cardName: host.name,
+    personaId: persona.id,
+    personaName: persona.name,
+    lore: '',
+    createdAt: Date.now(),
+    pinned: false,
+    folderId: null,
+    tags: [],
+    forkSource: null
+  };
+  if (typeof injectGroupGreetings === 'function') injectGroupGreetings(thread, group);
+  state.threads.unshift(thread);
+  if (typeof groupLeftThread === 'function') groupLeftThread(thread.id);
+  state.activeThreadId = thread.id;
+  if (autoContinue) cancelAutoContinue('user started a group chat');
+  if (window.innerWidth <= 700 && state.sidebarOpen) {
+    state.sidebarOpen = false;
+    updateSidebarVisibility();
+  }
+  saveState();
+  render();
+  applyActiveCardBackground();
+  const input = document.getElementById('msg-input');
+  if (input) input.focus();
+  return thread;
+}
+
+function createThread(opts) {
   const card = getActiveCard();
   const persona = getActivePersona();
   const thread = {
@@ -261,6 +336,7 @@ function createThread() {
   // screen renders as before.
   injectGreeting(thread, card);
   state.threads.unshift(thread);
+  if (typeof groupLeftThread === 'function') groupLeftThread(thread.id);
   state.activeThreadId = thread.id;
   // Auto-close sidebar on mobile after creating a thread
   if (window.innerWidth <= 700 && state.sidebarOpen) {
@@ -270,6 +346,10 @@ function createThread() {
   saveState();
   render();
   document.getElementById('msg-input').focus();
+  // A new chat follows its character's linked model, if it has one (#52) --
+  // but not one made by sending from the landing page: that message is
+  // already on its way, and a switch now would land under it.
+  if (!(opts && opts.fromSend) && typeof followModelForThread === 'function') followModelForThread(thread);
 }
 
 /* Activity-based ordering — float a thread to the top when it sees fresh
@@ -308,6 +388,7 @@ function deleteThread(id, event) {
   state.threads = state.threads.filter(t => t.id !== id);
   if (wasActive) {
     state.activeThreadId = state.threads.length > 0 ? state.threads[0].id : null;
+    if (typeof groupLeftThread === 'function') groupLeftThread(state.activeThreadId);
   }
   saveState();
   render();
@@ -340,6 +421,8 @@ function switchThread(id) {
   if (autoContinue && autoContinue.threadId !== id) {
     cancelAutoContinue('user switched threads');
   }
+  // A group's round, and its AUTO, belong to the chat they started in.
+  if (typeof groupLeftThread === 'function') groupLeftThread(id);
   state.activeThreadId = id;
   // Auto-close sidebar on mobile after selecting a thread
   if (window.innerWidth <= 700 && state.sidebarOpen) {
@@ -364,6 +447,8 @@ function switchThread(id) {
   if (typeof reconcileWithServer === 'function') {
     reconcileWithServer({ reason: 'switch', focus: id }).catch(() => {});
   }
+  // The model this chat last used, or its character's linked one (#52).
+  if (typeof followModelForThread === 'function') followModelForThread(getActiveThread());
 }
 
 function getActiveThread() {

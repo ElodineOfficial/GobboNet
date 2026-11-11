@@ -1481,9 +1481,24 @@ function mdFenceOpen(line) {
 }
 
 function mdExtractFences(raw, store) {
+  return mdScanFences(raw, (info, code, closed, quote, idx) =>
+    // The quote prefix is put BACK in front of the placeholder rather than
+    // dropped. It is the only thing that tells the later block pass this
+    // block belongs inside a <blockquote>, and by then escapeHtml will have
+    // turned it into the `&gt;` that MD_QUOTE_RE is looking for. Nesting
+    // survives too: `>> ` is stripped one level per recursion, as usual.
+    quote + mdStash(store, mdRenderFence(info, code, closed, idx), true));
+}
+
+/* The fence scanner itself, shared by the renderer above and by the Files
+   panel (1.8.0, js/27-files-panel.js), which must find exactly the blocks a
+   message shows, in the same order. `emit(info, code, closed, quote, idx)`
+   returns what replaces the block in the text; idx counts fences from 0. */
+function mdScanFences(raw, emit) {
   const lines = String(raw).split('\n');
   const out = [];
   let i = 0;
+  let idx = 0;
 
   while (i < lines.length) {
     const line = lines[i];
@@ -1518,23 +1533,29 @@ function mdExtractFences(raw, store) {
     }
 
     const code = body.join('\n').replace(/\r$/, '').replace(/\s+$/, '');
-    // The quote prefix is put BACK in front of the placeholder rather than
-    // dropped. It is the only thing that tells the later block pass this
-    // block belongs inside a <blockquote>, and by then escapeHtml will have
-    // turned it into the `&gt;` that MD_QUOTE_RE is looking for. Nesting
-    // survives too: `>> ` is stripped one level per recursion, as usual.
-    out.push(quote + mdStash(store, mdRenderFence(info, code, closed), true));
+    out.push(emit(info, code, closed, quote, idx++));
     i = closed ? j + 1 : lines.length;
   }
   return out.join('\n');
 }
 
+/* Every fence in a message's text as { idx, info, code, closed }, read
+   exactly as parseMarkdown reads it (line endings included). */
+function mdListFences(text) {
+  const found = [];
+  mdScanFences(String(text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n'), (info, code, closed, quote, idx) => {
+    found.push({ idx, info, code, closed });
+    return '';
+  });
+  return found;
+}
+
 /* Decide what a fence becomes. `closed` is false while a block is still
    streaming; it changes nothing about the output, and is passed only so the
    choice is visible at the one place that makes it. */
-function mdRenderFence(info, code, closed) {
+function mdRenderFence(info, code, closed, idx) {
   const fileMatch = /^file:(.+)$/i.exec(info);
-  if (fileMatch) return mdRenderFileBlock(fileMatch[1].trim(), code);
+  if (fileMatch) return mdRenderFileBlock(fileMatch[1].trim(), code, idx);
 
   if (MD_MATH_TAGS.test(info)) {
     // renderMathBlock takes ESCAPED source and decodes it -- its contract
@@ -1548,21 +1569,32 @@ function mdRenderFence(info, code, closed) {
     // Falls through to a plain code block, which is what the user had before
     // the maths renderer existed.
   }
-  return mdRenderCodeBlock(code, info);
+  return mdRenderCodeBlock(code, info, idx);
 }
 
-function mdRenderCodeBlock(code, lang) {
+function mdRenderCodeBlock(code, lang, idx) {
   const label = lang ? String(lang).toLowerCase().split(/[ \t,]/)[0] : 'code';
-  return '<div class="code-block">' +
+  // A web page or a picture in a plain code block can open in the Files
+  // panel too, where it can be previewed (1.8.0).
+  const openBtn = (typeof idx === 'number' && FILES_PREVIEW_LANGS.test(label))
+    ? '<button class="btn btn-sm code-open-btn" onclick="openFileFromBlock(this)" title="Open in the Files panel, where it can be previewed">Open</button>'
+    : '';
+  return `<div class="code-block"${mdFenceAttr(idx)}>` +
            '<div class="code-block-header">' +
              `<span class="code-lang">${escapeHtml(label)}</span>` +
-             '<button class="btn btn-sm code-copy-btn" onclick="copyCodeBlock(this)">Copy</button>' +
+             '<div class="code-btns">' +
+               openBtn +
+               '<button class="btn btn-sm code-copy-btn" onclick="copyCodeBlock(this)">Copy</button>' +
+             '</div>' +
            '</div>' +
            `<pre><code>${highlightCode(code, label)}</code></pre>` +
          '</div>';
 }
 
-function mdRenderFileBlock(filename, code) {
+/* Plain code blocks the Files panel offers to open: the ones it can preview. */
+const FILES_PREVIEW_LANGS = /^(?:html?|xhtml|svg)$/;
+
+function mdRenderFileBlock(filename, code, idx) {
   const fn = escapeHtml(filename);
   const id = 'file_' + Math.random().toString(36).slice(2, 8);
   // Notes a character writes can go into its memory and be read back later
@@ -1570,17 +1602,52 @@ function mdRenderFileBlock(filename, code) {
   const memoryBtn = /\.(md|markdown|txt)$/i.test(filename)
     ? `<button class="btn btn-sm" data-filename="${fn}" onclick="saveFileToCardMemory(this)" title="Keep this file in the character's memory, so it can read it back in later chats">Save to memory</button>`
     : '';
-  return '<div class="file-block">' +
+  const openBtn = typeof idx === 'number'
+    ? '<button class="btn btn-sm file-open-btn" onclick="openFileFromBlock(this)" title="Open in the Files panel: preview, versions and editing">Open</button>'
+    : '';
+  const lines = code ? code.split('\n').length : 0;
+  let foldCls = '', foldBtn = '';
+  try {
+    const foldOn = !(typeof state !== 'undefined' && state && state.settings && state.settings.filesFoldInChat === false);
+    if (foldOn && lines > FILE_FOLD_LINES) {
+      foldCls = ' file-folded';
+      foldBtn = `<button class="btn btn-sm file-unfold-btn" onclick="unfoldFileBlock(this)">Show all ${lines | 0} lines</button>`;
+    }
+  } catch (e) {}
+  return `<div class="file-block${foldCls}"${mdFenceAttr(idx)}>` +
            '<div class="file-header">' +
              `<span class="file-name">&#128196; ${fn}</span>` +
              '<div class="code-btns">' +
+               openBtn +
                '<button class="btn btn-sm code-copy-btn" onclick="copyCodeBlock(this)">Copy</button>' +
                `<button class="btn btn-sm" data-filename="${fn}" onclick="downloadFile(this)">Save</button>` +
                memoryBtn +
              '</div>' +
            '</div>' +
            `<pre><code id="${id}">${escapeHtml(code)}</code></pre>` +
+           foldBtn +
          '</div>';
+}
+
+/* data-fence is the block's place among the message's fences, so the Files
+   panel (js/27-files-panel.js) can tell which block an OPEN button means.
+   A number the renderer counted: nothing from the text reaches it. */
+function mdFenceAttr(idx) {
+  return (typeof idx === 'number' && idx >= 0) ? ` data-fence="${idx | 0}"` : '';
+}
+
+/* A file block longer than this many lines is folded in the chat, to the
+   first FILE_FOLD_KEEP of them, when Fold long files is on (the default):
+   the Files panel shows it whole. */
+const FILE_FOLD_LINES = 24;
+const FILE_FOLD_KEEP = 12;
+
+/* "Show all N lines" on a folded file block: unfold it here. */
+function unfoldFileBlock(btn) {
+  const block = btn && btn.closest && btn.closest('.file-block');
+  if (!block) return;
+  block.classList.remove('file-folded');
+  btn.remove();
 }
 
 /* ── Display maths outside a fence ───────────────────────────────

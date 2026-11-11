@@ -9,7 +9,8 @@ then asked the user to choose one again.
 
 A. STATIC: the early `config set access_secret` sits right after the secret is
    validated, ahead of the first prompt that can end the run, with the same
-   guards and the same (default) config file as the write at :launch.
+   (default) config file as the write at :launch. Since 1.8.0 it needs no
+   guard: a missing gobbonet.exe stops launch.bat before the password prompt.
    That write creates config.toml on a first run, and `gobbonet.exe launch`
    (the 1.7.6 hotfix's shortcuts) serves any config it finds, so the run also
    leaves .gobbonet-setup-pending until :launch; launch.go reruns setup while
@@ -67,13 +68,15 @@ ok(early is not None and validated is not None and validated < early < first_sto
    f"validated={validated} early={early} first_stop={first_stop}")
 between = [l for l in LINES[validated + 1:early] if l.strip() and not l.strip().startswith("::")] \
     if early is not None and validated is not None else ["?"]
-ok(len(between) <= 2,
-   "and immediately after validation: only its guard and the setup mark come between, besides comments",
+ok(len(between) <= 1,
+   "and immediately after validation: only the setup mark comes between, besides comments",
    between)
-guard = next((LINES[i] for i in range(early - 1, max(early - 6, 0), -1)
-              if "if not defined GOBBONET_LEGACY_SERVER" in LINES[i]), "") if early else ""
-ok("not defined GOBBONET_LEGACY_SERVER" in guard and 'exist "%~dp0gobbonet.exe"' in guard,
-   "guarded like :launch: skipped for the legacy server and when gobbonet.exe is absent", guard)
+missing = line_of(lambda l: l.strip() == 'if not exist "%~dp0gobbonet.exe" goto :no_gobbonet_exe')
+ok(missing is not None and early is not None and missing < validated,
+   "gobbonet.exe is known to be there: a missing one stopped the run before the password (1.8.0)",
+   (missing, validated))
+ok(not any("GOBBONET_LEGACY_SERVER" in LINES[i] for i in range(validated, early + 1)) if early else False,
+   "and there is no legacy-server guard to skip it any more")
 ok(early is not None and "!ACCESS_SECRET!" in LINES[early] and "--config" not in LINES[early],
    "writes the validated value to the default config file, the one :launch writes")
 ok(len(writes) == 2 and "--config" not in LINES[writes[1]] and "!ACCESS_SECRET!" in LINES[writes[1]],
@@ -85,8 +88,8 @@ MARK = ".gobbonet-setup-pending"
 LAUNCH_GO = (ROOT / "cmd/gobbonet/launch.go").read_text()
 NSI = (ROOT / "installer-win/gobbonet.nsi").read_text()
 mark_at = line_of(lambda l: l.strip() == 'type nul > "%~dp0' + MARK + '" 2>nul')
-ok(mark_at is not None and early is not None and early - 3 <= mark_at < early,
-   "the early write first leaves " + MARK + ", inside the same guarded block", (mark_at, early))
+ok(mark_at is not None and early is not None and mark_at == early - 1,
+   "the early write first leaves " + MARK + ", on the line before", (mark_at, early))
 launch_label = line_of(lambda l: l.strip() == ":launch")
 clear_at = line_of(lambda l: l.strip() == 'if exist "%~dp0' + MARK + '" del /q "%~dp0' + MARK + '" >nul 2>&1')
 ok(clear_at is not None and launch_label is not None and len(writes) == 2 and writes[1] < clear_at

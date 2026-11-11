@@ -124,7 +124,7 @@ console.log('\n=== B. fence forms ===');
   const outer = md('````md\n```js\nx\n```\n````');
   // Count the opening div, not the substring: "code-block" also appears in
   // "code-block-header" on every block.
-  eq((outer.match(/<div class="code-block">/g) || []).length, 1,
+  eq((outer.match(/<div class="code-block"[ >]/g) || []).length, 1,
      'a longer fence contains a shorter one rather than closing on it');
   ok(copyText(outer).includes('```js'), 'and keeps it as literal text');
 
@@ -408,8 +408,11 @@ console.log('\n=== J. only allowlisted markup ever reaches the DOM ===');
   const TAGS = new Set(['p','br','div','span','pre','code','button','a','i','sup','sub',
     'h1','h2','h3','h4','h5','h6','ul','ol','li','blockquote','hr','del',
     'table','thead','tbody','tr','th','td','strong','em']);
-  const ATTRS = new Set(['class','style','href','target','rel','id','data-filename','onclick']);
-  const ONCLICK_OK = new Set(['copyCodeBlock(this)','toggleMathSource(this)','downloadFile(this)']);
+  // data-fence and title since 1.8.0: the Files panel's Open buttons, and a
+  // block's place among its message's fences (digits only, checked below).
+  const ATTRS = new Set(['class','style','href','target','rel','id','data-filename','onclick','data-fence','title']);
+  const ONCLICK_OK = new Set(['copyCodeBlock(this)','toggleMathSource(this)','downloadFile(this)',
+    'openFileFromBlock(this)','unfoldFileBlock(this)','saveFileToCardMemory(this)']);
 
   function audit(html) {
     const problems = [];
@@ -424,6 +427,8 @@ console.log('\n=== J. only allowlisted markup ever reaches the DOM ===');
         const an = a[1].toLowerCase(), av = a[2];
         if (!ATTRS.has(an)) { problems.push('attr ' + an + ' on <' + name + '>'); continue; }
         if (an === 'onclick' && !ONCLICK_OK.has(av)) problems.push('onclick="' + av + '"');
+        if (an === 'data-fence' && !/^\d+$/.test(av)) problems.push('data-fence="' + av + '"');
+        if (an === 'title' && name !== 'button') problems.push('title on <' + name + '>');
         if (an === 'href' && !/^https?:\/\//i.test(av)) problems.push('href="' + av + '"');
         if (an === 'style' && !/^color:#[0-9a-f]{3,8};$|^width:[\d.]+em$/i.test(av)) problems.push('style="' + av + '"');
       }

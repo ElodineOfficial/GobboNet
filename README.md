@@ -70,7 +70,6 @@ Gobbonet\
 ├── setup-lan.bat         <- phone access, run as Administrator once
 ├── stop-gobbonet.bat
 ├── teardown-lan.bat
-├── fileserver.ps1
 ├── hardware-probe.ps1
 ├── hw-recommend.ps1
 ├── identify-model.ps1
@@ -87,7 +86,7 @@ Gobbonet\
 └── tests\   developer tests; not needed to run anything
 ```
 
-A `models` folder and a few small bookkeeping files (`models-list.json`, `active-model.json`) get created for you on the first run — that's normal, you don't need to make them yourself.
+A `models` folder and a few small bookkeeping files get created for you on the first run — that's normal, you don't need to make them yourself. Updating from 1.7 by extracting the ZIP over your folder can leave a `fileserver.ps1` behind; nothing uses it any more, and you can delete it.
 
 Going this route, run **`launch.bat`** wherever the rest of this guide says the
 **GobboNet** shortcut, and right-click `setup-lan.bat` → **Run as
@@ -166,7 +165,7 @@ It runs on your processor rather than your graphics card, so it won't take memor
 
 ### That's it
 
-Once the model loads, your **web browser opens automatically** to the chat screen. You can start typing.
+Once the model loads, your **web browser opens automatically** to the chat screen. You can start typing. (If you keep a tab open, or use GobboNet from your phone, untick **CONFIG > Basics > Open the browser when GobboNet starts**.)
 
 Every time you want to use it in the future, you just open GobboNet again. After the first setup, it starts in well under a minute and **the AI itself never needs the internet**.
 
@@ -243,7 +242,16 @@ This tool was built to be private, but a few honest notes:
 
 ## Updating to a newer version
 
-**Replace one file: `gobbonet.exe`.** That's the whole update.
+**Press CHECK FOR UPDATES (1.8.0 and later).** Open the **≡** menu, choose
+**ABOUT**, and press **CHECK FOR UPDATES** under the version. If a newer
+GobboNet is out, **UPDATE NOW** asks first, then downloads it, checks that it
+really comes from GobboNet, and replaces `gobbonet.exe` for you. **RESTART
+NOW** starts the new version; you sign in again. It never installs a version
+older than yours, and nothing is checked until you press the button. Do it on
+the PC GobboNet runs on; a phone can only check. More in
+[docs/UPDATES.md](docs/UPDATES.md).
+
+**By hand: replace one file, `gobbonet.exe`.** That's the whole update.
 
 Download the new ZIP, open it, and copy `gobbonet.exe` into your GobboNet
 folder, replacing the one already there. Your models, conversations, characters
@@ -269,12 +277,13 @@ launcher window says so when it starts, and you can delete it.
 version. If something is out of step, that panel says so and what to do about
 it.
 
-**Did you install with `GobboNetSetup.exe`?** Then run the new
-`GobboNetSetup.exe` instead; it replaces the file for you and keeps your
-models.
+**Did you install with `GobboNetSetup.exe`?** CHECK FOR UPDATES works there
+too. Or run the new `GobboNetSetup.exe` over it; it replaces the files for
+you and keeps your models.
 
-**On Linux?** Replace the whole `linux-amd64` folder, or install the new
-`.deb`/`.rpm` over the old one.
+**On Linux?** The button updates the ZIP's `linux-amd64/gobbonet` and the
+AppImage. By hand, replace the whole `linux-amd64` folder, or install the new
+`.deb`/`.rpm` over the old one, which is also how a package install is updated.
 
 ---
 
@@ -306,6 +315,12 @@ gobbonet doctor
 ```
 
 It says whether the firewall rule exists, whether it's on the right port, and whether something is blocking the app despite the rule.
+
+**The model won't load.**
+GobboNet says why in plain words: on the home screen next to OFFLINE, in the chat, and in the console. The usual causes are not enough GPU memory (lower the context size or GPU layers in CONFIG > Model & Performance > Performance, or pick a smaller model), a download that was cut short (CHECK FILE in Add a Model compares the file with its published checksum), or a model newer than the engine. **details** under the message shows the engine's own line, and `gobbonet doctor` prints a **LAST MODEL LOAD** section and where the engine's full log is.
+
+**My graphics card isn't being used.**
+Run `gobbonet doctor` and read its **GPU** section: it lists every GPU the engine can see, which one it uses, and, on Linux, whether it fell back to the CPU-only engine and why. CONFIG > Model & Performance > Performance has a **GPU** menu to pick one. On a Linux laptop whose NVIDIA card is missing from the list, a **PRIME offload** switch appears there.
 
 **My saved chats disappeared.**
 This usually happens when you opened the chat at a different web address than before (for example, the PC's network number changed). The app keeps a backup and will usually offer to restore it. To avoid this entirely, always use the `.local` address and bookmark it.
@@ -356,6 +371,12 @@ Nothing is listed right now. If you find something, open an issue on GitHub: the
 
 ### Recently fixed
 
+**A model that won't load saying only "EXITING DUE TO MODEL LOADING ERROR"** — *fixed in 1.8.0.* That is llama.cpp's sign-off, not the reason, and the chat then said `llama-server returned 503`. The chat now shows the line that says why (out of memory, a damaged or unfinished download, a model this engine can't read) with what to try, and **CHECK FILE** in Add a Model tests the download against its checksum. Issue #67.
+
+**Setup making an empty models folder** — *fixed in 1.8.0.* Pointing the Linux setup at the folder your models were already in made a new, empty `models` folder inside it. Setup now asks for a data folder and a models folder separately, and says when a folder already holds GGUF models. Issue #68.
+
+**A laptop's NVIDIA card going unused** — *fixed in 1.8.0.* Nothing said which GPU the engine was using or let you choose. CONFIG > Model & Performance > Performance has a **GPU** menu, `gobbonet doctor` says which card and which engine build are in use and why, and on Linux a switch sends the work to the NVIDIA card through PRIME offload. Issue #72.
+
 **RAG Storybook lore not being pulled in** — *fixed in 1.7.9.* A labelled entry like `# Selah, [.7 wing, .3 light, 1.0 angel]` was not read as an entry at all, a name in a header did not trigger anything, and plain-text lore only worked with the optional embedding model running. Now both ways work: a labelled entry fires on its name or when its tags add up to 1.0, and plain text is split into entries of up to four sentences that fire on a name or one of their words (two or three if you set it that way per character) — with or without the embedding model. See `docs/RAG_INFO.md`.
 
 **Tekken models answering about the video game** — *fixed in 1.7.9.* Mistral Nemo and other models that use Mistral's "Tekken" chat format replied as if every message were about the fighting game. The engine was reading the format's built-in name as the conversation itself, because newer llama.cpp builds switch their own template handling on by default. GobboNet now switches it off whenever it hands over a built-in format, and recognises Tekken models by what is inside the file (Magistral, Ministral, Devstral and renamed merges included), not only by their names.
@@ -379,12 +400,12 @@ Between 1.6 and v2.0
 - Security update — a general pass over how the app protects itself and your data.
 - Cloud complement — optional support for cloud models, shipped as a mod rather than baked into the app, because the whole service should stay private unless you explicitly say otherwise.
 - Temperature / top-k on the carousel — save response settings alongside each system prompt, so swapping prompts also swaps the feel of the replies. More variance between them without hand-tuning every time.
-- Canvas side panel — a proper side panel for long code blocks and documents, with syntax highlighting, instead of everything being crammed into a chat bubble.
-- Auto-swipe on a bad entry — if a reply trips a banned word, reroll it automatically instead of making you do it by hand.
+- ~~Canvas side panel — a proper side panel for long code blocks and documents, with syntax highlighting, instead of everything being crammed into a chat bubble.~~ Shipped in 1.8.0 as the Files panel.
+- ~~Auto-swipe on a bad entry — if a reply trips a banned word, reroll it automatically instead of making you do it by hand.~~ Shipped in 1.8.0 as Auto Reroll.
 - Optional flags on all fields — per-field toggles across the app. Honest note: this one may turn out redundant, and we'll drop it if it does.
 - Smoother alternate greetings — make moving between a character's different opening lines feel less clunky.
 - ~~Undo button — take back the last thing you did.~~ Shipped in 1.7.9: deleting almost anything offers UNDO for 10 seconds.
-- Group chat — more than one character in the same conversation.
+- ~~Group chat — more than one character in the same conversation.~~ Shipped in 1.8.0: **+ GROUP** in the sidebar.
 - User-controlled information hierarchy — you decide what gets sent to the model first, and what gets pushed down the list when space runs short.
 - TTS / STT — speak to it, and have it speak back.
 
@@ -431,6 +452,7 @@ Everything GobboNet can do, grouped so it's easy to scan.
 - Branching conversations — fork a chat at any point to explore a different direction without losing the original.
 - Memory + summarization — older parts of a long chat are automatically summarized so the AI keeps remembering what matters.
 - Drag-and-drop file attachments — drag a file straight into the chat to attach it.
+- Files panel — the 📄 button opens a panel beside the chat with every file in the conversation: what characters write as files, text files you attach, and web pages or pictures written as code. Writing the same file again makes a new version, with arrows to step through them. Markdown and CSV show rendered, and web pages run as a preview that cannot reach the internet or GobboNet. Edit a file and hand your version back with your next message, or select part of it and ask about just that. Honest note: a preview's scripts start switched off; one click turns them on for that file.
 
 **Characters & personas**
 - Default characters — comes with ready-made personalities to chat with right away, including the Gobbonet Informant, a guide that answers questions about GobboNet itself. When a newer version of one ships, its tile says **UPDATE**.
@@ -442,7 +464,10 @@ Everything GobboNet can do, grouped so it's easy to scan.
 - Lorebook + RAG lorebook work together to auto-update new information from extended conversations.
 - lorebooks travel with the card — export a character and its lorebook rides along inside the file, so sharing a character shares everything it knows.
 - Copy, edit, or delete characters.
+- Group chats — put several characters in one conversation. **+ GROUP** in the sidebar starts one; a group is made in // CHARS like a character card: pick its members, drag them into a turn order, and give yourself a place in it or not. Choose who speaks next: in turn, whoever you name (natural), shuffled, by hand, or let a DM decide who is best to respond. In the chat you can mute a member, have one reply now, let the next one speak with **NEXT**, or switch on **AUTO** and watch them carry on. Honest note: one model plays everyone, one reply at a time, so a round of four characters takes four replies, and on a long chat each one starts with a pause while the model reads the conversation again as that character.
 - Custom code for individual character cards — attach a small piece of JavaScript to a single character. It runs only while that card is active and is torn down the moment you switch away. Honest note: it is not sandboxed. It runs with the same access as the page does, exactly like the mod controls below — your machine, your card, your code.
+- Tools from a character's code — custom code can offer the model functions to call (`gobbo.tool(...)`). The model calls them only while **Let the model call this card's tools** is ticked on that card, and imported cards arrive with it off. CONFIG > Characters & Chat > Card Tools sets how many calls a reply may make and how long each may take.
+- MCP servers — set up MCP servers, small programs on your PC that offer tools (a file reader, a notes database, a git helper), in CONFIG > Advanced > MCP Servers. **PASTE A SETUP (JSON)** fills the form from the block most servers document, and **CHECK TOOLS** lists what each one offers. Honest note: this release sets them up and checks them; characters calling their tools in a chat comes later.
 - Alternate greetings — give a character several different opening lines.
 - User personas — create a profile for *yourself* so the AI knows who it's talking to.
 - Avatar, background, and text-color customization — make each character and the chat look the way you want.
@@ -459,8 +484,12 @@ Everything GobboNet can do, grouped so it's easy to scan.
 - System prompt carousel — save several system prompts and swap between them quickly.
 - Response controls — fine-tune things like temperature and top-k to make replies more focused or more creative.
 - Banned words — keep specific words out of a character's replies, from a nudge to an outright ban. Single words work best; CHECK shows what gets banned.
+- Auto Reroll — give a character a list of off-limits words, and a reply that uses one is stopped and written again, up to the number of tries you choose. It reads the reply itself, never the thinking, so it catches what banned words let through: the two work best together. Honest note: each try is a new reply, so it costs time, and if every try still uses a word the last one is kept and marked.
 - Model selector — choose which AI model you're talking to.
 - Model hot-swap — switch to a different downloaded model without restarting anything.
+- Model links — a chat remembers the model that wrote it, and a character can name the model it was made for. Opening the chat, or starting one with that character, offers to switch; CONFIG > Characters & Chat > Model Switching can make it switch on its own, or never.
+- GPU menu — choose which graphics card runs the model, from the list the engine itself sees, in CONFIG > Model & Performance > Performance. `gobbonet doctor` says which card and which engine build are in use, and why.
+- When a model won't load, the chat says why in plain words (not enough memory, an incomplete download, a model this engine can't read), and **CHECK FILE** in Add a Model tests a download against its checksum. Every model in the catalogue has one pinned.
 - Add a Model — sixteen models to download, filtered by what they are good at and by size (Light, Medium, Heavy, Mixture of Experts), each checked before use. **FOUND ON THIS COMPUTER** offers models you already have from HuggingFace or another app, used in place without copying.
 
 **Web search (optional)**
@@ -472,7 +501,7 @@ Everything GobboNet can do, grouped so it's easy to scan.
 - Export, import, or purge all your data — back up everything to a file, restore it later, or wipe it completely.
 
 **Customization (advanced)**
-- Mods — stylesheets and scripts that change how the app looks and works, each with its own switch and load order. Write your own in the MODS panel (they are kept as the mod "My extensions"), or drop a folder with a `mod.json` into GobboNet's `mods` folder. Mods are added and switched on only from the PC GobboNet runs on, so another device can never push code to you. ENDORSED MODS in the same panel lists mods Elodine endorses at [goblincorps.com/gobbonet_extras](https://goblincorps.com/gobbonet_extras), installed with one click and checked file by file against the list's SHA-256 pins. A mod that breaks while loading switches itself off.
+- Mods — stylesheets and scripts that change how the app looks and works, each with its own switch and load order. Write your own in the MODS panel (they are kept as the mod "My extensions", and each stylesheet or script in it has its own switch too), or drop a folder with a `mod.json` into GobboNet's `mods` folder. Mods are added and switched on only from the PC GobboNet runs on, so another device can never push code to you. ENDORSED MODS in the same panel lists mods Elodine endorses at [goblincorps.com/gobbonet_extras](https://goblincorps.com/gobbonet_extras), installed with one click and checked file by file against the list's SHA-256 pins. A mod that breaks while loading switches itself off.
 
 **Scheduling**
 - Scheduled tasks — set prompts to send themselves at specific times.
@@ -480,6 +509,10 @@ Everything GobboNet can do, grouped so it's easy to scan.
 
 **Devices**
 - PC-to-phone connection — use the same chat from your phone or tablet over your home Wi-Fi.
+- Start without a new tab — CONFIG > Basics > When GobboNet Starts turns off the browser tab GobboNet opens each time it starts, for when you keep a tab open or use it from your phone.
+
+**Updates**
+- CHECK FOR UPDATES in ABOUT — asks GitHub for a newer GobboNet, only when you press it, and installs one only if the maintainer signed it. It never goes back to an older version, and your chats, models and settings are left alone. Honest note: a `.deb` or `.rpm` install is updated with the new package; the button links the release page instead.
 
 ---
 

@@ -17,6 +17,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/ElodineOfficial/GobboNet/internal/models"
 )
 
 // Entry is one model in the catalogue.
@@ -255,6 +257,13 @@ func Load(path string) (*Catalog, error) {
 		// A section with no repo or file cannot be downloaded, so it is not a
 		// model however well-formed the rest of it looks.
 		if e.Repo == "" || e.File == "" {
+			continue
+		}
+		// The file name becomes the download's name in the models folder, so
+		// it must be a plain .gguf name (1.8.0): a "../x" here would write
+		// outside it.
+		if err := models.CheckFileName(e.File); err != nil {
+			log.Printf("[catalog] skipping %q: %v", e.File, err)
 			continue
 		}
 		if e.Display == "" {

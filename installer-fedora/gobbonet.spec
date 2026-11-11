@@ -328,6 +328,26 @@ fi
 %{_datadir}/icons/hicolor/256x256/apps/gobbonet.png
 
 %changelog
+* Tue Nov 10 2026 GobboNet - 1.8.0-1
+- 1.8.0. Same package layout and engine (llama.cpp b10456).
+- Setup asks for a data folder and a models folder, and a folder that
+  already holds GGUF models says so (issue #68). Uninstall never empties a
+  models folder you chose; it removes only the .gguf files directly in it.
+- GobboNet starts the embedding server itself, restarts it if it dies, and
+  says whether matching by meaning is on. The GPU menu chooses the card the
+  engine uses; open_browser = false starts without a new browser tab.
+- A model that will not load says why; CHECK FILE tests the download.
+  Every catalogue model carries a pinned checksum.
+- In the chat: group chats, the Files panel, Auto Reroll, tools a card's
+  code offers the model, a model remembered per chat and per character, MCP
+  servers set up and checked in CONFIG, and an update button. A package
+  install is updated with the new package: the button links the release
+  page instead.
+- gobbonet uninstall also removes the launcher's engine-choice note and
+  the embedding model setup downloads, even when the models are kept.
+- A first run stopped before setup finishes no longer leaves its setup
+  log in ~/.local/share/gobbonet, or the setup page running.
+- Built with Go 1.25.14, as 1.7.9 was.
 * Tue Oct 27 2026 GobboNet - 1.7.9-1
 - 1.7.9. Same package layout, launcher flow and engine (llama.cpp b10456).
 - Tekken-format models (Mistral Nemo and its family) chat properly: a

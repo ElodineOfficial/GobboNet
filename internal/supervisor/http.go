@@ -9,7 +9,7 @@ import (
 )
 
 // NotConfiguredMessage is what remote mode reports. Not an invention: it is the
-// exact path fileserver.ps1 took whenever launch.bat had not handed it a server
+// exact path the 1.7 PowerShell server took whenever launch.bat had not handed it a server
 // executable, and chat.html already renders it as a disabled swap control rather
 // than an error.
 const NotConfiguredMessage = "Model swapping needs this machine to run llama.cpp itself. " +
@@ -46,6 +46,9 @@ func (h Handlers) HandleSwapModel(w http.ResponseWriter, r *http.Request) {
 	}
 	var req struct {
 		File string `json:"file"`
+		// Auto marks a switch the page makes on its own (1.8.0, #52). It is
+		// refused with 409 and "busy": true while any reply is being written.
+		Auto bool `json:"auto"`
 	}
 	if err := json.Unmarshal(body, &req); err != nil || req.File == "" {
 		httpx.WriteJSON(w, r, http.StatusBadRequest, map[string]string{
@@ -54,7 +57,19 @@ func (h Handlers) HandleSwapModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.Sup.Swap(req.File); err != nil {
+	swap := h.Sup.Swap
+	if req.Auto {
+		swap = h.Sup.SwapAuto
+	}
+	if err := swap(req.File); err != nil {
+		if err == ErrBusy {
+			// Not an error phase: nothing went wrong, and the model that is
+			// loaded stays loaded. The page waits and asks again.
+			httpx.WriteJSON(w, r, http.StatusConflict, map[string]any{
+				"phase": h.Sup.Status().Phase, "message": err.Error(), "busy": true,
+			})
+			return
+		}
 		status := http.StatusBadRequest
 		if err == ErrSwapInFlight {
 			status = http.StatusConflict

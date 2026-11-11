@@ -7,21 +7,21 @@
 ;
 ;  1. PER-USER INSTALL to $LOCALAPPDATA.
 ;     GobboNet writes into its own folder -- logs, models\, the downloaded
-;     llama-cpp\, models-list.json, hardware.json, the password store.
+;     llama-cpp\, hardware.json, the password store.
 ;     Program Files is not writable by standard users, so installing there
 ;     would mean rewriting every %~dp0 reference across launch.bat and the
-;     three PowerShell scripts. Installing per-user keeps all of that
+;     PowerShell helpers beside it. Installing per-user keeps all of that
 ;     working untouched, and means the installer needs no elevation at all.
 ;     Only setup-lan.bat needs admin. Windows asks for it when that script
 ;     runs: RunLanSetup below uses the runas verb. (Until 1.7 a launchLAN.exe
 ;     shim did the asking; see the note under APPEXE.)
 ;
 ;  2. GENERATED STATE IS NOT SHIPPED.
-;     models-list.json, hardware.json, .hw-parsed.env, *.log and the
-;     generated .jinja chat templates are all per-machine artifacts. If we
-;     shipped them, every user would inherit the build machine's active
-;     model and template hashes. They are excluded below and regenerated on
-;     first run by :write_model_json and hardware-probe.ps1.
+;     hardware.json, .hw-parsed.env, *.log and the generated .jinja chat
+;     templates are all per-machine artifacts. If we shipped them, every
+;     user would inherit the build machine's hardware and template hashes.
+;     They are excluded below and regenerated on first run by
+;     hardware-probe.ps1.
 ; ============================================================================
 
 Unicode true
@@ -31,7 +31,7 @@ Unicode true
 !endif
 
 !define APPNAME     "GobboNet"
-!define APPVER      "1.7.9"
+!define APPVER      "1.8.0"
 ; What the main shortcuts and the finish page start: `gobbonet.exe launch`
 ; (1.7.6 hotfix, patch 3). It serves straight away with the settings already
 ; saved, and runs launch.bat's first-run setup only when there are none yet
@@ -48,7 +48,7 @@ Unicode true
 !define REGKEY      "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}"
 
 Name              "${APPNAME}"
-OutFile           "GobboNetSetup-1_7_9.exe"
+OutFile           "GobboNetSetup-1_8_0.exe"
 InstallDir        "$LOCALAPPDATA\${APPNAME}"
 InstallDirRegKey  HKCU "Software\${APPNAME}" "InstallDir"
 RequestExecutionLevel user
@@ -56,7 +56,7 @@ SetCompressor /SOLID lzma
 ShowInstDetails   show
 ShowUninstDetails show
 
-VIProductVersion "1.7.9.0"
+VIProductVersion "1.8.0.0"
 VIAddVersionKey  "ProductName"     "${APPNAME}"
 VIAddVersionKey  "FileDescription" "${APPNAME} Installer"
 VIAddVersionKey  "FileVersion"     "${APPVER}.0"
@@ -94,10 +94,12 @@ Var PwSkipped
 
 ; ---- theme ----------------------------------------------------------------
 ; Sizes are fixed by NSIS: 150x57 header, 164x314 sidebar, 24-bit BMP.
-; make-branding.py generates all four; do not hand-edit them.
+; They are not generated (no script makes them): the header carries the
+; version as painted pixels, repainted on a minor bump. installer-win/README.md
+; says how 1.8.0's was done.
 ;
 ; The uninstaller shares the installer's two bitmaps rather than carrying its
-; own -un pair. There is one set of 1.7 art and this is it, so pointing both
+; own -un pair. There is one set of art and this is it, so pointing both
 ; at the same files is what keeps the uninstaller looking like the thing it
 ; is uninstalling.
 !define MUI_HEADERIMAGE
@@ -555,11 +557,8 @@ If it will not close, a reboot always clears it." \
   ; Explicit file list rather than a wildcard: a wildcard would sweep up
   ; whatever generated state happens to be sitting in the build folder.
   File "${APPSRC}\launch.bat"
-  ; gobbonet.exe (new in this installer for 1.7.6): launch.bat hands the
-  ; server role to it when it is present. The PowerShell file server alone
-  ; cannot serve 1.7.6's chat sync -- it has no per-conversation routes -- so
-  ; without this, backup and device sync would fail on every installed copy.
-  ; launch.bat still does the first-run work exactly as before.
+  ; gobbonet.exe is the server. launch.bat asks the first-run questions and
+  ; hands over to it; since 1.8.0 there is no other server to fall back to.
   File "${APPSRC}\gobbonet.exe"
   File "${APPSRC}\setup-lan.bat"
   ; Both new in 1.7 and both required: launch.bat hands off to stop-gobbonet.bat
@@ -567,7 +566,11 @@ If it will not close, a reboot always clears it." \
   ; setup-lan.bat's firewall rule and URL ACL.
   File "${APPSRC}\teardown-lan.bat"
   File "${APPSRC}\stop-gobbonet.bat"
-  File "${APPSRC}\fileserver.ps1"
+  ; fileserver.ps1, the legacy PowerShell server, was removed in 1.8.0.
+  ; Installing over 1.7.x would leave the old copy in the folder, where
+  ; nothing runs it any more, so it goes. Same reasoning as the launch.exe
+  ; Deletes in the uninstaller.
+  Delete "$INSTDIR\fileserver.ps1"
   File "${APPSRC}\hardware-probe.ps1"
   File "${APPSRC}\identify-model.ps1"
   File "${APPSRC}\hw-recommend.ps1"
@@ -633,7 +636,8 @@ If it will not close, a reboot always clears it." \
                  "$INSTDIR\${APPEXE}" "launch" "$INSTDIR\gobbonet.ico" 0
   ; Through gobbonet.exe, not launch.bat directly (1.7.9, PR #15): launch
   ; --setup runs the same launch.bat inside a kill-on-close job, so closing
-  ; the window also ends the embedding server it starts.
+  ; the window ends everything it started. (Since 1.8.0 gobbonet.exe starts
+  ; the embedding server itself, in a job of its own.)
   CreateShortcut "$SMPROGRAMS\${APPNAME}\Setup or add a model.lnk" \
                  "$INSTDIR\${APPEXE}" "launch --setup" "$INSTDIR\gobbonet.ico" 0
   CreateShortcut "$SMPROGRAMS\${APPNAME}\${APPNAME} LAN Setup.lnk" \
@@ -660,8 +664,7 @@ If it will not close, a reboot always clears it." \
   WriteRegDWORD HKCU "${REGKEY}" "NoRepair" 1
 
   ; --- record the chosen port ---------------------------------------------
-  ; launch.bat, setup-lan.bat and fileserver.ps1 all resolve the port the
-  ; same way, and .gobbonet-port is the middle rung: an environment
+  ; launch.bat and setup-lan.bat resolve the port the same way, and .gobbonet-port is the middle rung: an environment
   ; variable beats it for one-off runs, and 9066 is the fallback if it is
   ; absent or unreadable. Written unconditionally so there is one file to
   ; look at when someone asks "which port is this install on".
@@ -718,7 +721,8 @@ If it will not close, a reboot always clears it." \
   ; script lands in $PLUGINSDIR, which NSIS wipes on exit.
   ;
   ; The format is <32 hex salt>:<sha256 of salt+password>, which is what
-  ; fileserver.ps1 parses and what launch.bat's own setup writes. If any
+  ; gobbonet.exe accepts (internal/auth/secret.go) and what launch.bat's
+  ; own setup writes. If any
   ; step here fails we simply leave no file behind and launch.bat prompts
   ; on first run exactly as before.
   ${If} $PwSkipped != "1"
@@ -794,6 +798,16 @@ report that the folder is still open in another program." \
     Pop $0
   ${EndIf}
   Delete "$INSTDIR\gobbonet.exe"
+  ; What the update button (1.8.0, internal/update/install.go) leaves beside
+  ; the program: the one it replaced, kept until GobboNet next starts
+  ; (gobbonet.exe.old, or gobbonet.exe.old-<n> when that name was still in
+  ; use), and a new program whose checks never finished (gobbonet.new.exe).
+  ; Uninstalling before the next start would otherwise leave them, and the
+  ; folder with them. stop-gobbonet.bat above has stopped a copy still
+  ; running from gobbonet.exe.old: it matches the process name and folder.
+  Delete "$INSTDIR\gobbonet.exe.old"
+  Delete "$INSTDIR\gobbonet.exe.old-*"
+  Delete "$INSTDIR\gobbonet.new.exe"
   ; The interface gobbonet.exe writes out beside itself.
   RMDir /r "$INSTDIR\web"
 
@@ -813,7 +827,7 @@ report that the folder is still open in another program." \
   Delete "$INSTDIR\setup-lan.bat"
   Delete "$INSTDIR\teardown-lan.bat"
   Delete "$INSTDIR\stop-gobbonet.bat"
-  Delete "$INSTDIR\fileserver.ps1"
+  Delete "$INSTDIR\fileserver.ps1"   ; 1.7.x; an install that skipped 1.8's cleanup
   Delete "$INSTDIR\hardware-probe.ps1"
   Delete "$INSTDIR\identify-model.ps1"
   Delete "$INSTDIR\hw-recommend.ps1"
@@ -841,14 +855,14 @@ report that the folder is still open in another program." \
   Delete "$INSTDIR\.gobbonet-secret"
   Delete "$INSTDIR\.gobbonet-secret.bad"
   Delete "$INSTDIR\*.log"
-  ; fileserver.ps1 writes this on every start so its startup diagnostics
-  ; survive the hidden window. Covered by *.log above, named for clarity.
+  ; The 1.7.x PowerShell server wrote this on every start. Covered by *.log
+  ; above, named for clarity.
   Delete "$INSTDIR\fileserver.log"
 
   ; --- CONVERSATION DATA -------------------------------------------------
-  ; fileserver.ps1 mirrors the entire chat state to .gobbonet-state.json in
-  ; this folder (fileserver.ps1:63), and spools each generation through
-  ; .jobs\*.json (:73). Neither was in this list, so uninstalling removed
+  ; The 1.7.x PowerShell server mirrored the entire chat state to
+  ; .gobbonet-state.json in this folder and spooled each generation through
+  ; .jobs\*.json. Neither was in this list, so uninstalling removed
   ; the program and left every conversation on disk -- and a reinstall found
   ; them and synced them straight back, which looks exactly like the
   ; installer carrying data it never touched.
@@ -865,7 +879,7 @@ report that the folder is still open in another program." \
   Delete "$INSTDIR\.swap-status.json"
   Delete "$INSTDIR\.swap-in-progress"
   Delete "$INSTDIR\.llama-launch.cmd"
-  Delete "$INSTDIR\.embed-launch.cmd"
+  Delete "$INSTDIR\.embed-launch.cmd"   ; written by launch.bat up to 1.7.9
   Delete "$INSTDIR\.last-lan-ip"
   ; launch.bat's "first-run setup not finished" mark (cmd/gobbonet/launch.go).
   Delete "$INSTDIR\.gobbonet-setup-pending"

@@ -65,7 +65,7 @@ const DEFAULT_CARD = {
   id: 'default',
   name: 'Assistant',
   avatar: '',
-  writingStyle: 'You are a helpful, friendly, and knowledgeable assistant running fully offline on your local machine. Be concise when the question is simple. Be thorough when the question is complex. Use markdown formatting when it aids readability. When asked to create a file, output it in a code block tagged with the filename like: ```file:example.json followed by the content and closing ```. The user will see a Save button to download it.',
+  writingStyle: 'You are a helpful, friendly, and knowledgeable assistant running fully offline on your local machine. Be concise when the question is simple. Be thorough when the question is complex. Use markdown formatting when it aids readability. When asked to create a file, output it in a code block tagged with the filename like: ```file:example.json followed by the content and closing ```. The user will see a Save button to download it. To change a file you already wrote, write the whole file again with the same name.',
   personality: 'Stay focused, helpful, and accurate. If you are unsure about something, say so rather than guessing.',
   loreEnabled: true,
   // Which GGUF compresses this card's lore. Empty means "whatever the chat
@@ -76,6 +76,11 @@ const DEFAULT_CARD = {
   // models-list.json — the same list the header dropdown uses. Anything the
   // user has dropped into that folder is a valid choice; nothing else is.
   loreModelFile: '',
+  // Model links (1.8.0, #52): the model this character is meant for. A file
+  // name from the models folder, never a path; '' is "whatever is loaded".
+  // Checked by isPlainModelFile() before use, and only ever matched against a
+  // model that is installed (js/02-model.js, MODEL LINKS).
+  preferredModel: '',
   // The lore prompt (js/07-prompt.js, THE LORE PROMPT). Off: the built-in
   // LORE_DEFAULT_PROMPT. On: lorePrompt, written in the card editor's
   // "Edit the lore summary prompt" box.
@@ -123,6 +128,12 @@ const DEFAULT_CARD = {
   xtcThreshold: 0.1,
   dryMultiplier: 0,
   bannedPhrases: '',
+  // Auto Reroll (1.8.0): a reply that uses one of these words is written
+  // again, up to autoRerollMax more times (runGenerationWithReroll in
+  // 03-generation.js). Off until the owner ticks it, read as `=== true`.
+  autoRerollEnabled: false,
+  autoRerollWords: '',
+  autoRerollMax: 3,
   // Per-card custom code. Opt-in, off by default, and never enabled by an
   // import -- see applyImportedCardCode in 23-card-code.js.
   customCode: '',
@@ -137,6 +148,9 @@ const DEFAULT_CARD = {
   // Roadmap 1.7.7 #9. Read as `!== false` (cardThinkingEnabled), so a card
   // without the field thinks, as every card did before it existed.
   thinkingEnabled: true,
+  // Tool calling. Read as `=== true` (cardToolDefs, 23-card-code.js): only a
+  // card whose owner ticked the box offers its code's tools to the model.
+  toolsEnabled: false,
   // Roadmap 1.7.7 #6d. null = inherit the setting -- see resolveContextBudget.
   contextInputPercent: null,
   contextReplyPercent: null,
@@ -287,6 +301,12 @@ const DEFAULT_SETTINGS = {
   autoContinueDelaySeconds: 20,   // pause between auto-continued posts
   autoContinueMaxChain: 50,       // most posts one {{auto_continue_N}} may run
   loreTimeoutSeconds: 45,         // longest one lore compression pass may take
+  // Card Tools (1.8.0, roadmap #9): PR #71's constants. Read through
+  // cardToolLimit() (23-card-code.js), which owns the floors and ceilings.
+  toolMaxRounds: 4,               // rounds of tool calls per reply, then an answer
+  toolTimeoutSeconds: 30,         // longest one tool call may run
+  toolResultMaxChars: 8000,       // most one tool result may send the model
+  toolArgsMaxKB: 64,              // most arguments one call may bring
   // Roadmap 1.7.7 #6d: the context budget, as percentages. The defaults are
   // the old constants. Per character on the card; these are what a card
   // that leaves a field blank inherits. Read through resolveContextBudget().
@@ -345,6 +365,10 @@ const DEFAULT_SETTINGS = {
   // that predates this option would boot into a scrolling behaviour nobody
   // chose.
   autoScroll: 'smart',
+  // Model links (1.8.0, #52): when a chat used another model, or its
+  // character is linked to one. 'ask' (default), 'auto' or 'off'; read
+  // through modelFollowMode() (js/02-model.js).
+  modelFollow: 'ask',
   // ---- RAG retrieval knobs (Stage 1) ----
   // Full snapshot of these rides into every telemetry record's `config`
   // block so any turn is reproducible. Tune one knob at a time; the shadow
@@ -365,7 +389,13 @@ const DEFAULT_SETTINGS = {
   // turn to turn sits at the end and the engine can reuse the rest from its
   // cache instead of reading the whole conversation again. CONFIG > Prompt
   // Order; see buildContextMessages in js/08-rag.js.
-  retrievalNearEnd: false
+  retrievalNearEnd: false,
+  // The Files panel (1.8.0, js/27-files-panel.js). Read as `!== false` for
+  // the two that are on, `=== true` for the one that is off, so a device
+  // with older settings gets the defaults.
+  filesAutoOpen: true,     // a reply that writes a file opens it, on a wide screen
+  filesFoldInChat: true,   // long file blocks are folded in the chat
+  filesRunScripts: false   // HTML and SVG previews run their scripts without asking
 };
 
 // Extensions: custom stylesheets and scripts the user can inject.
@@ -440,6 +470,129 @@ const DEFAULT_PERSONA = {
   dialogColor: FALLBACK_PERSONA_DIALOG_COLOR
 };
 
+/* ================================================================
+   GROUPS (1.8.0, group chats)
+
+   A group is a cast list with rules for whose turn it is: several character
+   cards that share one conversation. It lives beside the characters in CAST
+   and is edited like one; a chat started from it carries `thread.groupId`.
+   The cards themselves are not copied -- a member is a card id, so editing
+   a character changes it in every group it sits in, and a member whose card
+   was deleted is skipped until the card comes back (UNDO, an import).
+
+     members       the cards, top to bottom: this IS the turn order
+       cardId      a character card's id
+       muted       sits in the group but is not picked to reply; you can
+                   still make it speak from the chat
+       talk        0-100, how readily it joins in under "natural" order
+     userInOrder   you have a place in the turn order, and the round stops
+                   there to wait for you
+     userSlot      how many members come before you in that order
+     order         who replies next:
+                     list     the members in turn, top to bottom
+                     natural  whoever the last message names, then others
+                              by `talk`
+                     shuffle  everyone once per round, in a random order
+                     manual   nobody, until you pick someone in the chat
+                     dm       a short extra request asks the model who is
+                              best to respond (dmInstructions guide it)
+     maxReplies    replies before the round stops; 0 means everyone once
+     allowSelf     the same character may speak twice in a row
+     scenario      a scene every member is given
+     introduce     what a member is told about the others: 'names',
+                   'short' (a few lines of each personality) or 'full'
+     greetings     which opening messages a new chat starts with: 'all',
+                   'first' or 'none'
+     stopOnOthers  end a reply where it starts writing another member's lines
+     autoDelaySeconds  the pause between rounds while AUTO is on
+
+   Whose turn it is is never stored. It is worked out from the conversation
+   -- who spoke last -- so deleting, editing, rerolling or branching a chat
+   cannot leave a pointer behind, and a sent turn stays an append for sync
+   (see CONVERSATION ORDER below). The engine is js/29-groups.js.
+================================================================ */
+const GROUP_ORDERS = ['list', 'natural', 'shuffle', 'manual', 'dm'];
+const GROUP_INTRODUCE = ['names', 'short', 'full'];
+const GROUP_GREETINGS = ['all', 'first', 'none'];
+const GROUP_LIMITS = { members: 24, name: 80, scenario: 20000, dm: 4000, autoDelayMax: 600, maxReplies: 48 };
+
+const DEFAULT_GROUP = {
+  id: '',
+  name: 'New Group',
+  avatar: '',
+  members: [],
+  userInOrder: false,
+  userSlot: 0,
+  order: 'list',
+  maxReplies: 0,
+  allowSelf: false,
+  dmInstructions: '',
+  scenario: '',
+  introduce: 'short',
+  greetings: 'all',
+  stopOnOthers: true,
+  autoDelaySeconds: 5
+};
+
+/** One group, as this build understands it, or null for something that is
+ *  not one. Groups arrive from saved state, a synced device and imported
+ *  files, so every field is read through here: a member is a string id and
+ *  two flags, a choice is one of its list, and a number is in its range.
+ *  Members are not checked against the cards that exist -- a card can come
+ *  back -- and a card listed twice is kept once. */
+function normalizeGroup(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const id = (typeof raw.id === 'string' && raw.id) ? raw.id.slice(0, 64) : '';
+  if (!id) return null;
+  const str = (v, max) => (typeof v === 'string' ? v : '').slice(0, max);
+  const int = (v, min, max, dflt) => {
+    const n = Math.round(Number(v));
+    return isFinite(n) ? Math.min(max, Math.max(min, n)) : dflt;
+  };
+  const seen = new Set();
+  const members = [];
+  for (const m of (Array.isArray(raw.members) ? raw.members : [])) {
+    const cardId = (m && typeof m === 'object' && typeof m.cardId === 'string') ? m.cardId : (typeof m === 'string' ? m : '');
+    if (!cardId || seen.has(cardId) || members.length >= GROUP_LIMITS.members) continue;
+    seen.add(cardId);
+    members.push({
+      cardId: cardId.slice(0, 64),
+      muted: !!(m && m.muted === true),
+      talk: int(m && m.talk, 0, 100, 50)
+    });
+  }
+  return {
+    id: id,
+    name: str(raw.name, GROUP_LIMITS.name).trim() || 'Unnamed group',
+    avatar: str(raw.avatar, 4 * 1024 * 1024),
+    members: members,
+    userInOrder: raw.userInOrder === true,
+    userSlot: int(raw.userSlot, 0, members.length, 0),
+    order: GROUP_ORDERS.includes(raw.order) ? raw.order : 'list',
+    maxReplies: int(raw.maxReplies, 0, GROUP_LIMITS.maxReplies, 0),
+    allowSelf: raw.allowSelf === true,
+    dmInstructions: str(raw.dmInstructions, GROUP_LIMITS.dm),
+    scenario: str(raw.scenario, GROUP_LIMITS.scenario),
+    introduce: GROUP_INTRODUCE.includes(raw.introduce) ? raw.introduce : 'short',
+    greetings: GROUP_GREETINGS.includes(raw.greetings) ? raw.greetings : 'all',
+    stopOnOthers: raw.stopOnOthers !== false,
+    autoDelaySeconds: int(raw.autoDelaySeconds, 0, GROUP_LIMITS.autoDelayMax, 5)
+  };
+}
+
+/** A saved or imported list of groups, cleaned; ids kept once. */
+function normalizeGroups(list) {
+  const out = [];
+  const seen = new Set();
+  for (const raw of (Array.isArray(list) ? list : [])) {
+    const g = normalizeGroup(raw);
+    if (!g || seen.has(g.id)) continue;
+    seen.add(g.id);
+    out.push(g);
+  }
+  return out;
+}
+
 // Built-in macro names — users cannot define macros that shadow these.
 // auto_continue is reserved both as a bare form (the static expansion) and
 // as a count form (the chain trigger); listing the prefix only catches the
@@ -485,6 +638,8 @@ let state = {
   activeCardId: 'default',
   personaCards: [{ ...DEFAULT_PERSONA }],
   activePersonaId: 'default-persona',
+  // Group chats (1.8.0): see GROUPS above.
+  groups: [],
   schedules: [],
   sidebarOpen: true,
   searchEnabled: false,
@@ -740,6 +895,11 @@ let serverConnected = false;
 // named a Windows batch file.
 let serverOfflineReason = '';
 let serverOfflinePhase = '';
+// Why a load failed, in plain words (1.8.0, #67): /swap-status's cause key
+// and the one sentence for it. serverOfflineReason keeps llama.cpp's own
+// line, which the landing page shows under "details".
+let serverOfflineCause = '';
+let serverOfflineAdvice = '';
 // Smart auto-scroll: tracks whether the user is currently pinned at the
 // bottom of the messages container. Streaming-tick scroll calls check
 // this before auto-scrolling — if the user scrolled up to read history,

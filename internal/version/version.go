@@ -9,7 +9,9 @@ package version
 import (
 	"runtime"
 	"runtime/debug"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // Version is the release identity: "<VERSION>-go-<short sha>", e.g.
@@ -28,8 +30,71 @@ import (
 // can never be mistaken for a distributed one.
 var Version = "dev"
 
+// Stamp carries the build's serial: when the commit it was made from was
+// committed, in Unix seconds (`git log -1 --format=%ct`). The build scripts
+// set it beside Version (1.8.0, the update button), as
+//
+//	gobbonet-build[1.8.0-go-abc1234/1793932190]
+//
+// The serial is what tells two builds of the same release apart in order. A
+// hotfix re-published as 1.8.0 carries the same release number as the build
+// it fixes, and a short sha does not sort, so the updater (internal/update)
+// offers a build of the same release only when its serial is later than this
+// one -- never an earlier one, which is the "never go backwards" rule.
+//
+// The bracketed form, with the build in it, is so that the serial can be read
+// out of a program file without running it: `gobbonet update manifest`
+// describes a Windows program on Linux that way. The toolchain does not
+// record -ldflags in a -trimpath build, so the value has to be findable in
+// the file itself.
+//
+// Empty in an unstamped build; SerialNumber then falls back to the commit time
+// the Go toolchain recorded, and to 0 when there is none.
+var Stamp = ""
+
+// StampPrefix opens Stamp's value.
+const StampPrefix = "gobbonet-build["
+
 // String is the version alone.
 func String() string { return Version }
+
+// SerialNumber is the serial in Stamp, when Stamp is about this build; else
+// the vcs.time the toolchain embedded; else 0.
+func SerialNumber() int64 {
+	if build, n, ok := ParseStamp(Stamp); ok && build == Version {
+		return n
+	}
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return 0
+	}
+	for _, setting := range info.Settings {
+		if setting.Key == "vcs.time" {
+			if t, err := time.Parse(time.RFC3339, setting.Value); err == nil {
+				return t.Unix()
+			}
+		}
+	}
+	return 0
+}
+
+// ParseStamp reads a Stamp value: the build it names and its serial.
+func ParseStamp(s string) (build string, serial int64, ok bool) {
+	rest, found := strings.CutPrefix(strings.TrimSpace(s), StampPrefix)
+	if !found || !strings.HasSuffix(rest, "]") {
+		return "", 0, false
+	}
+	rest = strings.TrimSuffix(rest, "]")
+	i := strings.LastIndexByte(rest, '/')
+	if i <= 0 {
+		return "", 0, false
+	}
+	n, err := strconv.ParseInt(rest[i+1:], 10, 64)
+	if err != nil || n <= 0 {
+		return "", 0, false
+	}
+	return rest[:i], n, true
+}
 
 // Release is the release half of the version, without the "-go-<sha>" build
 // suffix: "1.7.5" out of "1.7.5-go-afb7e0d".

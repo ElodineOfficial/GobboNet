@@ -49,8 +49,8 @@ echo.
 echo  ====================================================
 echo   GOBBONET -- REMOVE LAN ACCESS
 echo.
-echo   This undoes setup-lan.bat: the firewall rules and
-echo   the URL reservation it made.
+echo   This undoes setup-lan.bat: the firewall rules, and
+echo   any URL reservation an older version made.
 echo.
 echo   WHY THIS EXISTS AS A SCRIPT.
 echo   The URL reservation is stored in the Windows kernel

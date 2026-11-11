@@ -41,6 +41,11 @@
 
 .landing-status-ok  { color: var(--green-neon); text-shadow: 0 0 6px rgba(0,255,115,0.5); }
 .landing-status-err { color: var(--red-neon);   text-shadow: var(--glow-red); }
+/* Why a load failed, under the pill (1.8.0, #67). */
+.landing-offline-details { margin-top: 6px; font-size: 11px; color: var(--cyan-dim); letter-spacing: 0.5px; }
+.landing-offline-details summary { cursor: pointer; text-transform: uppercase; letter-spacing: 1.5px; }
+.landing-offline-details code { display: block; margin: 6px 0; padding: 6px 8px; white-space: pre-wrap; word-break: break-word;
+  background: rgba(255,255,255,0.03); border: 1px solid var(--border); border-radius: var(--radius); color: var(--red-neon); }
 
 /* Section card */
 .landing-section {

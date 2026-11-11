@@ -48,12 +48,46 @@ function showMacroEditor(triggerName) {
   triggerInput.focus();
 }
 
+/** The name someone meant when they typed a trigger (1.8.0, issue #69).
+ *  People type a macro the way they will use it -- {{skip}}, or {{SYSTEM:}}
+ *  copied from the 1.7.9 notes -- so one pair of braces and a trailing colon
+ *  are taken off rather than refused. Only one pair: {{{{x}}}} is still a
+ *  mistake. What is left goes through the same checks as before. */
+function normaliseTrigger(raw) {
+  let t = String(raw == null ? '' : raw).trim();
+  if (t.startsWith('{{')) t = t.slice(2);
+  if (t.endsWith('}}')) t = t.slice(0, -2);
+  t = t.trim();
+  if (t.endsWith(':')) t = t.slice(0, -1);
+  return t.trim();
+}
+
+const MACRO_TRIGGER_RE = /^[a-zA-Z0-9_]+$/;
+
+/** One line under the name field when it will be saved differently from how
+ *  it was typed, so the braces coming off is never a surprise. Silent when
+ *  the name is already bare, or when it would be refused anyway. */
+function updateMacroTriggerNote() {
+  const note = document.getElementById('macro-trigger-note');
+  if (!note) return;
+  const typed = (document.getElementById('macro-trigger').value || '').trim();
+  const name = normaliseTrigger(typed);
+  if (name && name !== typed && MACRO_TRIGGER_RE.test(name)) {
+    note.textContent = 'Saves as {{' + name + '}}. Type the word only; the braces are added for you.';
+    note.hidden = false;
+  } else {
+    note.textContent = '';
+    note.hidden = true;
+  }
+}
+
 /** Under the editor: what {{name: some text}} would become, as the model
  *  gets it, so passing text to a macro (1.7.9) explains itself. */
 function updateMacroPreview() {
+  updateMacroTriggerNote();
   const out = document.getElementById('macro-preview');
   if (!out) return;
-  const name = (document.getElementById('macro-trigger').value || '').trim() || 'name';
+  const name = normaliseTrigger(document.getElementById('macro-trigger').value) || 'name';
   const text = document.getElementById('macro-text').value || '';
   if (!text.trim()) { out.textContent = ''; return; }
   MACRO_INPUT_RE.lastIndex = 0;
@@ -66,12 +100,19 @@ function editMacro(trigger) {
 }
 
 function saveMacroEdit() {
-  const trigger = document.getElementById('macro-trigger').value.trim();
+  const field   = document.getElementById('macro-trigger');
+  const trigger = normaliseTrigger(field.value);
   const text    = document.getElementById('macro-text').value.trim();
+  // Show the name that is actually checked and saved, so a refusal below
+  // talks about what is in the box (issue #69).
+  if (!field.readOnly && field.value !== trigger) {
+    field.value = trigger;
+    updateMacroTriggerNote();
+  }
 
   if (!trigger) { alert('Trigger name cannot be empty.'); return; }
-  if (!/^[a-zA-Z0-9_]+$/.test(trigger)) {
-    alert('Trigger may only contain letters, numbers, and underscores.\nExample: fast_forward');
+  if (!MACRO_TRIGGER_RE.test(trigger)) {
+    alert('Trigger may only contain letters, numbers, and underscores. Enter the name without braces.\nExample: rosebud becomes {{rosebud}}');
     return;
   }
   if (RESERVED_MACROS.has(trigger.toLowerCase())) {
@@ -105,6 +146,8 @@ function cancelMacroEdit() {
   document.getElementById('macro-editor').style.display = 'none';
   document.getElementById('macro-add-btn').style.display = '';
   document.getElementById('macro-trigger').readOnly = false;
+  const note = document.getElementById('macro-trigger-note');
+  if (note) { note.textContent = ''; note.hidden = true; }
 }
 
 function deleteMacro(trigger) {

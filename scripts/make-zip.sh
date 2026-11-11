@@ -2,9 +2,9 @@
 #
 # Assemble the hand-out ZIP -- the archive most people actually update from.
 #
-#   ./scripts/make-zip.sh                 build dist/GobboNet-<version>.zip
-#   ./scripts/make-zip.sh --no-engine     same, without the bundled llama.cpp engine
-#   ./scripts/make-zip.sh --allow-dirty   stamp -dirty instead of refusing
+#   bash ./scripts/make-zip.sh                build dist/GobboNet-<version>.zip
+#   bash ./scripts/make-zip.sh --no-engine    same, without the bundled llama.cpp engine
+#   bash ./scripts/make-zip.sh --allow-dirty  stamp -dirty instead of refusing
 #
 # WHY THIS EXISTS
 #
@@ -91,7 +91,26 @@ else
 fi
 
 VERSION="$RELEASE-go-$SHA"
+# The serial: when HEAD was committed, in Unix seconds (1.8.0). It is what
+# orders two builds of one release, so the update button can offer a hotfix
+# re-published as the same version and never an earlier build
+# (internal/update). Stamped as gobbonet-build[<version>/<serial>] so that
+# `gobbonet update manifest` can read it out of the program file
+# (internal/version/version.go). Without git it is left out; such a build is
+# offered any later build of its release.
+SERIAL="$(git log -1 --format=%ct 2>/dev/null || true)"
 LDFLAGS="-s -w -X github.com/ElodineOfficial/GobboNet/internal/version.Version=$VERSION"
+if [ -n "$SERIAL" ]; then
+    LDFLAGS="$LDFLAGS -X github.com/ElodineOfficial/GobboNet/internal/version.Stamp=gobbonet-build[$VERSION/$SERIAL]"
+fi
+
+# A build with no update signing key can say a newer release exists but
+# installs nothing (docs/UPDATES.md). Fine for a test build; a release meant
+# to update itself later needs the maintainer's key in the file first.
+if ! grep -q '^ed25519 ' internal/update/trusted-keys.txt 2>/dev/null; then
+    echo "WARNING: internal/update/trusted-keys.txt has no key: this build's UPDATE NOW will"
+    echo "         install nothing. See docs/UPDATES.md before building a release."
+fi
 
 # The frontend is compiled INTO each binary, so staging is an input to the build
 # and has to happen before it. A binary built without this has no chat page.
@@ -114,7 +133,6 @@ gobbonet.exe
 gobbonet
 repair-windows-shortcuts.ps1
 launch.bat
-fileserver.ps1
 chat.html
 VERSION
 engine.sha256
@@ -135,6 +153,7 @@ linux-amd64/models.ini
 internal/webui/assets/chat.html
 catalog/models.ini
 scripts/
+.github/
 PATCH-README.txt
 '
 
@@ -217,12 +236,12 @@ copy_in() {
 # only ever looked at linux-amd64/gobbonet. It is installed from
 # installer-linux/gobbonet-zip-entry just after this loop instead.
 for rel in \
-    gobbonet.exe launch.bat fileserver.ps1 setup-lan.bat teardown-lan.bat \
+    gobbonet.exe launch.bat setup-lan.bat teardown-lan.bat \
     "Repair Windows shortcuts.bat" repair-windows-shortcuts.ps1 \
     stop-gobbonet.bat hardware-probe.ps1 hw-recommend.ps1 identify-model.ps1 \
     chat.html default-characters.json gobbonet.ico manifest.webmanifest VERSION \
     README.md TROUBLESHOOTING.md SECURITY.md LINUX-START-HERE.md LICENSE AGENTS.md \
-    CONTRIBUTORS.md CONTRIBUTING.md \
+    CONTRIBUTORS.md CONTRIBUTING.md .github \
     go.mod go.sum scripts engine.sha256 .gitignore catalog \
     js css icons docs tests cmd internal installer-win installer-linux \
     installer-fedora linux-amd64
@@ -293,7 +312,6 @@ NOTE
 fi
 find "$TOP" -name '*.staging.*' -prune -exec rm -rf {} + 2>/dev/null || true
 find "$TOP" -name '.gobbonet-*' -delete 2>/dev/null || true
-find "$TOP" -name 'fileserver.log' -delete 2>/dev/null || true
 
 #-----------------------------------------------------------------------------
 # Check the staged tree against the manifest BEFORE zipping it. This is the
@@ -377,4 +395,4 @@ else
     echo "  engine:   bundled (linux-amd64/llama-cpp)"
 fi
 echo
-echo "  Other platforms (linux/arm64, darwin) come from ./scripts/build-release.sh."
+echo "  Other platforms (linux/arm64, darwin) come from scripts/build-release.sh."

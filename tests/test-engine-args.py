@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
-"""The llama-server command line must not drift between the two launch paths.
+"""One llama-server command line for the chat model, built in one place.
 
-GobboNet starts llama-server from two places:
+Up to 1.7.9 GobboNet could start the chat model from two places:
 
-  launch.bat  :start_server   -- the legacy PowerShell/batch path
-  Supervisor.BuildArgs        -- the Go path, used by BOTH the .deb and the
-                                 Windows installer
+  launch.bat  :start_server   -- the legacy batch/PowerShell path
+  Supervisor.BuildArgs        -- the Go path, used by every package
 
-BuildArgs' own doc comment says it "mirrors the argument set launch.bat
-constructs in its :start_server block". That claim is load-bearing and was
-already not quite true, so it is checked here rather than trusted.
+and this file checked that the two did not drift. 1.8.0 removed the batch one:
+gobbonet.exe starts the chat model on Windows too, and since 1.8.0 (#15) the
+optional embedding server as well (EmbedArgs), so launch.bat starts no
+llama-server at all. What is pinned now is that it stays that way, and that
+BuildArgs keeps the flags both paths always had.
 
 Why this file exists: issue #33 was two bugs in one report, and they live in
 different places.
@@ -19,13 +20,9 @@ different places.
     the .exe. Covered by the mjs suites and asserted again at the bottom here,
     because "does the Linux package carry it" is a packaging question.
 
-  * -lv, the log verbosity that makes llama.cpp file the lines launch.bat's
-    STEP 3b greps to confirm GPU offload. That one is batch-only.
-
-KNOWN_BATCH_ONLY below records the second as a deliberate, reviewed difference
-rather than letting it sit as an untracked gap. If someone adds offload
-detection to the Go path, -lv has to move with it, and this test is where that
-gets noticed.
+  * -lv, the log verbosity that makes llama.cpp emit the lines the GPU-offload
+    check reads. The check lives in Go now, so -lv has to be on the Go command
+    line, and this test is where a mismatch gets noticed.
 
 Run:  python3 test-engine-args.py
 """
@@ -50,33 +47,10 @@ def read(path):
     return open(os.path.join(ROOT, path), "rb").read().decode("utf-8", errors="surrogateescape")
 
 
-# Flags launch.bat passes that BuildArgs deliberately does not, with the reason.
-# Anything NOT listed here that appears on one side and not the other is drift.
-KNOWN_BATCH_ONLY = {
-    "-lv": "log verbosity for launch.bat's STEP 3b offload grep; the Go path "
-           "does no log-based offload confirmation, so nothing would read it",
-}
-
-# Flags BuildArgs passes that launch.bat does not. The Go server owns config
-# the batch path never had.
-KNOWN_GO_ONLY = {
-    "--fit": "automatic placement is capability-checked by the managed Go launcher",
-    "--fit-target": "managed auto placement leaves configured GPU headroom",
-    "--fit-ctx": "automatic placement may not shrink the selected context",
-    "--api-key":            "llm_api_key, a Go-config-only setting",
-    "--jinja":              "conditional; launch.bat interpolates !JINJA_FLAG!",
-    "--no-jinja":           "conditional; launch.bat interpolates !JINJA_FLAG! (1.7.9)",
-    "--chat-template":      "conditional; launch.bat uses !CHAT_TEMPLATE_FLAG!",
-    "--chat-template-file": "conditional; same",
-}
-
-
 def batch_flags():
+    """Every llama-server command line launch.bat writes."""
     src = read("launch.bat")
-    line = [l for l in src.split("\r\n") if "SERVER_EXE" in l and "--model" in l]
-    if not line:
-        return None
-    return set(re.findall(r"(?<![\w-])(--?[a-z][a-z-]*)", line[0]))
+    return [l for l in src.split("\r\n") if "SERVER_EXE" in l and "--model" in l]
 
 
 def go_flags():
@@ -88,32 +62,31 @@ def go_flags():
 
 
 def main():
-    print("llama-server command line: batch vs Go")
+    print("llama-server command lines")
     bat, go = batch_flags(), go_flags()
-    check("  found launch.bat :start_server line", bat is not None)
     check("  found Supervisor.BuildArgs", go is not None)
-    if not bat or not go:
+    check("  launch.bat starts no llama-server at all",
+          bat is not None and len(bat) == 0,
+          "1.8.0: gobbonet.exe starts the chat model (#13) and the embedding server (#15)")
+    if not go:
         print("\nFAILED")
         return 1
 
-    # Core flags. If any of these stops being passed on either side, one
-    # platform is running llama-server differently from the other.
+    # Core flags. If any of these stops being passed, the chat model runs
+    # differently from every earlier release.
     for flag in ("--model", "--port", "--host", "--ctx-size", "--n-gpu-layers",
                  "--cache-type-k", "--cache-type-v", "--parallel",
-                 "--reasoning-format"):
-        check(f"  {flag} on both paths", flag in bat and flag in go,
-              f"batch={flag in bat} go={flag in go}")
-
-    print("\ndifferences are accounted for")
-    for flag in sorted(bat - go):
-        check(f"  batch-only {flag} is a known difference", flag in KNOWN_BATCH_ONLY,
-              "undocumented drift -- add it to KNOWN_BATCH_ONLY with a reason, "
-              "or pass it in BuildArgs")
-        if flag in KNOWN_BATCH_ONLY:
-            print(f"        reason: {KNOWN_BATCH_ONLY[flag]}")
-    for flag in sorted(go - bat):
-        check(f"  go-only {flag} is a known difference", flag in KNOWN_GO_ONLY,
-              "undocumented drift")
+                 "--reasoning-format", "--jinja", "--no-jinja", "--chat-template"):
+        check(f"  BuildArgs passes {flag}", flag in go)
+    # The embedding server's command line is Go's too since 1.8.0 (#15).
+    emb = read("internal/supervisor/embed.go")
+    m = re.search(r"func EmbedArgs\(.*?\n}\n", emb, re.S)
+    eflags = set(re.findall(r'"(--?[a-z][a-z-]*)"', m.group(0))) if m else set()
+    check("  found EmbedArgs", m is not None)
+    for flag in ("--model", "--host", "--port", "--embeddings", "--pooling", "--ctx-size",
+                 "--batch-size", "--ubatch-size", "--n-gpu-layers"):
+        check(f"  EmbedArgs passes {flag}", flag in eflags)
+    check("  and not -lv (nothing reads the embedding log for offload lines)", "-lv" not in eflags)
 
     print("\nthe -lv invariant (#33)")
     # If offload detection ever lands on the Go path, -lv has to come with it.
@@ -137,7 +110,7 @@ def main():
           greps_log == ("-lv" in go),
           "the Go path reads offload lines out of the log but does not ask "
           "llama.cpp to emit them -- llama.cpp files those above the default "
-          "threshold, which is the whole reason launch.bat passes -lv")
+          "threshold, which is why the check needs -lv")
 
     print("\ndry_penalty_last_n reaches every package (#33, other half)")
     sync = read("js/06-state-sync.js")

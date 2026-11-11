@@ -21,16 +21,27 @@ it into models.ini):
   default   adds  set "DL_SHA256=<hex>"  to every download block without one
   --check   fetches every pointer and compares it with every pin already
             there; changes nothing; exits 1 on any mismatch or failure
+  --require-all
+            with --check: also exits 1 while any entry is unpinned (a
+            release check)
   --dry-run prints what default would write, writes nothing
+  --save-pointers FILE
+            also writes every pointer it read to FILE, in the fixture format
+            below. On a machine that can reach HuggingFace but is not where
+            the catalogue is edited, this is the file to send: the pins then
+            go in through this same script, nothing copied by hand.
 
 After writing it regenerates catalog/models.ini and its copy in linux-amd64/,
-unless --no-regen. Then review `git diff` and commit.
+and catalog/gobbonet_model_list.json, the live list to upload to
+goblincorps.com (1.8.0: it used to be left behind until someone remembered),
+unless --no-regen. Then review `git diff`, commit, and upload the list.
 
 It also catches a wrong entry: a repo or file that does not exist answers
 404, and a pointer whose size is far from the size the menu advertises is
 reported (a typo'd quant, usually).
 
-Usage:  python3 catalog/pin-hashes.py [--check] [--dry-run] [--no-regen]
+Usage:  python3 catalog/pin-hashes.py [--check [--require-all]] [--dry-run] [--no-regen]
+                                      [--save-pointers FILE]
         (run from anywhere; finds launch.bat beside catalog/)
 
 Offline testing: GOBBONET_PIN_FIXTURE=<file.json> maps each pointer URL to the
@@ -89,14 +100,23 @@ def read_pointer(text):
 def main(argv):
     check = "--check" in argv
     dry = "--dry-run" in argv
+    require_all = "--require-all" in argv
     regen = "--no-regen" not in argv and not check and not dry
+    save_to = None
+    if "--save-pointers" in argv:
+        at = argv.index("--save-pointers")
+        if at + 1 >= len(argv) or argv[at + 1].startswith("--"):
+            print("--save-pointers needs a file name", file=sys.stderr)
+            return 2
+        save_to = os.path.abspath(argv[at + 1])
+    saved = {}
     bat_path = os.path.join(ROOT, "launch.bat")
     raw = open(bat_path, "rb").read()
     crlf = b"\r\n" in raw
     text = raw.decode("ascii").replace("\r\n", "\n")
     sizes = {int(i): float(gb) for i, gb in SIZE_RE.findall(text)}
 
-    problems, changes = [], 0
+    problems, changes, unpinned = [], 0, []
     out, last = [], 0
     for m in BLOCK_RE.finditer(text):
         idx, body = int(m.group(2)), m.group(3)
@@ -111,6 +131,7 @@ def main(argv):
         except Exception as e:  # network, proxy, fixture
             problems.append("%s: could not read %s: %s" % (name, url, e))
             continue
+        saved[url] = ptr
         if ptr is None:
             problems.append("%s: %s answered 404 -- the repo or the file name is wrong" % (name, url))
             continue
@@ -132,6 +153,7 @@ def main(argv):
             continue
         if check:
             print("  unpinned            %s" % name)
+            unpinned.append(name)
             continue
         # Add the pin on the line after DL_FILE, indented to match.
         fm = re.search(r'^([ \t]*)set "DL_FILE=[^"]*"\n', body, re.MULTILINE)
@@ -146,10 +168,17 @@ def main(argv):
         print("  %s %s  %s" % ("would pin" if dry else "pinned ", sha[:12], name))
     out.append(text[last:])
 
+    if save_to:
+        with open(save_to, "w", encoding="utf-8") as f:
+            json.dump(saved, f, indent=2, sort_keys=True)
+        print("\nsaved %d pointer(s) to %s" % (len(saved), save_to))
     if problems:
         print("\nProblems:")
         for p in problems:
             print("  - " + p)
+    if check and require_all and unpinned:
+        print("\n%d model(s) still unpinned; --require-all wants none" % len(unpinned))
+        return 1
     if check or dry:
         return 1 if problems else 0
     if changes:
@@ -167,6 +196,14 @@ def main(argv):
             print("regenerated catalog/models.ini and linux-amd64/models.ini")
     else:
         print("\nnothing to pin")
+    if regen:
+        # The live list follows models.ini whether or not this run pinned
+        # anything: a pin added by hand, or a run before 1.8.0, can have left
+        # it behind. gen-remote-catalog leaves an unchanged file alone.
+        subprocess.run([sys.executable, os.path.join(HERE, "gen-remote-catalog.py"),
+                        os.path.join(HERE, "models.ini"), os.path.join(HERE, "gobbonet_model_list.json")], check=True)
+        print("upload catalog/gobbonet_model_list.json to https://goblincorps.com/gobbonet_model_list.json"
+              " so clients that read the live list get the pins too")
     return 1 if problems else 0
 
 

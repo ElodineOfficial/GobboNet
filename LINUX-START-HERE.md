@@ -1,14 +1,14 @@
-# GobboNet 1.7.9 — Linux
+# GobboNet 1.8.0 — Linux
 
-Install the Debian package with `sudo apt install ./gobbonet_1.7.9*_amd64.deb`, then run `gobbonet` as your normal user or select GobboNet in the application menu. On Fedora, install the RPM instead: `sudo dnf install ./gobbonet-1.7.9-*.fedora.x86_64.rpm` (see `installer-fedora/FEDORA.md`).
+Install the Debian package with `sudo apt install ./gobbonet_1.8.0*_amd64.deb`, then run `gobbonet` as your normal user or select GobboNet in the application menu. On Fedora, install the RPM instead: `sudo dnf install ./gobbonet-1.8.0-*.fedora.x86_64.rpm` (see `installer-fedora/FEDORA.md`).
 
-For the AppImage, make it executable and run it: `chmod +x GobboNet-*-x86_64.AppImage`, then `./GobboNet-*-x86_64.AppImage`, or double-click it in your file manager. It is the Debian package's files in one file, with nothing to install. It needs x86_64 Linux with glibc 2.34 or newer, Bash, Python 3 for the first-run setup, and `fusermount`, which almost every desktop already has. Without FUSE, run it with `--appimage-extract-and-run`. Your settings, models and conversations go to the same folders the packages use, so you can switch between the AppImage and a package without losing anything. It never checks for updates: to update, download the new AppImage and delete the old one.
+For the AppImage, make it executable and run it: `chmod +x GobboNet-*-x86_64.AppImage`, then `./GobboNet-*-x86_64.AppImage`, or double-click it in your file manager. It is the Debian package's files in one file, with nothing to install. It needs x86_64 Linux with glibc 2.34 or newer, Bash, Python 3 for the first-run setup, and `fusermount`, which almost every desktop already has. Its engine uses the system's OpenSSL 3, as the packages' does: Fedora 45 and later ship OpenSSL 4 and keep 3 as a separate package, so there run `sudo dnf install openssl3-libs` first, or the engine will not start. Without FUSE, run it with `--appimage-extract-and-run`. Your settings, models and conversations go to the same folders the packages use, so you can switch between the AppImage and a package without losing anything. It looks for updates only when you press CHECK FOR UPDATES in ABOUT, which can replace the AppImage with the new one; or download the new AppImage and delete the old one. Start at login, the setup's last question, starts the AppImage file itself; if you move or rename the file, run `./GobboNet-*-x86_64.AppImage autostart --enable` from its new place.
 
 For the ZIP, extract it, open a terminal in GobboNet and run `./gobbonet`. The ZIP includes a Linux amd64 runtime and the editable source. It needs Python 3.8+, Bash, coreutils, xdg-utils and the same engine libraries listed in the Debian package. Keep the extracted folder in place while using it. Do not run the application with sudo.
 
 ## Updating
 
-Replace the `linux-amd64` folder with the one from the new ZIP, or install the new package over the old one. The chat page is compiled into `linux-amd64/gobbonet`, so that single binary carries both halves of the app and they cannot go out of step.
+Replace the `linux-amd64` folder with the one from the new ZIP, or install the new package over the old one. From 1.8.0, ABOUT > CHECK FOR UPDATES does it for the ZIP and the AppImage when you press it: it downloads the new program, checks the maintainer's signature and restarts into it. A `.deb` or `.rpm` is updated with the new package, so for those the button links the release page. The chat page is compiled into `linux-amd64/gobbonet`, so that single binary carries both halves of the app and they cannot go out of step.
 
 Editing `chat.html`, `js/` or `css/` at the root of the ZIP changes nothing by itself — they are the *source* of the page, and it is built in at compile time. To run your own copy, put the files you want to change in a folder of your own and `gobbonet config set web_root /path/to/that/folder`; files you do not include still come from the binary. Older versions of the launcher wrote a `web_root` line into your config automatically, pointing at the packaged `web/` folder; this release clears that line and says so, because leaving it would serve you the previous version's page forever.
 
@@ -22,9 +22,11 @@ New in 1.7.8: pressing Enter in a field moves to the next step. Mixture-of-Exper
 
 New in 1.7.9: the model picker lists sixteen models, and the password step asks for the minimum set by `min_password_length` in `config.toml` (8 characters by default, as low as 4). Models you already have in the HuggingFace cache, or in folders listed as `model_dirs`, show up in the chat under CONFIG > Model & Performance > Add a Model > FOUND ON THIS COMPUTER.
 
+New in 1.8.0: the location screen asks for two folders, a data folder (chats and GobboNet's own files) and a models folder, which starts as `<data folder>/models` and can be any folder, such as the one your models are already in. A folder that already holds GGUF models says how many it found, and a data folder that holds them offers to use it for models instead of making an empty `models` folder inside it. Both are write-tested; nothing already in them is changed. Later, CONFIG > Model & Performance > Model Folders changes the models folder and the extra folders to look in, on this PC. GobboNet starts the optional embedding server itself and restarts it if it stops, so the RAG Storybook keeps matching by meaning; CONFIG > Privacy Status says whether it is on. CONFIG > Model & Performance > Performance has a GPU menu that chooses the card the engine uses, and on a laptop whose engine sees only the integrated GPU, a switch to use the NVIDIA one through PRIME offload. `gobbonet doctor` says which build of the engine the launcher picked, and why. `open_browser = false` in `config.toml` (or CONFIG > Basics > When GobboNet Starts) starts GobboNet without opening a new browser tab.
+
 The wizard opens in your default browser. The chat opens automatically after the server starts listening. Large models can take several minutes to load. Reopening GobboNet opens the existing chat instead of starting a second server. The terminal remains attached to the server; Ctrl+C stops it and the optional embedding engine.
 
-Debian owns the program installation under `/usr/lib/gobbonet`; the location screen chooses the potentially much larger model/chat storage folder. Password/configuration remains under `$XDG_CONFIG_HOME/gobbonet` (normally `~/.config/gobbonet`). This revision does not migrate existing conversations between data folders.
+Debian owns the program installation under `/usr/lib/gobbonet`; the location screen chooses where chats and the potentially much larger models are stored (`data_dir` and `model_dir` in `config.toml`). Password/configuration remains under `$XDG_CONFIG_HOME/gobbonet` (normally `~/.config/gobbonet`). This revision does not migrate existing conversations between data folders.
 
 The engine is already bundled, so there is no redundant llama.cpp download. Model downloads use the existing Go catalogue downloader and its checksum policy. Nomic is optional, is checked against the SHA-256 pin in launch.bat, and lives in a separate embeddings folder so it cannot become the chat model. A second CPU engine serves embeddings on loopback port 11436.
 
@@ -33,11 +35,11 @@ Linux has no Windows Defender prompt. The wizard explains the firewall equivalen
 ## Commands
 
 - `gobbonet`: normal setup/launch/browser flow.
-- `gobbonet --no-browser`: same flow with URLs printed to the terminal/log instead of opening a browser.
+- `gobbonet --no-browser`: same flow with URLs printed to the terminal/log instead of opening a browser. To make that the default, untick CONFIG > Basics > Open the browser when GobboNet starts (`open_browser = false` in config.toml).
 - `gobbonet setup` or `gobbonet setup --force`: rerun the guided flow, then launch.
 - `gobbonet setup --status`: completion status, without opening anything.
 - `gobbonet serve ...`: explicit server command; preserves advanced server flags and does not run the setup shell.
-- `gobbonet doctor`, `gobbonet config ...`: existing administration commands.
+- `gobbonet doctor`, `gobbonet config ...`: existing administration commands. Since 1.8.0 doctor has a **GPU** section (the engine build in use and why, every GPU the engine sees, which one `gpu_device` picks, and whether PRIME offload would help) and a **LAST MODEL LOAD** section (why the last load failed, from `llama-server.log`). If the GPU build of the engine will not start, the launcher notes why in `~/.local/share/gobbonet/engine-choice`, and doctor and CONFIG > Performance say it.
 
 For the ZIP, substitute `./gobbonet` in those commands, and for the AppImage the AppImage file (`./GobboNet-*-x86_64.AppImage doctor`). To remove the AppImage, run `gobbonet uninstall` from it to clear your data, then delete the file. Launch errors and URLs are in `$XDG_DATA_HOME/gobbonet/launch.log`, normally `~/.local/share/gobbonet/launch.log`.
 

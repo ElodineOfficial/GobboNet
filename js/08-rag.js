@@ -359,6 +359,54 @@ function getCardStorybook(card) {
   return card._storybook;
 }
 
+/* ---- Who answers /embed (1.8.0, #15). GobboNet starts the embedding server
+   itself now and /health-fileserver says how it is: running, starting,
+   restarting, standby (resting with the chat model), failed, external or off,
+   with embed_detail saying why when it is not on. Privacy Status and the line
+   under the RAG Storybook show it, so "matching by meaning" being off is never
+   a silent mystery again. ---- */
+let _embedHealth = { state: '', detail: '' };
+
+async function refreshEmbedState() {
+  if (!IS_SERVED) { _embedHealth = { state: 'file', detail: '' }; return _embedHealth; }
+  try {
+    const r = await fetch(window.location.origin + '/health-fileserver', { cache: 'no-store' });
+    if (r.ok) {
+      const h = await r.json();
+      _embedHealth = { state: String(h.embed || ''), detail: String(h.embed_detail || '') };
+    }
+  } catch (e) { /* keep what we had */ }
+  return _embedHealth;
+}
+
+/* { on, short, text } for a state: `short` fits after the storybook readout,
+   `text` is the sentence for Privacy Status. An older server reports nothing,
+   and then nothing is said. */
+function embedStateText(st) {
+  const said = st && st.detail ? st.detail.replace(/\s+$/, '').replace(/([^.])$/, '$1.') : '';
+  const detail = said ? ' ' + said.charAt(0).toUpperCase() + said.slice(1) : '';
+  switch (st && st.state) {
+    case 'running':
+      return { on: true, short: 'by meaning: on', text: 'Matching by meaning is on: the embedding server is running on this PC.' };
+    case 'starting':
+      return { on: false, short: 'by meaning: starting', text: 'Matching by meaning is starting: the embedding server is loading.' };
+    case 'restarting':
+      return { on: false, short: 'by meaning: restarting', text: 'Matching by meaning is off for now: the embedding server stopped, and GobboNet is restarting it.' + detail };
+    case 'standby':
+      return { on: false, short: 'by meaning: resting', text: 'Matching by meaning is resting with the chat model and comes back with your next message.' };
+    case 'failed':
+      return { on: false, short: 'by meaning: off (see CONFIG > Privacy Status)', text: 'Matching by meaning is off.' + detail + ' Names and tags still match.' };
+    case 'external':
+      return { on: true, short: 'by meaning: on (embed_url)', text: 'Matching by meaning uses an embedding server GobboNet does not run, at embed_url in config.toml.' };
+    case 'off':
+      return { on: false, short: 'by meaning: off', text: 'Matching by meaning is off (embed_mode = "off" in config.toml). Names and tags still match.' };
+    case 'file':
+      return { on: false, short: '', text: 'Opened from a file: matching by meaning needs the GobboNet server.' };
+    default:
+      return { on: false, short: '', text: '' };
+  }
+}
+
 /* ---- Embedding client (Retriever A). Degrade-safe: any failure returns
    null and the caller proceeds tag-only. ---- */
 const RAG_EMBED_PREFIX = { document: 'search_document: ', query: 'search_query: ' };
@@ -1158,7 +1206,19 @@ async function buildContextMessages(thread, card, opts) {
     ? personaForBuild.injectionFrequency
     : 5;
   const personaDesc = (personaForBuild.description || '').trim();
-  const needsPersonaInject = personaFreq > 0
+  // Group chats (1.8.0, js/29-groups.js). When this conversation is a
+  // group's, `card` is the member whose turn it is and groupCtx is what that
+  // member needs on top of its own card: who else is here, the conversation
+  // with every other speaker named, and whose turn it is. Null otherwise,
+  // and then nothing below changes.
+  const groupCtx = (typeof groupPromptContext === 'function')
+    ? groupPromptContext(thread, card, personaForBuild) : null;
+  const groupTokens = groupCtx ? groupCtx.tokens : 0;
+  // In a group the persona is part of that block on every turn (you are one
+  // of the people present), so the every-N-messages injection stands down:
+  // it hangs off "the last message is yours", which a group rarely is.
+  const needsPersonaInject = !groupCtx
+    && personaFreq > 0
     && personaDesc
     && (totalUserMsgs === 1
         || (totalUserMsgs > 1 && totalUserMsgs % personaFreq === 0));
@@ -1178,7 +1238,7 @@ async function buildContextMessages(thread, card, opts) {
   const memoryIndexTokens = memoryIndexText ? estimateTokens(memoryIndexText) + 4 : 0;
 
   let usedTokens = writingStyleTokens + personalityTokens + authoredLoreTokens
-                 + personaTokens + summaryTokens + memoryIndexTokens;
+                 + personaTokens + summaryTokens + memoryIndexTokens + groupTokens;
 
   // Live (non-archived) messages — what we'd send if no compression
   // happened this turn. Pre-compute per-message token costs so we can
@@ -1204,7 +1264,7 @@ async function buildContextMessages(thread, card, opts) {
     const summaryReserve = Math.max(summaryTokens, 1024);
     const targetTotal    = Math.floor(budget * TARGET_FACTOR);
     const fixedOverhead  = writingStyleTokens + personalityTokens + authoredLoreTokens + personaTokens
-                         + memoryIndexTokens;
+                         + memoryIndexTokens + groupTokens;
     const targetLive     = Math.max(0, targetTotal - fixedOverhead - summaryReserve);
     const tokensToFree   = Math.max(0, liveTokens - targetLive);
 
@@ -1282,7 +1342,10 @@ async function buildContextMessages(thread, card, opts) {
       // model's TRAINING context, not the --ctx-size the server was
       // started with -- which is why summarizeForLore still treats a 400
       // as the no-room case rather than trusting this number.
-      const _produced = await compressWithCardModel(summary, toArchive, _authored, tokenLimit, card);
+      // A group chat's messages go to the summariser with their speakers
+      // named, or it could only say "Assistant" for every member.
+      const _produced = await compressWithCardModel(summary,
+        groupCtx ? groupCtx.forLore(toArchive) : toArchive, _authored, tokenLimit, card);
       // Not setThreadLore directly: the await above is seconds long on a local
       // model, and the summary is hand-editable, so what is stored now may no
       // longer be what this pass started from. See mergeLoreAfterPass.
@@ -1356,7 +1419,7 @@ async function buildContextMessages(thread, card, opts) {
       // caller as tokensUsed so the status bar shows reality.
       liveMsgs = thread.messages.filter(m => !m.archived);
       usedTokens = writingStyleTokens + personalityTokens + authoredLoreTokens + personaTokens
-                 + (summary ? estimateTokens(summary) + 4 : 0) + memoryIndexTokens;
+                 + (summary ? estimateTokens(summary) + 4 : 0) + memoryIndexTokens + groupTokens;
       saveState();
       renderMessages();   // surface the dimming + lore divider immediately
     }
@@ -1409,6 +1472,10 @@ async function buildContextMessages(thread, card, opts) {
     apiMessages.push({ role: 'system', content: personalityBlock });
   }
 
+  // ---- 2b. GROUP (1.8.0) — who else is in the conversation, and the scene.
+  // Straight after who this member is, before what has happened so far. ----
+  if (groupCtx) apiMessages.push({ role: 'system', content: groupCtx.block });
+
   // ---- 3. AUTO-SUMMARY (running summary of older, archived turns) ----
   if (summary && card.loreEnabled) {
     apiMessages.push({ role: 'system',
@@ -1429,7 +1496,7 @@ async function buildContextMessages(thread, card, opts) {
     const budgetSnapshot = {
       token_limit: tokenLimit,
       budget: budget,
-      system_tokens: writingStyleTokens + personalityTokens + memoryIndexTokens,
+      system_tokens: writingStyleTokens + personalityTokens + memoryIndexTokens + groupTokens,
       lore_summary_tokens: authoredLoreTokens + summaryTokensNow,
       live_convo_tokens: recentTotal,
       retrieval_tokens: 0,
@@ -1497,7 +1564,7 @@ async function buildContextMessages(thread, card, opts) {
     // immediately against the user message (recency = highest weight). The
     // old periodic personality reminder is gone — personality is now a
     // persistent block up top (position 2).
-    if (carouselLine && isLastUserMsg) {
+    if (carouselLine && isLastUserMsg && !groupCtx) {
       apiMessages.push({ role: 'system', content: '[Narrative direction for this response]\n' + translateTemplates(carouselLine, charName, userName) });
     }
     if (needsPersonaInject && isLastUserMsg) {
@@ -1507,10 +1574,35 @@ async function buildContextMessages(thread, card, opts) {
     // (older messages from before the parser split was working), fall back
     // to reasoning. Standard practice for thinking-style models is to send
     // only the final response back in history, not the chain-of-thought.
-    let msgContent = translateTemplates(m.content || (m.role === 'assistant' ? m.reasoning : '') || '', charName, userName);
+    // In a group chat the member whose turn it is reads its own messages as
+    // the assistant's and everyone else's -- yours and the other members' --
+    // as the other side, each starting with its speaker's name; {{char}} in a
+    // message means whoever wrote it. An empty one (the slot a reroll is
+    // about to fill) is left out rather than sent as a bare name.
+    const _seen = groupCtx ? groupCtx.present(m) : null;
+    let msgContent = translateTemplates(m.content || (m.role === 'assistant' ? m.reasoning : '') || '',
+                                        _seen ? _seen.charName : charName, userName);
     if (m.attachmentText) msgContent = m.attachmentText + msgContent;
     if (m.searchData) msgContent += '\n' + m.searchData;
+    if (_seen) {
+      if (msgContent.trim()) apiMessages.push({ role: _seen.role, content: _seen.prefix + msgContent });
+      continue;
+    }
     apiMessages.push({ role: m.role, content: msgContent });
+  }
+
+  // A group prompt ends by saying whose turn it is. The strict-template pass
+  // below needs the conversation to end on the other side, so when the
+  // member's own message is the last thing said (or nothing has been said),
+  // a one-line cue stands in for it; the turn line is then folded onto the
+  // end of that last message, which is where a model weighs it most.
+  if (groupCtx) {
+    const _tail = apiMessages[apiMessages.length - 1];
+    if (!_tail || _tail.role !== 'user') apiMessages.push({ role: 'user', content: groupCtx.cue });
+    if (carouselLine) {
+      apiMessages.push({ role: 'system', content: '[Narrative direction for this response]\n' + translateTemplates(carouselLine, charName, userName) });
+    }
+    apiMessages.push({ role: 'system', content: groupCtx.nudge });
   }
 
   const finalApiMessages = normalizeMessagesForStrictTemplates(apiMessages);

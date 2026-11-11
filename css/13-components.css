@@ -50,6 +50,56 @@
 }
 .cot-content p { margin: 4px 0; }
 
+/* Tool calls (card-code tools, 23-card-code.js). The same collapsed block as
+   the reasoning above, under its own class names: the streaming painter in
+   14-scroll.js looks a reply's reasoning block up by .cot-block. */
+.tool-block {
+  margin: 4px 0 8px 0;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 6px;
+  background: rgba(255,255,255,0.02);
+  overflow: hidden;
+  font-size: 13px;
+}
+.tool-summary {
+  padding: 6px 12px;
+  cursor: pointer;
+  color: rgba(255,255,255,0.5);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  user-select: none;
+  list-style: none;
+}
+.tool-summary::-webkit-details-marker { display: none; }
+.tool-summary::before { content: '\25B8  '; }
+.tool-block[open] .tool-summary::before { content: '\25BE  '; }
+.tool-content {
+  padding: 8px 12px 12px;
+  max-height: 300px;
+  overflow-y: auto;
+  color: rgba(255,255,255,0.55);
+  font-size: 12px;
+  line-height: 1.5;
+  border-top: 1px solid rgba(255,255,255,0.05);
+}
+.tool-call + .tool-call { margin-top: 10px; }
+.tool-call-name { font-weight: 600; color: rgba(255,255,255,0.7); }
+.tool-call-ms { font-weight: 400; opacity: 0.6; margin-left: 6px; }
+.tool-call pre {
+  margin: 4px 0 0;
+  padding: 6px 8px;
+  background: rgba(0,0,0,0.25);
+  border-radius: 4px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 11px;
+  max-height: 160px;
+  overflow: auto;
+}
+.tool-call-error .tool-call-result { color: var(--red, #ff6b6b); }
+
 /* Archived messages — folded into lore, still visible to the user but
    no longer sent to the model. Dimmed so the live conversation visually
    dominates; click to "wake up" if we ever want that gesture later. */
@@ -595,6 +645,23 @@ input[type="range"]::-moz-range-thumb {
   gap: 8px;
   margin-bottom: 8px;
 }
+.ext-entry-enabled-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: 0 0 auto;
+  color: var(--cyan-dim);
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+  user-select: none;
+}
+.ext-entry-enabled {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--green-neon);
+}
 .ext-entry-name {
   flex: 1;
   min-width: 0;
@@ -673,7 +740,16 @@ input[type="range"]::-moz-range-thumb {
   color: var(--cyan-dim);
 }
 .catalog-entry button { grid-area: button; }
-.catalog-entry.installed { opacity: 0.55; }
+/* Installed rows are dimmed, but not their CHECK FILE button and its result
+   (1.8.0, #67): those are the one thing on the row still worth doing. */
+.catalog-entry.installed > .catalog-entry-name,
+.catalog-entry.installed > .catalog-entry-meta,
+.catalog-entry.installed .catalog-installed-btn { opacity: 0.55; }
+.catalog-entry-actions { grid-area: button; display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.catalog-check-note { grid-area: note; font-size: 11px; color: var(--cyan-dim); overflow-wrap: anywhere; }
+.catalog-check-note[data-tone="ok"]  { color: var(--green-neon); }
+.catalog-check-note[data-tone="err"] { color: var(--red-neon); }
+.catalog-check-note button { margin-top: 6px; }
 /* 1.7.9: the Unverified line, and the tier headings the list is grouped by. */
 .catalog-entry { grid-template-areas: "name button" "meta button" "note note"; }
 .catalog-entry-note {
@@ -723,6 +799,7 @@ input[type="range"]::-moz-range-thumb {
     gap: 6px;
   }
   .catalog-entry button { justify-self: start; }
+  .catalog-entry-actions { justify-content: flex-start; }
 }
 
 /* ========================================================
@@ -935,7 +1012,37 @@ input[type="range"]::-moz-range-thumb {
 }
 .about-build-warn[hidden] { display: none; }
 
-#about-copy-btn { margin-top: 12px; }
+/* COPY BUILD INFO and CHECK FOR UPDATES (1.8.0), side by side. */
+.about-build-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 12px; }
+
+/* The update button's answer (js/28-update.js): a line, the release's own
+   short notes, the download bar Add a Model uses, and its buttons. */
+.about-update {
+  margin-top: 12px;
+  padding: 8px 10px;
+  border: 1px solid rgba(0, 243, 255, 0.18);
+  border-radius: var(--radius);
+  background: rgba(0, 243, 255, 0.03);
+  font-size: 12px;
+  line-height: 1.55;
+}
+.about-update[hidden] { display: none; }
+.about-update-line { color: var(--white); }
+.about-update-ok { color: var(--green-neon); }
+.about-update-warn { color: var(--amber, #ffaa00); }
+.about-update-error { color: var(--red-neon); }
+.about-update-notes {
+  margin-top: 6px;
+  color: rgba(255, 255, 255, 0.55);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.about-update-notes[hidden] { display: none; }
+.about-update .dl-bar { margin-top: 8px; }
+.about-update .dl-bar[hidden] { display: none; }
+.about-update-actions { display: flex; flex-wrap: wrap; gap: 12px; }
+.about-update-actions:not(:empty) { margin-top: 10px; }
+#about-update-hint { margin-top: 10px; }
 
 /* ========================================================
    IDLE STAND-DOWN (CONFIG)
@@ -974,6 +1081,12 @@ input[type="range"]::-moz-range-thumb {
 }
 .standdown-status[data-tone="ok"]  { color: var(--green-neon); }
 .standdown-status[data-tone="err"] { color: var(--red-neon); }
+
+/* Privacy Status: whether the embedding server runs (1.8.0, #15). Green like
+   the box when it does; the dimmer text colour, not red, when it does not --
+   chat works either way. */
+#privacy-embed { margin-top: 8px; color: var(--green-dim); }
+#privacy-embed.privacy-embed-off { color: var(--text-dim); }
 
 /* CONFIG > Config File (config.toml). The file is read as written: no
    wrapping, so a long comment line scrolls instead of breaking. */
@@ -1078,3 +1191,49 @@ input[type="range"]::-moz-range-thumb {
 }
 @keyframes undo-countdown { from { transform: scaleX(1); } to { transform: scaleX(0); } }
 @media (prefers-reduced-motion: reduce) { .undo-toast-bar { display: none; } }
+
+/* CONFIG > Advanced > MCP Servers (1.8.0, #16; js/26-mcp.js). One card per
+   server. The "runs on this PC" line is magenta, the palette's warning, on
+   every card and not only in the form: it is the thing to know about each. */
+.mcp-note { font-size: 12px; color: var(--cyan-mid); margin: 0 0 8px; }
+.mcp-note:empty { display: none; }
+.mcp-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; }
+.mcp-empty { font-size: 12px; color: rgba(224,248,255,0.55); }
+.mcp-server {
+  padding: 8px 10px;
+  border: 1px solid rgba(0,243,255,0.15);
+  border-left: 3px solid var(--cyan-dim);
+  border-radius: var(--radius);
+  background: rgba(0,0,0,0.2);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.mcp-server[data-state="off"] { border-left-color: rgba(255,255,255,0.18); }
+.mcp-server[data-state="ready"] { border-left-color: var(--green-neon); }
+.mcp-server[data-state="failed"] { border-left-color: var(--red-neon); }
+.mcp-server-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.mcp-server-name { color: var(--cyan-bright); font-weight: bold; letter-spacing: 0.5px; }
+.mcp-server-state { color: rgba(224,248,255,0.55); }
+.mcp-server[data-state="ready"] .mcp-server-state { color: var(--green-neon); }
+.mcp-server[data-state="failed"] .mcp-server-state { color: var(--red-neon); }
+.mcp-server-cmd { display: block; margin-top: 4px; color: var(--cyan-mid); white-space: pre-wrap; }
+.mcp-server-env, .mcp-server-info { margin-top: 3px; color: rgba(224,248,255,0.55); }
+.mcp-server-warn, .mcp-warn { margin-top: 3px; color: var(--magenta); }
+.mcp-warn { margin: 0 0 8px; font-size: 12px; }
+.mcp-server-detail { margin-top: 4px; color: var(--red-neon); white-space: pre-wrap; }
+.mcp-server-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.mcp-tools { margin-top: 8px; padding-top: 6px; border-top: 1px dashed rgba(0,243,255,0.15); display: flex; flex-direction: column; gap: 5px;
+  max-height: 260px; overflow-y: auto; }
+.mcp-tool-name { color: var(--cyan-bright); }
+.mcp-tool-ro { margin-left: 8px; font-size: 11px; color: var(--green-dim); }
+.mcp-tool-desc { color: rgba(224,248,255,0.55); margin-top: 1px; }
+.mcp-form { margin: 4px 0 6px; padding: 10px; border: 1px dashed rgba(0,243,255,0.25); border-radius: var(--radius); }
+.mcp-form label { display: block; margin-top: 8px; }
+.mcp-form input[type="text"], .mcp-form textarea { width: 100%; box-sizing: border-box; font-size: 12px; }
+.mcp-form textarea { white-space: pre; overflow-x: auto; }
+.mcp-paste-toggle { margin-bottom: 4px; }
+.mcp-paste { margin-bottom: 6px; font-size: 12px; }
+.mcp-paste textarea { margin: 6px 0; }
+@media (max-width: 600px) {
+  .mcp-form input[type="text"], .mcp-form textarea { font-size: 16px; } /* prevent iOS zoom on focus */
+}

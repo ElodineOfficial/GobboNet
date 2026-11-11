@@ -1,0 +1,126 @@
+name: Bug report
+description: Something in GobboNet does not work the way it should.
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. The fields below are what make a report something we can act on.
+
+        **A security problem?** Please don't open a public issue. Send it privately to Elodine on the [GobboNet Discord](https://discord.gg/rcmN8uEbaa).
+
+        **Before you paste anything:** `gobbonet doctor` and COPY BUILD INFO can include your local network addresses and folder paths (which often contain your user name). Read them over and blank out anything you would rather not post publicly.
+
+  - type: input
+    id: version
+    attributes:
+      label: GobboNet version
+      description: Shown in ABOUT in the app.
+      placeholder: "1.8.0"
+    validations:
+      required: true
+
+  - type: textarea
+    id: build-info
+    attributes:
+      label: Build info
+      description: In ABOUT, click COPY BUILD INFO and paste it here.
+      render: text
+    validations:
+      required: false
+
+  - type: dropdown
+    id: started
+    attributes:
+      label: How did you start GobboNet?
+      options:
+        - "Windows: the GobboNet or Launch GobboNet shortcut (Start menu or desktop)"
+        - "Windows: the Setup or add a model shortcut"
+        - "Windows: launch.bat"
+        - "Windows: gobbonet.exe, run directly"
+        - "Linux: the app menu or the gobbonet command (.deb or .rpm)"
+        - "Linux: the AppImage"
+        - "Linux: the ZIP (./gobbonet)"
+        - "Something else (say below)"
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: "Windows 11 24H2, Ubuntu 24.04, Fedora 44..."
+    validations:
+      required: true
+
+  - type: input
+    id: gpu
+    attributes:
+      label: GPU
+      description: The graphics card, and how much memory it has, if you know. "None" is a fine answer.
+      placeholder: "RTX 3060 12 GB, Radeon RX 7800 XT, Intel UHD + GeForce MX450, none..."
+    validations:
+      required: false
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you saw, including any message word for word.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to make it happen
+      description: What you clicked or typed, in order, starting from GobboNet open.
+      placeholder: |
+        1. Open CONFIG > Model & Performance
+        2. ...
+    validations:
+      required: false
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected instead
+    validations:
+      required: false
+
+  - type: textarea
+    id: doctor
+    attributes:
+      label: gobbonet doctor output
+      description: "Windows: run `gobbonet.exe doctor` in the GobboNet folder. Linux: run `gobbonet doctor`. Paste the whole output."
+      render: text
+    validations:
+      required: false
+
+  - type: textarea
+    id: log
+    attributes:
+      label: The end of llama-server.log, if a model would not load or reply
+      description: "It is in GobboNet's data folder; `gobbonet doctor` prints where. The last 40 lines are usually enough."
+      render: text
+    validations:
+      required: false
+
+  - type: textarea
+    id: ai-assist
+    attributes:
+      label: Did an AI assistant help with this report? (optional)
+      description: |
+        Entirely optional, and it never decides whether a report is looked at. If one did, it helps to say:
+        which assistant; what a person checked, and how (ran it, read the code, reproduced it); and which claims nobody has checked yet.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Before you post
+      options:
+        - label: I read what I pasted and removed addresses, folder paths and anything else I don't want public.
+          required: true

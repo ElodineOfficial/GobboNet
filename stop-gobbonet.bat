@@ -89,9 +89,9 @@ call :stop_image "gobbonet.exe"
 :: llama.cpp build, another program's launch.bat or fileserver.ps1. Someone
 :: stopping GobboNet, or running its uninstaller, has not agreed to lose those.
 
-:: The launch.bat windows of this install -- its health monitor on the legacy
-:: path, which would otherwise restart llama-server below, and the window that
-:: ran gobbonet.exe. Matched by the full path of this folder's launch.bat on
+:: The launch.bat windows of this install -- the window that ran gobbonet.exe,
+:: and on a 1.7.x install the health monitor, which would otherwise restart
+:: llama-server below. Matched by the full path of this folder's launch.bat on
 :: the command line. The window this script is running in, and the ones that
 :: started it, are never touched. (From PR #59, orcmaul.)
 call :stop_matching "cmd.exe" cmdline "launch.bat" "the launch.bat window"
@@ -102,9 +102,11 @@ call :stop_matching "cmd.exe" cmdline "launch.bat" "the launch.bat window"
 :: run from elsewhere still stops with gobbonet.exe, its parent, above.
 call :stop_matching "llama-server.exe" path "" "llama-server"
 
-:: The legacy PowerShell file server, from installs that predate the Go
-:: server. Matched by this install's fileserver.ps1 on the command line:
-:: killing every powershell.exe would take unrelated work with it.
+:: The legacy PowerShell file server, removed in 1.8.0. One started before an
+:: upgrade keeps running -- and keeps the web port -- until something stops
+:: it, so it is still stopped here. Matched by this install's copy on the
+:: command line: killing every powershell.exe would take unrelated work with
+:: it.
 call :stop_matching "powershell.exe" cmdline "fileserver.ps1" "the legacy PowerShell file server"
 
 :: Give Windows a moment to release the file handles. Without this the
@@ -116,7 +118,7 @@ if not defined QUIET (
     rem Pause only when something needs reading; otherwise close by itself
     rem after a few seconds, or at once on a keypress. From PR #59.
     if defined FAILED (
-        echo  [!] Something would not stop. Close it and run this again,
+        echo  [*] Something would not stop. Close it and run this again,
         echo      or reboot -- a reboot always clears it.
         echo.
         pause
@@ -161,7 +163,7 @@ if not errorlevel 1 (
 
 tasklist /fi "imagename eq !_IMG!" 2>nul | findstr /i "!_IMG!" >nul 2>&1
 if not errorlevel 1 (
-    echo  [!] Could not stop !_IMG!. Close it and run this again.
+    echo  [*] Could not stop !_IMG!. Close it and run this again.
     rem FAILED, not STOPPED: reporting 'nothing is running now' while something
     rem still holds the port is the exact false reassurance this script exists
     rem to remove.
@@ -199,7 +201,7 @@ if "!_RC!"=="10" (
     set "STOPPED=1"
 )
 if "!_RC!"=="11" (
-    echo  [!] Could not stop %~4. Close it and run this again.
+    echo  [*] Could not stop %~4. Close it and run this again.
     set "STOPPED=1"
     set "FAILED=1"
 )

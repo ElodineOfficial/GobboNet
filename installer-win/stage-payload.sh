@@ -4,7 +4,7 @@
 #
 # usage: installer-win/stage-payload.sh <source>
 #   <source> is an unpacked release ZIP (its GobboNet/ folder) or the repo
-#   root after ./scripts/make-zip.sh, so gobbonet.exe is there. Staging from the ZIP
+#   root after bash ./scripts/make-zip.sh, so gobbonet.exe is there. Staging from the ZIP
 #   puts the exact same files in the installer as in the ZIP beside it.
 #
 # The file list is read from gobbonet.nsi itself (its File "${APPSRC}\..."
@@ -18,7 +18,7 @@ src="${1:?usage: $0 <unpacked ZIP folder or repo root>}"
 here="$(cd "$(dirname "$0")" && pwd)"
 dest="$here/../staging"
 
-[ -f "$src/gobbonet.exe" ] || { echo "no gobbonet.exe in $src: run ./scripts/make-zip.sh first, or point at the unpacked ZIP" >&2; exit 1; }
+[ -f "$src/gobbonet.exe" ] || { echo "no gobbonet.exe in $src: run bash ./scripts/make-zip.sh first, or point at the unpacked ZIP" >&2; exit 1; }
 
 rm -rf "$dest"
 mkdir -p "$dest"

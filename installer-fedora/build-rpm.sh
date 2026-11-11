@@ -2,22 +2,22 @@
 # Build the Fedora RPM. The counterpart to installer-linux/build-deb.sh, and
 # deliberately the same shape so the two can be read side by side.
 #
-#   ./build-rpm.sh                       fetch (or reuse) the pinned engine, build
-#   SKIP_ENGINE_FETCH=1 ./build-rpm.sh   never download: use the engine archive
-#                                        already in vendor/ (still hash-checked)
-#   REUSE_DEB=/path/to.deb ./build-rpm.sh
-#                                        take the engine out of an existing .deb
-#                                        instead of downloading it again
-#   GOBBONET_BIN=/path/to/gobbonet ./build-rpm.sh
-#                                        the linux/amd64 server to package
-#   BUNDLE_CPU_ENGINE=1 ./build-rpm.sh   also ship the CPU-only engine
-#   RPM_REVISION=2 ./build-rpm.sh        a packaging-only rebuild of one release
-#   DIST=.fc45 ./build-rpm.sh            tag a specific Fedora release
-#   RPM_SIGN_KEY=<gpg key id> ./build-rpm.sh
-#                                        sign the package (off by default)
+#   bash ./build-rpm.sh                      fetch (or reuse) the pinned engine, build
+#   SKIP_ENGINE_FETCH=1 bash ./build-rpm.sh  never download: use the engine archive
+#                                            already in vendor/ (still hash-checked)
+#   REUSE_DEB=/path/to.deb bash ./build-rpm.sh
+#                                            take the engine out of an existing .deb
+#                                            instead of downloading it again
+#   GOBBONET_BIN=/path/to/gobbonet bash ./build-rpm.sh
+#                                            the linux/amd64 server to package
+#   BUNDLE_CPU_ENGINE=1 bash ./build-rpm.sh  also ship the CPU-only engine
+#   RPM_REVISION=2 bash ./build-rpm.sh       a packaging-only rebuild of one release
+#   DIST=.fc45 bash ./build-rpm.sh           tag a specific Fedora release
+#   RPM_SIGN_KEY=<gpg key id> bash ./build-rpm.sh
+#                                            sign the package (off by default)
 #
 # What this does NOT do is compile anything. The Go binary comes from
-# ../scripts/build-release.sh, exactly as the .deb expects, because a package that
+# scripts/build-release.sh, exactly as the .deb expects, because a package that
 # silently rebuilds its own payload can ship something the maintainer never
 # tested. What it DOES do, before and after rpmbuild, is check: the engine
 # against its pin, the binary against VERSION, the staged tree against
@@ -96,7 +96,7 @@ BUNDLE_CPU="${BUNDLE_CPU_ENGINE:-0}"
 REUSE_DEB="${REUSE_DEB:-}"
 
 # ---------------------------------------------------------------------------
-# The Go binary. Built by ../scripts/build-release.sh, never here.
+# The Go binary. Built by scripts/build-release.sh, never here.
 #
 # Looked for in this order: GOBBONET_BIN; this release's linux/amd64 build in
 # ../dist; the release binary the ZIP ships at linux-amd64/gobbonet. Whichever
@@ -113,7 +113,7 @@ if [ -z "$GOBBONET_BIN" ] && [ -f "$ROOT/linux-amd64/gobbonet" ]; then
 fi
 [ -n "$GOBBONET_BIN" ] && [ -f "$GOBBONET_BIN" ] || fail \
 "no linux/amd64 gobbonet binary found.
-       Run ../scripts/build-release.sh first, or set GOBBONET_BIN=/path/to/gobbonet"
+       Run bash ../scripts/build-release.sh first, or set GOBBONET_BIN=/path/to/gobbonet"
 
 case "$(file -b "$GOBBONET_BIN" 2>/dev/null)" in
     *"ELF 64-bit"*x86-64*) ;;
@@ -129,7 +129,7 @@ BIN_VERSION="$("$GOBBONET_BIN" version 2>/dev/null | awk 'NR == 1 { print $1 }' 
 case "$BIN_VERSION" in
     "$RELEASE-go-"?*) ;;
     *) fail "$GOBBONET_BIN reports $BIN_VERSION, but VERSION says $RELEASE.
-       Rebuild it with ../scripts/build-release.sh, or point GOBBONET_BIN at the right one." ;;
+       Rebuild it with bash ../scripts/build-release.sh, or point GOBBONET_BIN at the right one." ;;
 esac
 say "binary: $GOBBONET_BIN ($BIN_VERSION)"
 

@@ -5,9 +5,9 @@ this one holds few surprises — it stages the same tree, from the same sources,
 and the differences below are the ones RPM and Fedora force.
 
 ```sh
-../scripts/build-release.sh          # produces the linux/amd64 binary (or use the
+bash ../scripts/build-release.sh     # produces the linux/amd64 binary (or use the
                              # release binary already at ../linux-amd64/gobbonet)
-./build-rpm.sh               # fetch + verify the engine, stage, build, check
+bash ./build-rpm.sh          # fetch + verify the engine, stage, build, check
 sudo dnf install ./dist/gobbonet-*.rpm
 ```
 
@@ -28,7 +28,7 @@ macro whose default differs between hosts is pinned in the spec.
   The package's Release field is taken from that same string (`1.go.<build id>`),
   so the package names the build inside it — not today's date, not whatever
   commit the checkout has moved on to.
-- **the staged tree** against `payload.manifest`, via `../scripts/verify-payload.sh`,
+- **the staged tree** against `payload.manifest`, via `scripts/verify-payload.sh`,
   exactly as the deb does. See that file for why both builds share one list.
 - **the finished package** against `check-rpm.sh`. A package that fails is
   removed from `dist/`.
@@ -36,7 +36,7 @@ macro whose default differs between hosts is pinned in the spec.
 `check-rpm.sh` also runs on its own, against any GobboNet `.rpm`:
 
 ```sh
-./check-rpm.sh dist/gobbonet-*.rpm
+bash ./check-rpm.sh dist/gobbonet-*.rpm
 ```
 
 It holds the package to what every earlier Fedora build got wrong: requirements
@@ -150,7 +150,7 @@ documented way in.
 To sign anyway:
 
 ```sh
-RPM_SIGN_KEY=<gpg key id> ./build-rpm.sh
+RPM_SIGN_KEY=<gpg key id> bash ./build-rpm.sh
 ```
 
 Users then import the public key once (`sudo rpm --import gobbonet.asc`), after
@@ -164,10 +164,10 @@ which stays the single source for that build and its hashes. Three ways to
 supply it:
 
 ```sh
-./build-rpm.sh                                   # download (cached in vendor/)
-SKIP_ENGINE_FETCH=1 ./build-rpm.sh               # never download; the archive
+bash ./build-rpm.sh                              # download (cached in vendor/)
+SKIP_ENGINE_FETCH=1 bash ./build-rpm.sh          # never download; the archive
                                                  # must already be in vendor/
-REUSE_DEB=../installer-linux/dist/gobbonet_*.deb ./build-rpm.sh
+REUSE_DEB=../installer-linux/dist/gobbonet_*.deb bash ./build-rpm.sh
 ```
 
 The archive in `vendor/` is hash-checked on every build either way. (Before
@@ -181,8 +181,8 @@ are you on?" has an answer on a user's disk.
 ## Testing without Fedora hardware
 
 ```sh
-pip install gguf numpy && ./make-test-model.py test-model.gguf   # < 1 MB
-sudo ./test-in-fedora.sh --root f45 --rpm dist/gobbonet-*.rpm \
+pip install gguf numpy && python3 ./make-test-model.py test-model.gguf   # < 1 MB
+sudo bash ./test-in-fedora.sh --root f45 --rpm dist/gobbonet-*.rpm \
      --python cpython-3.15.*-x86_64-unknown-linux-gnu-install_only*.tar.gz \
      --openssl3-from <a dir with Fedora 44's libssl.so.3* and libcrypto.so.3*> \
      --upgrade-from gobbonet-1.7.3-3.go.nogit.20260908.fedora.x86_64.rpm \
@@ -207,14 +207,16 @@ Fedora 45 it passes even for a package whose engine cannot load. The model from
 `make-test-model.py` is random weights; it proves the engine loads a model and
 generates with Fedora's libraries, not that it says anything useful.
 
-Results for 1.7.6, on the userlands of 2026-09-20:
+Results for 1.8.0, on the userlands of 2026-11-08, upgrading from the
+official 1.7.9 package (1.7.6's and later ones are in each release's
+`docs/changelog/CHANGELOG-*-fedora-*.md`):
 
 | | rpm | OpenSSL | signatures | Python | result |
 |---|---|---|---|---|---|
-| Fedora 43 | 6.0.2 | 3.5.8 | optional | 3.14 | 20/20 |
-| Fedora 44 | 6.0.2 | 3.5.8 | optional | 3.14 | 20/20 |
-| Fedora 45 | 6.1.0 | 4.0.2 | enforced | 3.15 | 21/21 |
-| Rawhide (46) | 6.1.0 | 4.0.2 | enforced | 3.15 | 21/21 |
+| Fedora 43 | 6.0.2 | 3.5.9 | optional | 3.14.10 | 20/20 |
+| Fedora 44 | 6.0.2 | 3.5.9 | optional | 3.14.10 | 20/20 |
+| Fedora 45 | 6.1.0 | 4.0.3 | enforced | 3.15.2 | 21/21 |
+| Rawhide (46) | 6.1.0 | 4.0.3 | enforced | 3.15.2 | 21/21 |
 
 It cannot test SELinux (the chroot has none), a real desktop session, GNOME
 Software, or GPU inference. Those still need Fedora hardware.
@@ -236,3 +238,47 @@ Removal leaves `~/.config/gobbonet` and `~/.local/share/gobbonet` alone,
 including the downloaded models — gigabytes the user waited for, on an operation
 they may be reversing in thirty seconds. `gobbonet uninstall`, run as the owning
 user, is what clears them.
+
+## 1.8.0: the same package, for the 1.8.0 payload
+
+`gobbonet.spec` (but for its changelog entry), `build-rpm.sh`, `check-rpm.sh`
+and the engine are 1.7.9's. So the package is too: the same 72 requirements,
+4 recommends and `bundled(llama.cpp) = b10456`, the same scriptlets, and the
+same 79 files, folders and links, with the same modes and owners. What changed
+is in seven of the files it carries: the program, the launcher, the setup page
+(`gobbonet-setup.py` and `wizard.html`), the catalogue, `ENGINE.txt`'s
+"bundled by" line, and `FEDORA.md`. `installer-linux/README.md` says what
+changed in the ones the two packages share.
+
+**How it was built.** From the extracted 1.8.0 update ZIP, with rpm 4.19.1 built
+from source, the rpm that built 1.7.8's and 1.7.9's: the header then says rpm
+4.19.1 for `x86_64-vendor-linux`, as theirs do
+(`docs/changelog/CHANGELOG-1.7.9-fedora-installer.md` has how to build it).
+`SOURCE_DATE_EPOCH` is the commit's time, so the same command gives the same
+file, byte for byte:
+
+```sh
+cd GobboNet/installer-fedora       # in the extracted ZIP, with rpm 4.19.1 first on PATH
+mkdir -p vendor && cp /path/to/llama-b10456-bin-ubuntu-vulkan-x64.tar.gz vendor/
+GOBBONET_BIN="$PWD/../linux-amd64/gobbonet" SKIP_ENGINE_FETCH=1 \
+    SOURCE_DATE_EPOCH="$(git -C /path/to/the/repo log -1 --format=%ct v1.8.0)" \
+    bash ./build-rpm.sh
+```
+
+The same toolchain, given `git archive v1.7.9`, 1.7.9's program and the same
+engine archive, rebuilds the official 1.7.9 package with every header field,
+requirement, scriptlet and file the same, except the build time, the 16 file
+times the build itself sets and the digests over them. 1.7.9 was built without
+`SOURCE_DATE_EPOCH`, so those followed the clock.
+
+**How it was checked** (`docs/changelog/CHANGELOG-1.8.0-fedora-installer.md`
+has the details): `check-rpm.sh`; tag by tag and file by file against the
+official 1.7.9, where only the version, the build time, the sizes, the
+changelog entry and the seven files above differ; rpmlint, which finds the
+same in both; `test-in-fedora.sh` on Fedora 43, 44, 45 and Rawhide (the table
+above); and, on Fedora 44 and 45, ordinary users with headless Chromium as
+their browser: an upgrade from 1.7.9 that keeps the conversation, password,
+config and model; first runs whose pages match 1.7.9's but for the location
+page and the model page's note; chats answered by the bundled engine; a first
+run stopped part way; `dnf remove`, which leaves the users' files alone; and
+`gobbonet uninstall`, which leaves nothing of GobboNet's.

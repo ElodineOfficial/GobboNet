@@ -27,6 +27,7 @@ const HTML = read('chat.html');
 const JS = fs.readdirSync(ROOT + '/js').filter(f => f.endsWith('.js')).map(f => read('js/' + f)).join('\n');
 const decode = s => s.replace(/&amp;/g, '&').replace(/&hellip;/g, '…').replace(/&mdash;/g, '—').replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(+n));
 const UI = decode(HTML) + '\n' + JS;
+const VERSION = read('VERSION').trim();
 
 let pass = 0, fail = 0;
 const ok = (c, l, extra) => {
@@ -42,7 +43,9 @@ const inf = cards.find(c => c.name === 'Gobbonet Informant') || {};
 const style = String(inf.writingStyle || ''), pers = String(inf.personality || '');
 ok(style && pers && inf.icon && inf.desc && inf.desc.length <= 72, 'the Informant has a prompt, a personality, an icon and a description that fits its tile');
 ok(typeof inf.temperature === 'number' && inf.temperature <= 0.4, `a low temperature (${inf.temperature}), so a small model sticks to its notes`);
-ok(/1\.7\.9/.test(style) && /1\.7\.9/.test(inf.desc), 'it says which GobboNet it describes');
+// The release it describes is VERSION's (1.8.0: it was a literal 1.7.9 until
+// the bump, which left the check behind for the next one to trip on).
+ok(style.includes('GobboNet ' + VERSION + ',') && inf.desc.includes('GobboNet ' + VERSION + '.'), `it says which GobboNet it describes (${VERSION})`, inf.desc);
 
 console.log('\n=== B. under budget ===');
 {
@@ -57,7 +60,7 @@ console.log('\n=== B. under budget ===');
   ok(style.length <= 6000, `${style.length} characters (1.7.8's was 7,248)`);
 }
 
-console.log('\n=== C. it names every 1.7.9 feature ===');
+console.log('\n=== C. it names every 1.7.9 and 1.8.0 feature ===');
 {
   const want = {
     'UNDO (step 9)': ['UNDO', 'Ctrl+Z', '10 seconds'],
@@ -71,6 +74,18 @@ console.log('\n=== C. it names every 1.7.9 feature ===');
     'banned phrases': ['Banned Phrases:', 'CHECK', 'Bias Strength'],
     'memory and lore': ['Lore System', 'Memory Files', 'RAG Storybook'],
     'UPDATE for default characters (this step)': ['UPDATE brings one you added up to the new version'],
+    // 1.8.0, at the version bump: each feature by the names on screen.
+    'the Files panel (1.8.0)': ['📄', 'Files panel', 'USE IN MY NEXT MESSAGE'],
+    'group chats (1.8.0)': ['+ GROUP', 'GROUPS', '▶ NEXT', 'AUTO'],
+    'Auto Reroll (1.8.0)': ['Auto Reroll', 'Off-limits'],
+    'model links (1.8.0, #52)': ['Model for this character', 'Model Switching'],
+    'card tools (1.8.0, PR #71)': ["Let the model call this card's tools"],
+    'why a model failed to load (1.8.0, #67)': ['CHECK FILE', 'the chat says why'],
+    'the GPU menu (1.8.0, #72)': ['GPU (which graphics card)'],
+    'open_browser (1.8.0, PR #58)': ['When GobboNet Starts'],
+    'MCP servers (1.8.0, #42)': ['MCP Servers', '+ ADD SERVER'],
+    'the update button (1.8.0)': ['CHECK FOR UPDATES', 'UPDATE NOW', 'RESTART NOW', 'update checks'],
+    'a switch for each entry in My extensions (1.8.0)': ['each entry with its own switch'],
   };
   for (const [what, words] of Object.entries(want)) {
     const missing = words.filter(w => !style.includes(w));
@@ -182,7 +197,7 @@ console.log('\n=== G. stale notes in the page ===');
   ok(!/Injected periodically/.test(HTML) && /Sent with every reply, near the top/.test(HTML), 'the Personality hint says what happens now (sent every reply)');
   const tip = (HTML.match(/<div class="tip-body" id="tip-search-key" hidden>([\s\S]*?)<\/div>/) || [])[1] || '';
   ok(tip && !/11435|search proxy/.test(tip), 'the search-key note no longer mentions the removed proxy on :11435');
-  ok(/only web search and the model and mod lists go online/.test(HTML), 'Privacy Status counts the endorsed mod list');
+  ok(/only web search, model and mod lists, and update checks go online/.test(HTML), 'Privacy Status counts the endorsed mod list (and, since 1.8.0, the update check)');
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

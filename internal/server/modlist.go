@@ -111,8 +111,7 @@ func (s *Server) handleModInstall(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, r, http.StatusMethodNotAllowed, "POST only")
 		return
 	}
-	if !fromThisPC(r) {
-		httpx.Error(w, r, http.StatusForbidden, notOnThisPC)
+	if !mayManage(w, r) {
 		return
 	}
 	var body struct {

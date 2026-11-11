@@ -4,8 +4,8 @@
 # binary CONTAINS the web assets it needs, so there is nothing to bundle beside
 # it but the fallback model catalogue.
 #
-#   ./scripts/build-release.sh              build dist/ for all platforms
-#   ./scripts/build-release.sh --allow-dirty  build anyway with an uncommitted tree
+#   bash ./scripts/build-release.sh                build dist/ for all platforms
+#   bash ./scripts/build-release.sh --allow-dirty  build anyway with an uncommitted tree
 #
 # The version is "<RELEASE>-go-<short sha>". A tester's report is only
 # actionable if it names a build, and a build is only nameable if the sha
@@ -66,7 +66,26 @@ if [ -n "$(git status --porcelain)" ]; then
 fi
 
 VERSION="$RELEASE-go-$SHA"
+# The serial: when HEAD was committed, in Unix seconds (1.8.0). It is what
+# orders two builds of one release, so the update button can offer a hotfix
+# re-published as the same version and never an earlier build
+# (internal/update). Stamped as gobbonet-build[<version>/<serial>] so that
+# `gobbonet update manifest` can read it out of the program file
+# (internal/version/version.go). Without git it is left out; such a build is
+# offered any later build of its release.
+SERIAL="$(git log -1 --format=%ct 2>/dev/null || true)"
 LDFLAGS="-s -w -X github.com/ElodineOfficial/GobboNet/internal/version.Version=$VERSION"
+if [ -n "$SERIAL" ]; then
+    LDFLAGS="$LDFLAGS -X github.com/ElodineOfficial/GobboNet/internal/version.Stamp=gobbonet-build[$VERSION/$SERIAL]"
+fi
+
+# A build with no update signing key can say a newer release exists but
+# installs nothing (docs/UPDATES.md). Fine for a test build; a release meant
+# to update itself later needs the maintainer's key in the file first.
+if ! grep -q '^ed25519 ' internal/update/trusted-keys.txt 2>/dev/null; then
+    echo "WARNING: internal/update/trusted-keys.txt has no key: this build's UPDATE NOW will"
+    echo "         install nothing. See docs/UPDATES.md before building a release."
+fi
 
 DIST="dist/$VERSION"
 rm -rf "$DIST"

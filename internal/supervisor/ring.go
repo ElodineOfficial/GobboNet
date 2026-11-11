@@ -7,7 +7,7 @@ import (
 
 // ringBuffer keeps the last N bytes written to it.
 //
-// This replaces fileserver.ps1's Get-LlamaStartupError, which tailed
+// This replaces the 1.7 PowerShell server's Get-LlamaStartupError, which tailed
 // llama-server.log and grepped it with regexes. Capturing the child's stderr
 // directly means a failed launch produces a structured, in-memory answer instead
 // of a race against a log file that may not have been flushed yet.
@@ -85,29 +85,45 @@ var interestingLines = []string{
 	"address already in use",
 }
 
-// LastError extracts a human-readable failure reason from the captured stderr.
+// LastError extracts a human-readable failure reason from the captured stderr:
+// the line that shows a known cause (cause.go) if there is one, else the
+// latest line holding a marker -- skipping llama.cpp's sign-off ("exiting due
+// to model loading error"), which says only that it failed and used to win
+// every time (1.8.0, #67), unless nothing else was said at all.
 //
 // Returns "" when nothing in the buffer looks like a diagnosis, so the caller
 // can fall back to a generic message rather than show the user an arbitrary
 // slice of startup chatter.
 func (r *ringBuffer) LastError() string {
-	text := r.String()
+	if f := r.failure(); f != nil {
+		return f.Line
+	}
+	return ""
+}
+
+// lastErrorIn is the generic scan: from the end, the first line holding an
+// interesting marker that is not a sign-off; failing that, a sign-off.
+func lastErrorIn(text string) string {
 	if strings.TrimSpace(text) == "" {
 		return ""
 	}
-
 	lines := strings.Split(text, "\n")
-	// Scan from the end: the fatal line is the last thing written before exit,
-	// and earlier warnings are usually noise.
-	for i := len(lines) - 1; i >= 0; i-- {
-		line := strings.TrimSpace(lines[i])
-		if line == "" {
-			continue
-		}
-		lower := strings.ToLower(line)
-		for _, marker := range interestingLines {
-			if strings.Contains(lower, marker) {
-				return truncate(line, 400)
+	for _, allowSummary := range []bool{false, true} {
+		// Scan from the end: the fatal line is the last thing written before
+		// exit, and earlier warnings are usually noise.
+		for i := len(lines) - 1; i >= 0; i-- {
+			line := strings.TrimSpace(lines[i])
+			if line == "" {
+				continue
+			}
+			lower := strings.ToLower(line)
+			if !allowSummary && isSummaryLine(lower) {
+				continue
+			}
+			for _, marker := range interestingLines {
+				if strings.Contains(lower, marker) {
+					return truncate(line, 400)
+				}
 			}
 		}
 	}

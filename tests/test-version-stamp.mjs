@@ -172,7 +172,8 @@ function build({ served = true, health = null, pageVersion = VERSION_FILE,
   }
 
   // THE OTHER SERVER. fileserver.ps1 is a different program in front of the
-  // same page, and this panel used to be unable to say so: it sent no version,
+  // same page (removed in 1.8.0; a copy left running from before an update
+  // still answers), and this panel used to be unable to say so: it sent no version,
   // so the comparison above was skipped, the warning stayed hidden, and the row
   // showed the PAGE's stamp as the version of the whole install. The reader was
   // told they were on a current release by a server carrying none of it.
@@ -194,8 +195,10 @@ function build({ served = true, health = null, pageVersion = VERSION_FILE,
        label + ' PowerShell server: named, so the reader knows what is answering', warn);
     ok(/idle stand-down/i.test(warn),
        label + ' PowerShell server: and what is missing because of it', warn);
-    ok(/gobbonet program file/i.test(warn),
-       label + ' PowerShell server: and the one thing to run instead', warn);
+    ok(/run stop-gobbonet\.bat/i.test(warn) && /start GobboNet again/i.test(warn),
+       label + ' PowerShell server: and the one thing to do about it (1.8.0)', warn);
+    ok(!/instead of launch\.bat/i.test(warn),
+       label + ' PowerShell server: without saying launch.bat starts it (it cannot since 1.8.0)', warn);
     ok(!/hard-refresh/i.test(warn),
        label + ' PowerShell server: without blaming the browser cache', warn);
   }

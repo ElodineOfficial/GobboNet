@@ -24,6 +24,10 @@ func cmdLaunch(argv []string) error {
 	// started from here so it gets the same kill-on-close job as a first run:
 	// the shortcut used to run launch.bat directly, outside any job.
 	setup := fs.Bool("setup", false, "run engine and model setup (Windows), even when GobboNet is configured")
+	// open_browser in config.toml decides whether a tab opens (1.8.0, PR #58);
+	// this flag beats it for one run, as `gobbonet setup --no-browser` and the
+	// Linux launcher's --no-browser already did.
+	noBrowser := fs.Bool("no-browser", false, "do not open a browser, whatever open_browser in config.toml says")
 	if err := fs.Parse(argv); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -31,7 +35,7 @@ func cmdLaunch(argv []string) error {
 		return err
 	}
 	if fs.NArg() != 0 {
-		return errors.New("launch accepts only --config and --setup")
+		return errors.New("launch accepts only --config, --setup and --no-browser")
 	}
 	if *setup {
 		if runtime.GOOS != "windows" {
@@ -41,7 +45,7 @@ func cmdLaunch(argv []string) error {
 		if err != nil {
 			return err
 		}
-		return runSetupBatch(filepath.Dir(exe))
+		return runSetupBatch(filepath.Dir(exe), *noBrowser)
 	}
 	path, explicit := config.Discover(*configPath)
 	first, err := launchNeedsSetup(path, explicit)
@@ -61,26 +65,51 @@ func cmdLaunch(argv []string) error {
 		if err != nil {
 			return err
 		}
-		return runSetupBatch(filepath.Dir(exe))
+		return runSetupBatch(filepath.Dir(exe), *noBrowser)
 	}
-	return cmdServe([]string{"--config", path, "--open"})
+	return cmdServe(launchServeArgs(path, *noBrowser))
+}
+
+// launchServeArgs is the serve command a configured launch runs. It always
+// passed --open until 1.8.0; now open_browser decides, and --no-browser beats
+// it. A config that cannot be read keeps the old behaviour -- serve is about to
+// say what is wrong with it anyway.
+func launchServeArgs(path string, noBrowser bool) []string {
+	args := []string{"--config", path}
+	if noBrowser {
+		return args
+	}
+	if cfg, err := config.Load(path); err == nil && !cfg.OpenBrowser {
+		fmt.Println(" [..] Not opening a browser (open_browser = false in config.toml); the address is printed below.")
+		return args
+	}
+	return append(args, "--open")
 }
 
 // setupBatchCommand is the launch.bat invocation, kept apart from running it
-// so its shape (fixed relative command, legacy-server switch stripped) can be
+// so its shape (fixed relative command, stale switches stripped) can be
 // tested on any platform.
-func setupBatchCommand(dir string, environ []string) *exec.Cmd {
+//
+// noBrowser is `launch --no-browser`. launch.bat reads open_browser itself at
+// its hand-over to gobbonet.exe; GOBBONET_OPEN_BROWSER=false tells it the flag
+// was given, and wins over the file. An inherited value is dropped either
+// way, so only this run's flag can set it.
+func setupBatchCommand(dir string, environ []string, noBrowser bool) *exec.Cmd {
 	// A fixed relative command avoids cmd.exe quoting an installation path.
 	cmd := exec.Command("cmd.exe", "/d", "/c", "launch.bat")
 	cmd.Dir = dir
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
-	// Normal launch always uses Go. The explicit batch entry remains available
-	// to users who deliberately choose the legacy server.
+	// GOBBONET_LEGACY_SERVER chose the PowerShell server up to 1.7.9. That
+	// server is gone (1.8.0) and launch.bat only says the switch is ignored, so
+	// a value left in the environment is dropped rather than printed every run.
 	for _, env := range environ {
 		key, _, _ := strings.Cut(env, "=")
-		if !strings.EqualFold(key, "GOBBONET_LEGACY_SERVER") {
+		if !strings.EqualFold(key, "GOBBONET_LEGACY_SERVER") && !strings.EqualFold(key, "GOBBONET_OPEN_BROWSER") {
 			cmd.Env = append(cmd.Env, env)
 		}
+	}
+	if noBrowser {
+		cmd.Env = append(cmd.Env, "GOBBONET_OPEN_BROWSER=false")
 	}
 	return cmd
 }
@@ -88,17 +117,19 @@ func setupBatchCommand(dir string, environ []string) *exec.Cmd {
 // runSetupBatch runs launch.bat and ties everything it starts to this
 // process (1.7.9, PR #15).
 //
-// launch.bat starts the embedding server with `start /min`, then runs
-// gobbonet.exe in the foreground until it stops, so this process lives exactly
-// as long as GobboNet does. Closing the console window used to end this
-// process and gobbonet.exe but leave the embedding server running, holding its
-// port and memory until the next reboot. In the job, the kernel ends the whole
-// tree whenever this process dies, however it dies.
-func runSetupBatch(dir string) error {
+// launch.bat runs gobbonet.exe in the foreground until it stops, so this
+// process lives exactly as long as GobboNet does. Up to 1.7.9 it also started
+// the embedding server with `start /min`, and closing the console window used
+// to end this process and gobbonet.exe but leave that server running, holding
+// its port and memory until the next reboot. Since 1.8.0 gobbonet.exe starts
+// the embedding server itself, in its own job (internal/supervisor/embed.go);
+// this job stays as the backstop for anything launch.bat starts. In it, the
+// kernel ends the whole tree whenever this process dies, however it dies.
+func runSetupBatch(dir string, noBrowser bool) error {
 	if _, err := os.Stat(filepath.Join(dir, "launch.bat")); err != nil {
 		return fmt.Errorf("first-run setup is missing: reinstall the full GobboNet package: %w", err)
 	}
-	cmd := setupBatchCommand(dir, os.Environ())
+	cmd := setupBatchCommand(dir, os.Environ(), noBrowser)
 	if err := cmd.Start(); err != nil {
 		return err
 	}

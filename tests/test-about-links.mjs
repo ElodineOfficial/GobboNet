@@ -12,8 +12,10 @@
  *      private address).
  *   C. Nothing contacts these sites on its own. PRIVATE BY DESIGN promises
  *      that the only network calls are ones you ask for, so the addresses
- *      live in click handlers and nowhere a script could reach on its own —
- *      and the update placeholder does nothing at all.
+ *      live in click handlers and nowhere a script could reach on its own.
+ *      CHECK FOR UPDATES was a do-nothing placeholder here until 1.8.0; it is
+ *      real now, lives under THIS BUILD, and asks for a check only when it
+ *      is pressed (tests/test-update-button.mjs has the rest).
  *
  * D pins the visual rule: the box is a copy of YOUR DATA, not a new design.
  */
@@ -100,10 +102,12 @@ console.log('\n=== C. no request is made until a button is clicked ===');
   eq(inScripts.join(', '), '', 'neither address appears in any script — only in click handlers');
   const upd = tagById('about-update-btn');
   ok(!!upd, 'there is a CHECK FOR UPDATES button');
-  ok(!!upd && /\bdisabled\b/.test(upd.tag), 'it is disabled', upd && upd.tag);
-  ok(!!upd && !/onclick=/.test(upd.tag), 'and has no handler — the placeholder does nothing', upd && upd.tag);
-  ok(/Update checks are coming in a later version/.test(ABOUT),
-     'the reason is written underneath it, as under NOT WORKING YET');
+  const build = ABOUT.slice(ABOUT.indexOf('id="about-build"'), ABOUT.indexOf('PRIVATE BY DESIGN'));
+  ok(!!upd && build.includes(upd.tag), 'it lives under THIS BUILD now, not among the links (1.8.0)');
+  ok(!!upd && upd.tag.includes('onclick="checkForUpdates(this)"') && !/\bdisabled\b/.test(upd.tag),
+     'and it works: pressing it is what checks', upd && upd.tag);
+  ok(!/Update checks are coming in a later version/.test(ABOUT), 'the "coming in a later version" note is gone');
+  ok(/CHECK FOR UPDATES when you press it/.test(ABOUT), 'PRIVATE BY DESIGN lists the update check among the calls you ask for');
 }
 
 /* ================================================================

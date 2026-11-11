@@ -14,8 +14,6 @@ package modelfetch
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -30,6 +28,7 @@ import (
 	"time"
 
 	"github.com/ElodineOfficial/GobboNet/internal/catalog"
+	"github.com/ElodineOfficial/GobboNet/internal/models"
 )
 
 // SizeFloor is the backstop from launch.bat's download policy. Every catalogue
@@ -218,25 +217,12 @@ func (d *Download) crossCheck(pointer string) (sum, source string, err error) {
 func (d *Download) pointerSum() string {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, d.pointerURL(), nil)
+	sum, err := fetchPointerSum(ctx, d.pointerURL())
 	if err != nil {
+		logf("%s: checksum pointer unusable (%v); the size check will be used", d.entry.File, err)
 		return ""
 	}
-	resp, err := client.Do(req)
-	if err != nil {
-		logf("%s: checksum pointer unreachable (%v); the size check will be used", d.entry.File, err)
-		return ""
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		logf("%s: checksum pointer answered %s; the size check will be used", d.entry.File, resp.Status)
-		return ""
-	}
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
-	if m := lfsOID.FindSubmatch(body); m != nil {
-		return strings.ToLower(string(m[1]))
-	}
-	return ""
+	return sum
 }
 
 // hostBase overrides HuggingFace's address. Empty in every shipping path; set
@@ -259,6 +245,14 @@ func (d *Download) pointerURL() string {
 
 // Run performs the download. It blocks; call it in a goroutine and poll Status.
 func (d *Download) Run() {
+	// The catalogue loaders already drop an entry whose file is not a plain
+	// .gguf name. This is the second lock on the same door (1.8.0): whatever
+	// built the entry, nothing is written outside the models folder.
+	if err := models.CheckFileName(d.entry.File); err != nil {
+		logf("%q: refused: %v", d.entry.File, err)
+		d.fail("This catalogue entry's file name is not a plain model file name, so it was not downloaded.")
+		return
+	}
 	final := filepath.Join(d.dir, d.entry.File)
 	part := final + ".part"
 	logf("%s: starting %s into %s", d.entry.File, d.entry.Display, d.dir)
@@ -343,8 +337,7 @@ func (d *Download) Run() {
 	defer timer.Stop()
 	body := stallReader{r: resp.Body, timer: timer}
 
-	sum := sha256.New()
-	written, err := io.Copy(io.MultiWriter(fileWriter{f}, sum, progressWriter{d}), body)
+	written, got, err := hashingCopy(io.MultiWriter(fileWriter{f}, progressWriter{d}), body)
 	closeErr := f.Close()
 	if err != nil {
 		os.Remove(part)
@@ -370,7 +363,6 @@ func (d *Download) Run() {
 	d.stage(StageVerify)
 
 	if want != "" {
-		got := hex.EncodeToString(sum.Sum(nil))
 		if got != want {
 			os.Remove(part)
 			d.fail(fmt.Sprintf(

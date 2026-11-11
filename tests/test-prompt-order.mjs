@@ -277,7 +277,7 @@ console.log('\n=== F. wiring ===');
   ok(/character and lore &rarr; the conversation &rarr; lorebook snippets &rarr; your new message/.test(box), 'it spells out the order it gives');
   ok(/<strong>Planned:<\/strong> arranging the whole prompt yourself/.test(box), 'and the plan to hand over the whole order');
   ok(HTML.indexOf('id="settings-modal"') < HTML.indexOf('id="prompt-order-group"')
-     && HTML.indexOf('id="prompt-order-group"') < HTML.indexOf('id="settings-modal"') + 40000, 'inside CONFIG');
+     && HTML.indexOf('id="prompt-order-group"') < HTML.indexOf('<!-- MODEL CATALOGUE MODAL'), 'inside CONFIG');
   ok(/getElementById\('set-retrieval-near-end'\)\.checked = \(state\.settings\.retrievalNearEnd === true\)/.test(CARDS), 'CONFIG shows the saved choice');
   ok(/state\.settings\.retrievalNearEnd = document\.getElementById\('set-retrieval-near-end'\)\.checked/.test(between(CARDS, 'function saveSettings()', '\n}\n', 'js/15-cards.js')),
      'SAVE stores it');

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Test a GobboNet RPM inside a real Fedora userland, without Fedora hardware.
 #
-#   sudo ./test-in-fedora.sh --root DIR --rpm PKG.rpm --python CPYTHON.tar.gz \
+#   sudo bash ./test-in-fedora.sh --root DIR --rpm PKG.rpm --python CPYTHON.tar.gz \
 #        [--openssl3-from DIR] [--upgrade-from OLD.rpm] [--keep]
 #
 #   --root DIR           an extracted Fedora root filesystem. The official ones

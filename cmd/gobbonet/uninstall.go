@@ -102,13 +102,23 @@ func cmdUninstall(argv []string) error {
 		filepath.Join(dataDir, "state.keyring"),
 		filepath.Join(dataDir, ".state.lock"),
 		filepath.Join(dataDir, "llama-server.log"),
+		filepath.Join(dataDir, "embed-server.log"), // 1.8.0, #15
 		filepath.Join(dataDir, "setup-complete.json"),
 		// The Go server holds jobs in memory, but a tree carried over from the
 		// PowerShell lineage may still have the spool on disk.
 		filepath.Join(dataDir, ".jobs"),
+		// Where the update button keeps a download while it takes the program
+		// out (1.8.0, internal/server/update.go). It holds only GobboNet's own
+		// .part files, but once made it stays, and kept the data folder from
+		// being removed below.
+		filepath.Join(dataDir, "update"),
 	}
 	if profiles, err := filepath.Glob(filepath.Join(dataDir, "state-*.json*")); err == nil {
 		paths = append(paths, profiles...)
+	}
+	// Each MCP server's log (1.8.0, #16).
+	if logs, err := filepath.Glob(filepath.Join(dataDir, "mcp-*.log")); err == nil {
+		paths = append(paths, logs...)
 	}
 	for _, p := range paths {
 		if err := os.RemoveAll(p); err == nil {
@@ -135,9 +145,26 @@ func cmdUninstall(argv []string) error {
 	}
 
 	// --- models: the expensive thing --------------------------------------
+	//
+	// A models folder GobboNet made for itself may go whole. One the user chose
+	// (1.8.0: the Linux setup offers an existing collection, #68) may hold
+	// models and files from other apps -- or be their home folder -- so from
+	// that only the .gguf files directly in it are ever deleted.
+	exeDir := ""
+	if exe, err := os.Executable(); err == nil {
+		if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+			exe = resolved
+		}
+		exeDir = filepath.Dir(exe)
+	}
+	own := ownModelsFolder(modelDir, dataDir, configDir, exeDir)
 	modelsPresent := false
-	if entries, err := os.ReadDir(modelDir); err == nil && len(entries) > 0 {
-		modelsPresent = true
+	if own {
+		if entries, err := os.ReadDir(modelDir); err == nil && len(entries) > 0 {
+			modelsPresent = true
+		}
+	} else {
+		modelsPresent = len(modelFilesIn(modelDir)) > 0
 	}
 
 	deleteModels := false
@@ -152,32 +179,81 @@ func cmdUninstall(argv []string) error {
 		// user never agreed to lose is the one mistake here that cannot be
 		// undone by running the command again.
 		deleteModels = false
-	default:
+	case own:
 		deleteModels = askYesNo(fmt.Sprintf(
 			"  Delete the downloaded models in %s too?\n"+
 				"  These run to tens of gigabytes and are slow to fetch again. [y/N]: ", modelDir))
+	default:
+		deleteModels = askYesNo(fmt.Sprintf(
+			"  %s is a models folder you chose, and may hold models from other apps.\n"+
+				"  Delete the .gguf files directly in it? Nothing else in it, and not the folder. [y/N]: ", modelDir))
 	}
 
 	switch {
 	case !modelsPresent:
 		fmt.Println("  [OK] No downloaded models found.")
-	case deleteModels:
+	case deleteModels && own:
 		if err := os.RemoveAll(modelDir); err != nil {
 			fmt.Printf("  [WARN] Could not remove %s: %v\n", modelDir, err)
 		} else {
 			fmt.Println("  [OK] Models removed.")
 		}
+	case deleteModels:
+		n, failed := 0, 0
+		for _, f := range modelFilesIn(modelDir) {
+			if err := os.Remove(f); err != nil {
+				failed++
+				fmt.Printf("  [WARN] Could not remove %s: %v\n", f, err)
+			} else {
+				n++
+			}
+		}
+		fmt.Printf("  [OK] Removed %d .gguf file(s) from %s; the folder and everything else in it were kept.\n", n, modelDir)
+		if failed > 0 {
+			deleteModels = false // say below where the rest still are
+		}
 	default:
 		fmt.Printf("  [--] Models kept at %s\n", modelDir)
 	}
 
+	// GobboNet's own embedding model, which the Linux setup downloads into
+	// <data_dir>/embeddings when asked (since 1.7). It is a part of GobboNet
+	// that setup fetched, not one of the user's models, so it goes with the
+	// data whatever was said about models; up to 1.8.0 it stayed, and so did
+	// the data folder. Only that file and its unfinished download
+	// (gobbonet-setup.py's .part), then the folder if that empties it: a
+	// data_dir the user chose may hold a folder of that name of their own.
+	embedDir := filepath.Join(dataDir, "embeddings")
+	if err := os.Remove(filepath.Join(embedDir, config.EmbedModelFile)); err == nil {
+		fmt.Printf("  [OK] GobboNet's embedding model removed (%s).\n", config.EmbedModelFile)
+	}
+	_ = os.Remove(filepath.Join(embedDir, strings.TrimSuffix(config.EmbedModelFile, ".gguf")+".part"))
+	_ = os.Remove(embedDir)
+
+	// The Linux launcher writes its log, and since 1.8.0 its engine-choice
+	// note (#72), to the default data folder whatever data_dir says. Both go,
+	// whichever folder holds the conversations; up to 1.8.0 the log was
+	// removed only when data_dir was elsewhere, so in the default folder it
+	// kept that folder from being removed.
+	def := config.DataDir()
+	_ = os.Remove(filepath.Join(def, "launch.log"))
+	_ = os.Remove(config.EngineChoicePath())
+	// And the log of a first run's setup page, which the launcher makes there
+	// with mktemp (setup.XXXXXX). Up to 1.8.0 it was removed only when setup
+	// finished, so every first run abandoned or interrupted left one, and
+	// kept the folder. Only files of exactly that shape, in GobboNet's own
+	// folder.
+	if logs, err := filepath.Glob(filepath.Join(def, "setup.??????")); err == nil {
+		for _, f := range logs {
+			if st, err := os.Lstat(f); err == nil && st.Mode().IsRegular() {
+				_ = os.Remove(f)
+			}
+		}
+	}
 	// Only removes the directory if it is genuinely empty, so a kept models
 	// folder survives intact.
 	_ = os.Remove(dataDir)
-	// The Linux launcher logs to the default data folder whatever data_dir
-	// says. With data_dir elsewhere, that log and its folder are left over.
-	if def := config.DataDir(); !samePath(def, dataDir) {
-		_ = os.Remove(filepath.Join(def, "launch.log"))
+	if !samePath(def, dataDir) {
 		_ = os.Remove(def)
 	}
 
@@ -254,6 +330,41 @@ func removeConfig(dir, file string) []string {
 		"  [OK] Config and stored password removed: " + file,
 		"       Its folder holds other files, so it was left in place.",
 	}
+}
+
+// ownModelsFolder reports whether dir is a models folder GobboNet made for
+// itself: "models" inside the data folder, beside the config, or beside the
+// program (the Windows install folder, a portable ZIP). Uninstall may delete
+// such a folder whole. Any other folder was chosen by someone and is not
+// GobboNet's to remove (1.8.0, #68).
+func ownModelsFolder(dir, dataDir, configDir, exeDir string) bool {
+	for _, base := range []string{dataDir, configDir, exeDir} {
+		if base != "" && samePath(dir, filepath.Join(base, "models")) {
+			return true
+		}
+	}
+	return false
+}
+
+// modelFilesIn lists the .gguf files (and GobboNet's .gguf.part leftovers)
+// directly in dir: files and links, never folders, never anything deeper.
+// That is all uninstall ever deletes from a models folder someone chose.
+func modelFilesIn(dir string) []string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, e := range entries {
+		name := strings.ToLower(e.Name())
+		if !strings.HasSuffix(name, ".gguf") && !strings.HasSuffix(name, ".gguf.part") {
+			continue
+		}
+		if e.Type().IsRegular() || e.Type()&os.ModeSymlink != 0 {
+			out = append(out, filepath.Join(dir, e.Name()))
+		}
+	}
+	return out
 }
 
 // samePath compares two directory paths after cleaning them, ignoring case

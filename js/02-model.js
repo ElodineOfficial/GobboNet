@@ -308,10 +308,9 @@ async function loadModelsList() {
 
    Flow:
      1. User picks a different option in the dropdown.
-     2. We POST /swap-model {file:"<name>.gguf"} to fileserver.ps1.
-     3. Fileserver kills the running llama-server, rewrites the launch
-        script + active-model.json, spawns the new server detached,
-        and returns 202 immediately.
+     2. We POST /swap-model {file:"<name>.gguf"} to the server.
+     3. The server stops the running llama-server, starts the new one
+        (internal/supervisor) and returns 202 immediately.
      4. We poll /swap-status every ~1.5s until phase == "ready" (model
         loaded, /health returns ok) or phase == "error" (timeout, bad
         model, etc).
@@ -352,42 +351,67 @@ async function onHeaderModelChange(sel) {
   // No-op: user re-selected the model that's already loaded.
   if (newFile === _currentModelFile) return;
 
+  await runModelSwap(newFile, newName);
+}
+
+/**
+ * The swap itself, with the header's UI: the toast, the disabled dropdown,
+ * and putting the dropdown back on failure. Shared by the header menu and by
+ * model links (1.8.0, #52). Resolves to 'ok', 'busy' or 'failed'.
+ *
+ * opts.auto marks a switch the page makes on its own. The server refuses it
+ * with 409 and busy: true while any device's reply is being written, and that
+ * is 'busy' here: no toast, nothing changed, the caller decides what to offer.
+ * A swap picked from the menu (no auto) behaves as it always has.
+ */
+async function runModelSwap(newFile, newName, opts = {}) {
+  const sel = document.getElementById('header-model-select');
+  const putBack = () => { if (sel && _currentModelFile) sel.value = _currentModelFile; };
+
   // file:// has no fileserver. Tell the user and revert.
   if (!IS_SERVED) {
     showModelSwitchToast('Hot-swap needs the GobboNet server. Open the chat at the address GobboNet prints when it starts, not by double-clicking chat.html.', 'warn');
-    if (_currentModelFile) sel.value = _currentModelFile;
-    return;
+    putBack();
+    return 'failed';
   }
 
   // Reject overlapping swap requests.
   if (_swapInFlight) {
     showModelSwitchToast('Already swapping — please wait.', 'warn');
-    if (_currentModelFile) sel.value = _currentModelFile;
-    return;
+    putBack();
+    return 'failed';
   }
 
   const prevFile = _currentModelFile;
   const wrap = document.getElementById('header-model-wrap');
 
   _swapInFlight = true;
-  sel.disabled = true;
+  if (sel) { sel.value = newFile; sel.disabled = true; }
   if (wrap) wrap.classList.add('swapping');
-  showModelSwitchToast('Swapping to ' + newName + '...', 'info', 0);
+  // An automatic switch says so once the server has taken it: one refused as
+  // busy changed nothing, and a toast for it would only be noise.
+  if (!opts.auto) showModelSwitchToast('Swapping to ' + newName + '...', 'info', 0);
 
   try {
     const r = await fetch('/swap-model', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ file: newFile })
+      body: JSON.stringify(opts.auto ? { file: newFile, auto: true } : { file: newFile })
     });
     if (!r.ok) {
       let msg = 'HTTP ' + r.status;
+      let body = null;
       try {
-        const body = await r.json();
+        body = await r.json();
         if (body && body.message) msg = body.message;
       } catch (_) {}
+      if (opts.auto && r.status === 409 && body && body.busy) {
+        if (sel && prevFile) sel.value = prevFile;
+        return 'busy';
+      }
       throw new Error(msg);
     }
+    if (opts.auto) showModelSwitchToast('Switching to ' + newName + ' for this chat...', 'info', 0);
 
     // Poll until the new server reports healthy or we hit the timeout.
     const result = await pollSwapStatus();
@@ -400,13 +424,15 @@ async function onHeaderModelChange(sel) {
     _currentModelFile = newFile;
     showModelSwitchToast('Active: ' + newName, 'ok');
     console.log('[swap] active model is now', newFile);
+    return 'ok';
   } catch (e) {
     console.warn('[swap] failed:', e);
     showModelSwitchToast('Swap failed: ' + e.message, 'err');
-    if (prevFile) sel.value = prevFile;
+    if (sel && prevFile) sel.value = prevFile;
+    return 'failed';
   } finally {
     _swapInFlight = false;
-    sel.disabled = false;
+    if (sel) sel.disabled = false;
     if (wrap) wrap.classList.remove('swapping');
   }
 }
@@ -448,13 +474,256 @@ async function swapToModelFile(file) {
   }
 }
 
+/* ================================================================
+   MODEL LINKS (1.8.0, issue #52)
+
+   A chat remembers the model that wrote its last reply (thread.model), and a
+   character can name the model it is meant for (card.preferredModel, in the
+   character editor). Opening a chat asks for, or makes, the switch:
+
+     thread.model, else the answering character's preferredModel, else
+     nothing changes.
+
+   How eagerly is state.settings.modelFollow, in CONFIG > Characters & Chat:
+   'ask' (the default) shows a one-line bar with Switch and Not now; 'auto'
+   switches; 'off' never does. A swap reloads the model, so it is never a
+   surprise unless someone chose that.
+
+   Both fields hold a file name only, never a path, and are checked with the
+   same rule as the server's (internal/models/name.go) before anything uses
+   them: they arrive in imported cards and synced chats. A link is a hint that
+   only ever matches a model already in the models folder. It never downloads
+   anything. One not installed here is shown as such and the loaded model
+   answers; the link is kept (a model on an unplugged drive would lose it for
+   good) and can be cleared in one click.
+
+   One engine serves every device. A switch made here goes as {auto: true},
+   which the server refuses with 409 busy while any reply is being written,
+   on this device or another, and the bar then offers to switch once it ends.
+   The model menu in the header is still the way to switch at once.
+
+   Remote mode has no hot-swap, so none of this runs there, and the
+   character editor hides its model menu.
+================================================================ */
+const MODEL_FOLLOW_MODES = ['ask', 'auto', 'off'];
+function modelFollowMode() {
+  const m = state && state.settings && state.settings.modelFollow;
+  return MODEL_FOLLOW_MODES.includes(m) ? m : 'ask';
+}
+
+/* The page's copy of models.CheckFileName: a plain file name ending in .gguf,
+   no folder separator, colon or control character, at most 255 characters.
+   The server checks again; this keeps a bad name from being offered at all. */
+function isPlainModelFile(name) {
+  if (typeof name !== 'string' || name.length <= 5 || name.length > 255) return false;
+  if (/[\/\\:\x00-\x1f\x7f]/.test(name)) return false;
+  return /\.gguf$/i.test(name);
+}
+
+/** Which model a chat wants, and why: { file, from: 'thread'|'card', card }. */
+function linkedModelFor(thread, card) {
+  if (thread && isPlainModelFile(thread.model)) return { file: thread.model, from: 'thread', card: null };
+  if (card && isPlainModelFile(card.preferredModel)) return { file: card.preferredModel, from: 'card', card: card };
+  return null;
+}
+
+function prettyModelFile(file) {
+  return String(file || '').replace(/\.gguf$/i, '').replace(/[-_]+/g, ' ').trim() || String(file || '');
+}
+
+/* About how long the last load took, from /swap-status, as words: "about
+   20 s", or '' when the server has not said. Rounded, because it is a guess. */
+function swapEtaText(status) {
+  const a = status && Number(status.started_at), b = status && Number(status.updated_at);
+  if (!(status && status.phase === 'ready' && a > 0 && b >= a)) return '';
+  const secs = b - a;
+  if (secs < 1) return '';
+  const shown = secs < 10 ? secs : Math.round(secs / 5) * 5;
+  return shown >= 120 ? 'about ' + Math.round(shown / 60) + ' min' : 'about ' + shown + ' s';
+}
+
+let _modelFollowNotes = new Set();   // thread|file pairs told "not installed" this session
+let _modelFollowWait = null;         // { threadId, file, timer, until }
+
+function _modelFollowBar() { return document.getElementById('model-follow'); }
+
+function hideModelFollowBar() {
+  const el = _modelFollowBar();
+  if (el) el.textContent = '';
+}
+
+/* One line in the same strip style as "Replying as ..." (cast-mismatch),
+   built from text nodes: the names in it come from model files and cards. */
+function showModelFollowBar(parts, buttons) {
+  const el = _modelFollowBar();
+  if (!el) return;
+  el.textContent = '';
+  const row = document.createElement('div');
+  row.className = 'cast-mismatch model-follow';
+  const dot = document.createElement('span');
+  dot.className = 'cast-mismatch-dot';
+  dot.setAttribute('aria-hidden', 'true');
+  row.appendChild(dot);
+  const text = document.createElement('span');
+  text.className = 'cast-mismatch-text';
+  for (const p of parts) {
+    if (p && typeof p === 'object') {
+      const b = document.createElement('strong');
+      b.textContent = p.strong;
+      text.appendChild(b);
+    } else {
+      text.appendChild(document.createTextNode(String(p)));
+    }
+  }
+  row.appendChild(text);
+  for (const [label, fn] of buttons || []) {
+    const btn = document.createElement('button');
+    btn.className = 'cast-mismatch-btn';
+    btn.type = 'button';
+    btn.textContent = label;
+    btn.onclick = fn;
+    row.appendChild(btn);
+  }
+  el.appendChild(row);
+}
+
+function cancelModelFollowWait() {
+  if (_modelFollowWait && _modelFollowWait.timer) clearTimeout(_modelFollowWait.timer);
+  _modelFollowWait = null;
+}
+
+async function _getJSON(url) {
+  const r = await fetch(url, { cache: 'no-store' });
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  return r.json();
+}
+
+/**
+ * Called when a chat is opened or started (switchThread, createThread).
+ * Never throws, and does nothing at all unless there is a link, the server
+ * runs the model here, and the setting allows it.
+ */
+async function followModelForThread(thread) {
+  try {
+    if (!_modelFollowWait || !thread || _modelFollowWait.threadId !== thread.id) cancelModelFollowWait();
+    hideModelFollowBar();
+    if (!thread || !IS_SERVED || _remoteMode) return;
+    const mode = modelFollowMode();
+    if (mode === 'off') return;
+    // A group chat follows the model it last used, never one member's link:
+    // switching models between members would reload on every turn.
+    const inGroup = (typeof threadGroup === 'function') && !!threadGroup(thread);
+    const card = inGroup ? null : ((typeof getActiveCard === 'function') ? getActiveCard() : null);
+    const want = linkedModelFor(thread, card);
+    if (!want) return;
+
+    const [list, status] = await Promise.all([_getJSON('/models-list.json'), _getJSON('/swap-status')]);
+    if (!list || list.mode === 'remote') return;
+    if (state.activeThreadId !== thread.id) return;   // moved on while we asked
+    if (status && status.file === want.file) return;  // already loaded
+    if (status && status.phase === 'starting') return; // a swap is under way; leave it be
+
+    const installed = (list.models || []).find(m => m.file === want.file);
+    const who = want.from === 'thread' ? ['This chat used '] : [{ strong: want.card.name || 'This character' }, ' is linked to '];
+    if (!installed) {
+      const key = thread.id + '|' + want.file;
+      if (_modelFollowNotes.has(key)) return;
+      _modelFollowNotes.add(key);
+      const forget = want.from === 'thread'
+        ? ['Forget it', () => { delete thread.model; saveState(); hideModelFollowBar(); }]
+        : ['Clear link', () => { want.card.preferredModel = ''; saveState(); hideModelFollowBar(); }];
+      showModelFollowBar(who.concat([{ strong: prettyModelFile(want.file) }, ', which is not installed here, so the loaded model answers.']),
+        [forget, ['OK', hideModelFollowBar]]);
+      return;
+    }
+    if (typeof isGenerating !== 'undefined' && isGenerating) return;
+    if (_swapInFlight) return;
+
+    const name = installed.name || prettyModelFile(want.file);
+    if (mode === 'auto') {
+      await switchToLinkedModel(thread, want.file, name);
+      return;
+    }
+    const eta = swapEtaText(status);
+    showModelFollowBar(who.concat([{ strong: name }, '.']),
+      [[eta ? 'Switch (' + eta + ')' : 'Switch', () => switchToLinkedModel(thread, want.file, name)],
+       ['Not now', hideModelFollowBar]]);
+  } catch (e) {
+    console.warn('[model-link]', e && e.message ? e.message : e);
+  }
+}
+
+/** Switch for a chat, never over someone's reply: busy -> offer to wait. */
+async function switchToLinkedModel(thread, file, name) {
+  hideModelFollowBar();
+  const res = await runModelSwap(file, name, { auto: true });
+  if (res !== 'busy') return res;
+  if (!thread || state.activeThreadId !== thread.id) return res;
+  showModelFollowBar(['A reply is being written right now, on this device or another. Switch to ', { strong: name }, ' when it is done?'],
+    [['Switch when done', () => waitThenSwitch(thread, file, name)], ['Not now', hideModelFollowBar]]);
+  return res;
+}
+
+const MODEL_FOLLOW_POLL_MS = 3000;
+const MODEL_FOLLOW_WAIT_MS = 15 * 60 * 1000;
+
+/** Watch /swap-status until nothing is being written, then switch. Ends on
+ *  its own if the chat is left, the user says stop, or 15 minutes pass. */
+function waitThenSwitch(thread, file, name) {
+  cancelModelFollowWait();
+  const w = { threadId: thread.id, file: file, timer: null, until: Date.now() + MODEL_FOLLOW_WAIT_MS };
+  _modelFollowWait = w;
+  showModelFollowBar(['Waiting for the reply to finish, then switching to ', { strong: name }, '.'],
+    [['Cancel', () => { cancelModelFollowWait(); hideModelFollowBar(); }]]);
+  const tick = async () => {
+    if (_modelFollowWait !== w) return;
+    if (state.activeThreadId !== thread.id) { cancelModelFollowWait(); hideModelFollowBar(); return; }
+    if (Date.now() > w.until) {
+      cancelModelFollowWait();
+      showModelFollowBar(['Still busy after 15 minutes. Switch to ', { strong: name }, ' from the model menu when you are ready.'],
+        [['OK', hideModelFollowBar]]);
+      return;
+    }
+    let status = null;
+    try { status = await _getJSON('/swap-status'); } catch (e) {}
+    if (_modelFollowWait !== w) return;
+    if (status && status.file === file) { cancelModelFollowWait(); hideModelFollowBar(); return; }
+    const mine = (typeof isGenerating !== 'undefined' && isGenerating);
+    if (status && !status.busy && status.phase !== 'starting' && !mine && !_swapInFlight) {
+      const res = await runModelSwap(file, name, { auto: true });
+      if (_modelFollowWait !== w) return;
+      if (res !== 'busy') { cancelModelFollowWait(); hideModelFollowBar(); return; }
+    }
+    w.timer = setTimeout(tick, MODEL_FOLLOW_POLL_MS);
+  };
+  w.timer = setTimeout(tick, MODEL_FOLLOW_POLL_MS);
+}
+
+/**
+ * After a reply: remember which model wrote it, so reopening the chat can
+ * bring it back. Written only when it changes, so the chat's own record is not
+ * rewritten (and re-uploaded whole) on every message. Local mode only.
+ */
+async function noteReplyModel(thread) {
+  try {
+    if (!thread || !IS_SERVED || _remoteMode) return;
+    const status = await _getJSON('/swap-status');
+    if (!status || status.phase !== 'ready' || !isPlainModelFile(status.file)) return;
+    if (thread.model !== status.file) {
+      thread.model = status.file;
+      saveState({ thread: thread });
+    }
+  } catch (e) {}
+}
+
 /* How long the page waits for a swap. The server owns the real limit --
    model_load_timeout_seconds in config.toml, reported in every /swap-status as
    load_timeout_seconds -- and this waits that long plus the time a swap spends
    stopping the old engine first (up to 20 s), so the server's verdict, with its
    reason, always arrives before the page gives up on its own. The default is
-   for a server that does not report it: the legacy PowerShell server, or one
-   older than 1.7.8, both of which load within three minutes. */
+   for a server that does not report it: one older than 1.7.8, or a 1.7
+   PowerShell server left running from before an update, both of which load
+   within three minutes. */
 const SWAP_STOP_MARGIN_MS = 30000;
 const SWAP_DEFAULT_LOAD_MS = 180000;
 
@@ -596,6 +865,59 @@ function extractTokenFromLine(rawLine) {
 }
 
 
+/**
+ * The tool-call half of a stream line. extractTokenFromLine above reads the
+ * text; this reads `choices[0].delta.tool_calls` (streamed) or
+ * `choices[0].message.tool_calls` (a non-streamed reply) and the
+ * finish_reason. Returns null, before parsing, when the line carries
+ * neither, so a plain text stream costs a substring test and nothing else.
+ *
+ * Streamed calls arrive in pieces: the id and name once, then the
+ * `arguments` string in fragments, each tagged with the call's `index`.
+ * mergeToolCallDeltas (03-generation.js) joins them.
+ */
+function extractToolCallDeltas(rawLine) {
+  const trimmed = rawLine.trim();
+  if (!trimmed) return null;
+  let jsonStr = trimmed;
+  if (jsonStr.startsWith('data:')) jsonStr = jsonStr.slice(5).trim();
+  if (!jsonStr || jsonStr === '[DONE]') return null;
+  // Every chunk carries "finish_reason":null, so test for a string value, or
+  // a plain text line would be parsed twice (extractTokenFromLine parses it too).
+  if (jsonStr.indexOf('tool_calls') < 0 && !/"finish_reason"\s*:\s*"/.test(jsonStr)) return null;
+  try {
+    const json = JSON.parse(jsonStr);
+    const c = json && json.choices && json.choices[0];
+    if (!c) return null;
+    const streamed = !!(c.delta && Array.isArray(c.delta.tool_calls));
+    const src = streamed ? c.delta.tool_calls
+              : (c.message && Array.isArray(c.message.tool_calls)) ? c.message.tool_calls
+              : null;
+    const finishReason = (typeof c.finish_reason === 'string') ? c.finish_reason : null;
+    if (!src && !finishReason) return null;
+    const toolCalls = (src || []).map((tc, i) => {
+      const fn = (tc && tc.function) || {};
+      let args = fn.arguments;
+      if (args != null && typeof args !== 'string') {
+        try { args = JSON.stringify(args); } catch (e) { args = String(args); }
+      }
+      return {
+        // null when the server sent none (a non-streamed reply, or a server
+        // that omits it); mergeToolCallDeltas then falls back to the id, or
+        // treats a fragment that names a function as a new call.
+        index: (tc && typeof tc.index === 'number') ? tc.index : (streamed ? null : i),
+        id: (tc && typeof tc.id === 'string' && tc.id) ? tc.id : null,
+        name: (typeof fn.name === 'string' && fn.name) ? fn.name : null,
+        arguments: (typeof args === 'string') ? args : ''
+      };
+    });
+    return { toolCalls, finishReason };
+  } catch (e) {
+    return null;
+  }
+}
+
+
 /* ================================================================
    PERFORMANCE TUNING
 
@@ -640,6 +962,8 @@ async function loadPerfSettings() {
     // server would reject cannot be typed in the first place.
     if (p.modelMaxCtx > 0) ctx.max = p.modelMaxCtx;
 
+    loadGpuChoice();
+
     const a = p.auto;
     _perfStatus(p.overridden
       ? 'Custom settings in use. Auto would pick ' + a.ctxSize + ' ctx, ' +
@@ -668,6 +992,9 @@ async function savePerfSettings(applyNow) {
     });
     const j = await r.json();
     if (!r.ok) { _perfStatus(j.error || ('HTTP ' + r.status), 'error'); return; }
+    // The GPU choice rides the same buttons (1.8.0, #72).
+    const gpuErr = await saveGpuChoice();
+    if (gpuErr) { _perfStatus(gpuErr, 'error'); return; }
 
     if (!applyNow) {
       _perfStatus('Saved. Takes effect the next time the model starts.', 'ok');
@@ -694,9 +1021,111 @@ async function resetPerfSettings() {
     document.getElementById('perf-ctx').value = j.current.ctxSize;
     document.getElementById('perf-gpu').value = j.current.gpuLayers;
     document.getElementById('perf-kv').value  = j.current.kvCacheType;
+    // Automatic GPU choice too; the PRIME switch is a fix for the machine,
+    // not a tuning, and is left as it is.
+    const dev = document.getElementById('perf-device');
+    if (dev && _gpuLoaded && _gpuLoaded.setting !== 'auto') {
+      dev.value = 'auto';
+      const gpuErr = await saveGpuChoice();
+      if (gpuErr) { _perfStatus(gpuErr, 'error'); return; }
+    }
     _perfStatus('Back to automatic. Restart the model to apply.', 'ok');
   } catch (e) {
     _perfStatus('Reset failed: ' + e.message, 'error');
+  }
+}
+
+/* ================================================================
+   WHICH GPU (1.8.0, issue #72)
+
+   The Performance box's GPU menu, from /gpu: the devices the engine itself
+   lists (llama-server --list-devices, run once and cached by the server),
+   gpu_device from config.toml, and on Linux the PRIME switch -- shown only
+   when the engine sees just an integrated GPU, the hybrid-laptop case -- and
+   the CPU-build fallback the launcher noted. Saved by the box's own buttons.
+================================================================ */
+let _gpuLoaded = null;   // { setting, prime, view } as /gpu last said
+
+function _gpuDeviceLabel(d) {
+  const gb = d.total_mib > 0 ? ' \u2014 ' + (d.total_mib / 1024).toFixed(d.total_mib < 10240 ? 1 : 0) + ' GB' : '';
+  return d.name + gb + (d.integrated ? ' (integrated, uses system memory)' : '');
+}
+
+async function loadGpuChoice() {
+  const group = document.getElementById('perf-device-group');
+  const sel = document.getElementById('perf-device');
+  if (!group || !sel) return;
+  let v = null;
+  try {
+    const r = await fetch('/gpu', { cache: 'no-store' });
+    if (r.ok) v = await r.json();
+  } catch (e) {}
+  if (!v || v.remote) { group.style.display = 'none'; _gpuLoaded = null; return; }
+  group.style.display = '';
+  sel.innerHTML = '';
+  const add = (value, text) => { const o = document.createElement('option'); o.value = value; o.textContent = text; sel.appendChild(o); return o; };
+  add('auto', 'Automatic (prefers a dedicated GPU)');
+  for (const d of v.devices || []) add(d.id, _gpuDeviceLabel(d));
+  add('none', 'None: the processor only');
+  const setting = String(v.gpu_device || 'auto');
+  const match = [...sel.options].find(o => o.value.toLowerCase() === setting.toLowerCase());
+  if (match) sel.value = match.value;
+  else { add(setting, setting + ' (not found now: Automatic is used)'); sel.value = setting; }
+  const prime = document.getElementById('perf-prime');
+  const primeRow = document.getElementById('perf-prime-row');
+  if (prime) prime.checked = !!v.gpu_prime_offload;
+  if (primeRow) primeRow.style.display = (v.linux && (v.prime_offered || v.gpu_prime_offload)) ? '' : 'none';
+  _gpuLoaded = { setting: sel.value, prime: !!v.gpu_prime_offload, view: v };
+  updateGpuNote();
+}
+
+/* What to know about the choice, in one or two sentences: the engine fell
+   back to the CPU build, the devices could not be listed, the saved choice is
+   not there, or the card is small enough that most layers will not fit. */
+function updateGpuNote() {
+  const note = document.getElementById('perf-device-note');
+  const sel = document.getElementById('perf-device');
+  if (!note || !sel || !_gpuLoaded) return;
+  const v = _gpuLoaded.view;
+  const lines = [];
+  if (v.engine_build === 'cpu') {
+    lines.push('This install is running the CPU build of the engine, because the GPU build would not start' +
+      (v.engine_build_reason ? ' (' + v.engine_build_reason.replace(/^the GPU build would not start:\s*/, '') + ')' : '') +
+      '. Usually that is a missing Vulkan driver.');
+  }
+  if (v.probe_error) lines.push('The engine could not list its devices: ' + v.probe_error);
+  else if (!(v.devices || []).length) lines.push('The engine sees no GPU, so the model runs on the processor.');
+  if (v.warning && sel.value === _gpuLoaded.setting) lines.push(v.warning.replace(/^gpu_device = /, 'The saved choice, ') + '.');
+  let chosen = null;
+  if (sel.value === 'auto') chosen = (v.devices || []).filter(d => !d.integrated).sort((a, b) => b.total_mib - a.total_mib)[0] || null;
+  else chosen = (v.devices || []).find(d => d.id === sel.value) || null;
+  if (chosen && !chosen.integrated && chosen.total_mib > 0 && chosen.total_mib < (v.small_card_mib || 3072)) {
+    lines.push(chosen.name + ' has ' + (chosen.total_mib / 1024).toFixed(1) + ' GB, so only a few layers fit on it and the rest run on the processor.');
+  }
+  if (v.prime_offered) {
+    lines.push('The engine sees only an integrated GPU. On a laptop with an NVIDIA card too, PRIME offload below may let the engine use it.');
+  }
+  note.textContent = lines.join(' ');
+  note.style.display = lines.length ? '' : 'none';
+}
+
+/** Save the GPU menu and PRIME switch if they changed. Returns an error, or ''. */
+async function saveGpuChoice() {
+  const sel = document.getElementById('perf-device');
+  const prime = document.getElementById('perf-prime');
+  if (!sel || !_gpuLoaded) return '';
+  const body = {};
+  if (sel.value !== _gpuLoaded.setting) body.gpu_device = sel.value;
+  if (prime && prime.checked !== _gpuLoaded.prime) body.gpu_prime_offload = prime.checked;
+  if (!Object.keys(body).length) return '';
+  try {
+    const r = await fetch('/gpu', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) return j.error || ('The GPU choice was not saved (error ' + r.status + ').');
+    _gpuLoaded = { setting: String(j.gpu_device || sel.value), prime: !!j.gpu_prime_offload, view: j };
+    return '';
+  } catch (e) {
+    return 'The GPU choice was not saved: ' + e.message;
   }
 }
 
@@ -1078,6 +1507,7 @@ function renderCatalogList() {
     const unverified = m.verified === false;
     if (m.installed) {
       btn.textContent = 'ALREADY INSTALLED';
+      btn.className += ' catalog-installed-btn';
       btn.disabled = true;
     } else if (unverified && catalogArmed(m.index)) {
       btn.textContent = 'CLICK AGAIN TO DOWNLOAD';
@@ -1095,7 +1525,26 @@ function renderCatalogList() {
       btn.textContent = 'DOWNLOAD';
       btn.onclick = () => startModelDownload(m.index, m.display, m.file);
     }
-    row.appendChild(btn);
+    if (m.installed) {
+      // CHECK FILE (1.8.0, #67): re-hash the installed file against the
+      // catalogue's pin. Offline; only when clicked.
+      const actions = document.createElement('div');
+      actions.className = 'catalog-entry-actions';
+      actions.appendChild(btn);
+      const check = document.createElement('button');
+      check.className = 'btn btn-sm catalog-check-btn';
+      check.type = 'button';
+      check.textContent = 'CHECK FILE';
+      check.title = 'Read the file and compare it with the checksum the catalogue publishes. Nothing is sent anywhere.';
+      check.disabled = !!(_catalogCheck && _catalogCheck.state === 'running');
+      check.onclick = () => startCatalogCheck(m.index, 'catalogue');
+      actions.appendChild(check);
+      row.appendChild(actions);
+      const note = catalogCheckNote(m);
+      if (note) row.appendChild(note);
+    } else {
+      row.appendChild(btn);
+    }
 
     if (unverified && !m.installed) {
       const note = document.createElement('div');
@@ -1109,6 +1558,82 @@ function renderCatalogList() {
 
     box.appendChild(row);
   });
+}
+
+/* ================================================================
+   CHECK FILE (1.8.0, issue #67)
+
+   A model that will not load with "data is not within the file bounds" is
+   usually a download that was cut short. CHECK FILE reads the installed file
+   and compares it with the checksum the catalogue publishes -- offline, the
+   catalogue is the one this window already loaded. A model the catalogue has
+   no checksum for is told so at once, and offered "Ask HuggingFace", which
+   sends one request to huggingface.co for the checksum it records: a second,
+   labelled button, because it is the only part of this that uses the network.
+   /model-check (internal/server/modelcheck.go) does the work; one at a time.
+================================================================ */
+let _catalogCheck = null;       // the last /model-check status, for the row it belongs to
+let _catalogCheckTimer = null;
+
+function catalogCheckNote(m) {
+  const c = _catalogCheck;
+  if (!c || c.index !== m.index || c.state === 'idle') return null;
+  const note = document.createElement('div');
+  note.className = 'catalog-check-note';
+  note.setAttribute('role', 'status');
+  if (c.state === 'running') {
+    note.textContent = (c.source === 'huggingface' ? 'Asking HuggingFace, then checking' : 'Checking') +
+      (c.total > 0 ? '\u2026 ' + Math.floor(c.percent || 0) + '% of ' + (c.total / 1073741824).toFixed(1) + ' GB' : '\u2026');
+    return note;
+  }
+  note.dataset.tone = c.result === 'match' ? 'ok' : (c.result === 'no-reference' ? '' : 'err');
+  const text = document.createElement('div');
+  text.textContent = c.message || (c.state === 'error' ? 'The check could not finish.' : '');
+  note.appendChild(text);
+  if ((c.result === 'mismatch' || c.result === 'disagree') && c.expected && c.got) {
+    const sums = document.createElement('div');
+    sums.textContent = (c.result === 'disagree' ? 'Catalogue: ' : 'Expected: ') + c.expected +
+      (c.result === 'disagree' ? ' \u00b7 HuggingFace: ' : ' \u00b7 This file: ') + c.got;
+    note.appendChild(sums);
+  }
+  if (c.result === 'no-reference' || (c.state === 'error' && c.source === 'huggingface')) {
+    const ask = document.createElement('button');
+    ask.className = 'btn btn-sm';
+    ask.type = 'button';
+    ask.textContent = 'Ask HuggingFace for this file\u2019s checksum';
+    ask.title = 'Sends one request to huggingface.co, then reads the file here and compares.';
+    ask.onclick = () => startCatalogCheck(m.index, 'huggingface');
+    note.appendChild(ask);
+  }
+  return note;
+}
+
+async function startCatalogCheck(index, source) {
+  if (_catalogCheck && _catalogCheck.state === 'running') return;
+  try {
+    const r = await fetch('/model-check', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ index: index, source: source })
+    });
+    const j = await r.json().catch(() => ({}));
+    _catalogCheck = r.ok ? j : { index: index, source: source, state: 'error', message: j.error || ('The check could not start (error ' + r.status + ').') };
+  } catch (e) {
+    _catalogCheck = { index: index, source: source, state: 'error', message: 'Could not reach the server.' };
+  }
+  renderCatalogList();
+  if (_catalogCheck.state === 'running') pollCatalogCheck();
+}
+
+function pollCatalogCheck() {
+  clearTimeout(_catalogCheckTimer);
+  _catalogCheckTimer = setTimeout(async () => {
+    try {
+      const r = await fetch('/model-check', { cache: 'no-store' });
+      if (r.ok) _catalogCheck = await r.json();
+    } catch (e) {}
+    renderCatalogList();
+    if (_catalogCheck && _catalogCheck.state === 'running') pollCatalogCheck();
+  }, 700);
 }
 
 async function startModelDownload(index, display, file, opts) {

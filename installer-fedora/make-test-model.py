@@ -3,12 +3,19 @@
 
     pip install gguf numpy
     ./make-test-model.py test-model.gguf
+    ./make-test-model.py test-model.gguf 4096    # a longer context
 
 A Llama-architecture GGUF under 1 MB: two layers, 64-wide, random weights. It
 generates nonsense, which is the point. Loading and running it exercises what a
 packaging test can get wrong -- the engine's shared libraries, its CPU backends
 (loaded at runtime), OpenMP, the tokenizer, sampling, and GobboNet's supervisor
 starting the engine -- with no model download.
+
+The context it says it was trained for is 512 tokens unless a second argument
+says otherwise, and the engine runs it at that. 512 is enough for a request
+sent straight to the engine (test-in-fedora.sh). A chat through the page sends
+the default character's prompt, about 600 tokens, and the engine refuses it
+("exceeds the available context size"), so give it 4096 for that.
 
 Two constraints, both found the hard way:
   - attention heads are 32 wide, because GobboNet runs a q8_0 KV cache and its
@@ -28,7 +35,8 @@ import numpy as np
 out = sys.argv[1] if len(sys.argv) > 1 else "test-model.gguf"
 rng = np.random.default_rng(1234)
 
-n_embd, n_layer, n_head, n_ff, n_ctx = 64, 2, 2, 128, 512   # head size 64 / 2 = 32
+n_embd, n_layer, n_head, n_ff = 64, 2, 2, 128   # head size 64 / 2 = 32
+n_ctx = int(sys.argv[2]) if len(sys.argv) > 2 else 512
 
 tokens, scores, types = [], [], []
 

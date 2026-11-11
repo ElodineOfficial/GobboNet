@@ -46,7 +46,8 @@ class InstallCommands(unittest.TestCase):
         # must the fixtures.
         self.assertIn('DEB_VERSION="${RELEASE}+go.${SHA}-${DEB_REVISION}"', BUILD_DEB)
         self.assertIn('DEB="$OUT/gobbonet_${DEB_VERSION}_amd64.deb"', BUILD_DEB)
-        self.assertIn('APPIMAGE="$OUT/GobboNet-${VERSION}-x86_64.AppImage"', BUILD_APPIMAGE)
+        self.assertIn('NAME_VERSION="$(printf \'%s\' "$VERSION" | tr -d \'+\')"', BUILD_APPIMAGE)
+        self.assertIn('APPIMAGE="$OUT/GobboNet-${NAME_VERSION}-x86_64.AppImage"', BUILD_APPIMAGE)
         self.assertIn('Release:        %{gn_release}%{?dist}', SPEC)
 
     def test_apt_matches_the_deb_as_built_and_as_downloaded(self):
@@ -67,7 +68,8 @@ class InstallCommands(unittest.TestCase):
 
     def test_appimage_matches_as_built_and_as_downloaded(self):
         for glob in set(re.findall(r'(?:chmod \+x |\./)(GobboNet-\S*\.AppImage)', PAGE)):
-            built = 'GobboNet-%s+go.a1a1ce8-1-x86_64.AppImage' % VERSION
+            # Built without the "+" since 1.8.0, as GitHub lists it.
+            built = 'GobboNet-%sgo.a1a1ce8-1-x86_64.AppImage' % VERSION
             self.assertTrue(fnmatchcase(built, glob) and fnmatchcase(github(built), glob), glob)
 
 

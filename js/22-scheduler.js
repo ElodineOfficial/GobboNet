@@ -177,7 +177,9 @@ function checkSchedules() {
 
     s.lastFired = today;
 
-    // Switch to the target thread
+    // Switch to the target thread. A group chat's round or AUTO in the chat
+    // being left ends here, as it does when the chat is switched by hand.
+    if (typeof groupLeftThread === 'function') groupLeftThread(s.threadId);
     state.activeThreadId = s.threadId;
 
     // Inject the prompt as a user message
@@ -334,7 +336,7 @@ document.getElementById('about-modal').addEventListener('click', (e) => {
    toggled by style.display ('' open, 'none' closed), so this reads the same
    state the code that sets it does. */
 function _charEditorEl() {
-  const ids = ['card-editor', 'persona-editor'];
+  const ids = ['card-editor', 'persona-editor', 'group-editor'];
   for (let i = 0; i < ids.length; i++) {
     const el = document.getElementById(ids[i]);
     if (el && el.style && el.style.display !== 'none') return el;
@@ -405,7 +407,7 @@ function charEditorIsDirty() {
 function _charEditorName() {
   const ed = _charEditorEl();
   if (!ed) return '';
-  const id = ed.id === 'persona-editor' ? 'persona-name' : 'card-name';
+  const id = ed.id === 'persona-editor' ? 'persona-name' : ed.id === 'group-editor' ? 'group-name' : 'card-name';
   const el = document.getElementById(id);
   const v = el && el.value ? String(el.value).trim() : '';
   return v;
@@ -423,7 +425,8 @@ function charDismissGuard() {
   // A brand-new card can genuinely have an empty name field, and "discard
   // changes to this character" is wrong when the thing being discarded is a
   // persona.
-  const noun = (ed && ed.id === 'persona-editor') ? 'persona' : 'character';
+  const noun = (ed && ed.id === 'persona-editor') ? 'persona'
+             : (ed && ed.id === 'group-editor') ? 'group' : 'character';
   const name = _charEditorName();
   const who = name ? '"' + name + '"' : 'this ' + noun;
   return confirm('Discard unsaved changes to ' + who + '?\n\nSAVE keeps them.');
@@ -583,7 +586,9 @@ function renderAboutBuild() {
   // "dev" is an unstamped local build and legitimately differs from anything,
   // so it is never flagged.
   // WHICH PROGRAM IS SERVING THIS PAGE is a separate question from which
-  // version it is, and it used to be invisible. fileserver.ps1 sent no version
+  // version it is, and it used to be invisible. The PowerShell file server
+  // (fileserver.ps1, removed in 1.8.0; a copy left running from before an
+  // update still answers) sent no version
   // at all, so sRel was empty, cmp was null, and this warning stayed hidden
   // while the row above displayed the PAGE's stamp as the version of the whole
   // install. The reader was told they were running a current release by a
@@ -596,12 +601,12 @@ function renderAboutBuild() {
   if (legacy) {
     warn.hidden = false;
     warn.textContent =
-      'This page is being served by fileserver.ps1, the older PowerShell file server that ' +
-      'launch.bat starts. It works for chatting, but it does not have the parts of GobboNet ' +
-      'that live in the server — idle stand-down, sync profiles and config presets are ' +
-      'missing or do nothing. To get them, start GobboNet with the gobbonet program file in ' +
-      'your GobboNet folder instead of launch.bat. The chat page is built into that file, so ' +
-      'there is nothing else to update.';
+      'This page is being served by fileserver.ps1, a PowerShell file server left running from ' +
+      'GobboNet 1.7. It works for chatting, but it does not have the parts of GobboNet that ' +
+      'live in the server — idle stand-down, sync profiles and config presets are missing or ' +
+      'do nothing. GobboNet 1.8 removed it: run stop-gobbonet.bat in your GobboNet folder, then ' +
+      'start GobboNet again. The chat page is built into the gobbonet program file, so there is ' +
+      'nothing else to update.';
     return;
   }
 
@@ -709,6 +714,9 @@ function openAbout() {
   // needs when the server is the thing that is broken.
   renderAboutBuild();
   _fetchAboutHealth().then(renderAboutBuild);
+  // An update being installed, or waiting for RESTART NOW (1.8.0). Asks this
+  // server only; GitHub is asked when CHECK FOR UPDATES is pressed.
+  if (typeof refreshUpdateState === 'function') refreshUpdateState();
 }
 function closeAbout() {
   document.getElementById('about-modal').classList.remove('open');

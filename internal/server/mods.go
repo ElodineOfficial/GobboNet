@@ -8,6 +8,8 @@ package server
 //	GET    /mods/<id>/source             an editor-managed mod's content
 //	PUT    /mods/<id>/source             save it            (this PC only)
 //	POST   /mods/<id>/enable {enabled}   switch on (this PC only) or off (any device)
+//	POST   /mods/<id>/entry-enable {kind, index, enabled}
+//	                                     one My extensions entry: on (this PC only) or off (any device)
 //	POST   /mods/<id>/move {delta}       load earlier/later (this PC only)
 //	DELETE /mods/<id>                    remove, UNDO-able   (this PC only)
 //	POST   /mods/<id>/restore            the UNDO           (this PC only)
@@ -16,9 +18,17 @@ package server
 // All of it sits behind the auth gate. "This PC only" is the same test the
 // config.toml editor uses (fromThisPC): a browser on the machine GobboNet runs
 // on, reaching it at a loopback address, with no proxy headers. Anything that
-// can make code run in every browser -- writing it, switching it on, ordering
-// it -- is decided at that keyboard. A phone on the LAN can read the list and
-// switch a mod off, which is never the dangerous direction.
+// can make code run in every browser -- writing it, switching it or one of its
+// entries on, ordering it -- is decided at that keyboard. A phone on the LAN
+// can read the list and switch a mod or an entry off, which is never the
+// dangerous direction.
+//
+// "This PC" is not enough on its own (1.8.0): another website open in a
+// browser on this PC is also on this PC. With a password, its request carries
+// no session cookie (SameSite=Lax) and stops at the auth gate; an install with
+// no password has no gate, so every write that can make code run also checks
+// that the request came from GobboNet's own page (sameOriginStrict, as the
+// config.toml editor does). curl and other tools send no Origin and pass.
 
 import (
 	"encoding/json"
@@ -44,6 +54,23 @@ func (s *Server) modStore() *mods.Store {
 
 const notOnThisPC = "Mods are managed from GobboNet on the PC it runs on. Open it there " +
 	"(at http://localhost) to add, change or switch on a mod; from here you can switch one off."
+
+const notOurPage = "Mods can only be changed from GobboNet's own page, not from another website."
+
+// mayManage is the test for every mods request that can make code run: a
+// browser on this PC, on GobboNet's own page. It answers the request itself
+// when the answer is no.
+func mayManage(w http.ResponseWriter, r *http.Request) bool {
+	if !fromThisPC(r) {
+		httpx.Error(w, r, http.StatusForbidden, notOnThisPC)
+		return false
+	}
+	if !sameOriginStrict(r, false) {
+		httpx.Error(w, r, http.StatusForbidden, notOurPage)
+		return false
+	}
+	return true
+}
 
 func (s *Server) handleMods(w http.ResponseWriter, r *http.Request, path string) {
 	store := s.modStore()
@@ -104,8 +131,7 @@ func (s *Server) handleMods(w http.ResponseWriter, r *http.Request, path string)
 			}
 			httpx.WriteJSON(w, r, http.StatusOK, src)
 		case http.MethodPut:
-			if !fromThisPC(r) {
-				httpx.Error(w, r, http.StatusForbidden, notOnThisPC)
+			if !mayManage(w, r) {
 				return
 			}
 			var body struct {
@@ -141,8 +167,7 @@ func (s *Server) handleMods(w http.ResponseWriter, r *http.Request, path string)
 		if !readJSON(w, r, &body, 4<<10) {
 			return
 		}
-		if body.Enabled && !fromThisPC(r) {
-			httpx.Error(w, r, http.StatusForbidden, notOnThisPC)
+		if body.Enabled && !mayManage(w, r) {
 			return
 		}
 		if err := store.SetEnabled(id, body.Enabled); err != nil {
@@ -156,13 +181,39 @@ func (s *Server) handleMods(w http.ResponseWriter, r *http.Request, path string)
 		log.Printf("[mods] %s switched %s", id, map[bool]string{true: "on", false: "off"}[body.Enabled])
 		httpx.WriteJSON(w, r, http.StatusOK, map[string]any{"id": id, "enabled": body.Enabled})
 
+	case tail == "entry-enable":
+		if r.Method != http.MethodPost {
+			httpx.Error(w, r, http.StatusMethodNotAllowed, "POST only")
+			return
+		}
+		var body struct {
+			Kind    string `json:"kind"`
+			Index   int    `json:"index"`
+			Enabled bool   `json:"enabled"`
+		}
+		if !readJSON(w, r, &body, 4<<10) {
+			return
+		}
+		if body.Enabled && !mayManage(w, r) {
+			return
+		}
+		if err := store.SetEntryEnabled(id, body.Kind, body.Index, body.Enabled); err != nil {
+			code := http.StatusBadRequest
+			if errors.Is(err, mods.ErrNotFound) {
+				code = http.StatusNotFound
+			}
+			httpx.Error(w, r, code, err.Error())
+			return
+		}
+		log.Printf("[mods] %s %s entry %d switched %s", id, body.Kind, body.Index+1, map[bool]string{true: "on", false: "off"}[body.Enabled])
+		httpx.WriteJSON(w, r, http.StatusOK, map[string]any{"id": id, "kind": body.Kind, "index": body.Index, "enabled": body.Enabled})
+
 	case tail == "move":
 		if r.Method != http.MethodPost {
 			httpx.Error(w, r, http.StatusMethodNotAllowed, "POST only")
 			return
 		}
-		if !fromThisPC(r) {
-			httpx.Error(w, r, http.StatusForbidden, notOnThisPC)
+		if !mayManage(w, r) {
 			return
 		}
 		var body struct {
@@ -182,8 +233,7 @@ func (s *Server) handleMods(w http.ResponseWriter, r *http.Request, path string)
 			httpx.Error(w, r, http.StatusMethodNotAllowed, "POST only")
 			return
 		}
-		if !fromThisPC(r) {
-			httpx.Error(w, r, http.StatusForbidden, notOnThisPC)
+		if !mayManage(w, r) {
 			return
 		}
 		if err := store.Restore(id); err != nil {
@@ -198,8 +248,7 @@ func (s *Server) handleMods(w http.ResponseWriter, r *http.Request, path string)
 			httpx.Error(w, r, http.StatusMethodNotAllowed, "DELETE only")
 			return
 		}
-		if !fromThisPC(r) {
-			httpx.Error(w, r, http.StatusForbidden, notOnThisPC)
+		if !mayManage(w, r) {
 			return
 		}
 		if err := store.Remove(id); err != nil {
@@ -224,8 +273,7 @@ func (s *Server) modsImportLegacy(w http.ResponseWriter, r *http.Request, store 
 		httpx.Error(w, r, http.StatusMethodNotAllowed, "POST only")
 		return
 	}
-	if !fromThisPC(r) {
-		httpx.Error(w, r, http.StatusForbidden, notOnThisPC)
+	if !mayManage(w, r) {
 		return
 	}
 	var body struct {

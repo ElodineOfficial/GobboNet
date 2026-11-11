@@ -88,6 +88,22 @@ $LOG"
 [ -x "$BIN" ] || die "GobboNet is not installed correctly: $BIN is missing."
 
 # ---------------------------------------------------------------------------
+# open_browser in config.toml (1.8.0, PR #58). A menu launch passes no flags,
+# so the setting is the only way to start without a new tab; --no-browser
+# still wins. It is read only once a config exists: `config get` on a first
+# run would write a default config.toml before setup had asked anything.
+# ---------------------------------------------------------------------------
+BROWSER_WHY="--no-browser"
+read_open_browser() {
+    [ "$OPEN_BROWSER" = "1" ] || return 0
+    if [ "$("$BIN" config get open_browser 2>/dev/null)" = "false" ]; then
+        OPEN_BROWSER=0
+        BROWSER_WHY="open_browser = false in config.toml"
+        echo "open_browser: false, so no browser will be opened"
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # Pick an engine.
 #
 # Both upstream llama.cpp Linux builds are bundled. On Windows the GPU runtime
@@ -96,18 +112,36 @@ $LOG"
 # that has none. Probing here rather than shipping GPU-only is what makes this
 # work everywhere instead of usually.
 # ---------------------------------------------------------------------------
+# Which build was picked, and why, goes to $DATA_DIR/engine-choice as well as
+# this log (1.8.0, issue #72): gobbonet doctor and CONFIG > Performance read
+# it, because "the GPU is not used" on a machine where this fell back to the
+# CPU build has a one-line answer that used to be buried in launch.log.
+note_engine() {
+    {
+        printf 'build=%s\n' "$1"
+        printf 'reason=%s\n' "$(printf '%s' "$2" | tr -d '\r\n' | cut -c1-300)"
+    } > "$DATA_DIR/engine-choice" 2>/dev/null || true
+}
 pick_engine() {
     local gpu="$PREFIX/llama-cpp/llama-server"
     local cpu="$PREFIX/llama-cpp-cpu/llama-server"
-    if [ -x "$gpu" ] && "$gpu" --version >/dev/null 2>&1; then
-        echo "$gpu"; return
-    fi
+    local why="no GPU build is bundled"
     if [ -x "$gpu" ]; then
-        echo "note: the GPU engine would not start here; using the CPU build." >&2
+        if why="$("$gpu" --version 2>&1)"; then
+            note_engine gpu ""
+            echo "$gpu"; return
+        fi
+        # Its own last words: usually "error while loading shared libraries:
+        # libvulkan.so.1", which is the whole story.
+        why="$(printf '%s\n' "$why" | tr -d '\r' | grep -v '^[[:space:]]*$' | tail -n 1)"
+        why="the GPU build would not start: ${why:-it exited without saying why}"
+        echo "note: $why; using the CPU build." >&2
     fi
     if [ -x "$cpu" ]; then
+        note_engine cpu "$why"
         echo "$cpu"; return
     fi
+    note_engine none "$why"
     echo ""
 }
 ENGINE="$(pick_engine)"
@@ -174,6 +208,10 @@ if [ "$FORCE_SETUP" = "0" ] && "$BIN" setup --status >/dev/null 2>&1; then
     echo "setup: already complete"
 else
     echo "setup: first run"
+    # Setup run again on a configured install follows open_browser too.
+    if [ "$FORCE_SETUP" = "1" ] && "$BIN" setup --status >/dev/null 2>&1; then
+        read_open_browser
+    fi
     # The setup page is served by gobbonet-setup.py. The packages depend on
     # python3, so it is always there for them; the ZIP and the AppImage
     # (issue #53) bring no interpreter of their own, and a missing one used to
@@ -186,6 +224,14 @@ systems, python on Arch and its relatives -- then start GobboNet again."
     SETUP_LOG="$(mktemp "$DATA_DIR/setup.XXXXXX")" || die "Cannot create setup log."
     python3 "$PREFIX/gobbonet-setup.py" "$ENGINE" >"$SETUP_LOG" 2>&1 &
     SETUP_PID=$!
+    # However the first run ends -- finished, failed, or stopped by Ctrl+C, a
+    # logout or a kill -- what the setup page printed goes into this log and
+    # its temporary file goes. Up to 1.8.0 only a finished setup removed it,
+    # and the trap was set only once the browser had opened: an abandoned
+    # first run left setup.XXXXXX here, and with it this folder after
+    # `gobbonet uninstall` (which removes such leftovers now too).
+    end_setup_log() { cat "$SETUP_LOG" 2>/dev/null; rm -f "$SETUP_LOG"; }
+    trap 'kill "$SETUP_PID" 2>/dev/null; end_setup_log; exit 130' INT TERM HUP
 
     WIZARD=""
     for _ in $(seq 1 60); do
@@ -202,17 +248,19 @@ systems, python on Arch and its relatives -- then start GobboNet again."
             tell_url "$WIZARD"
         fi
     elif [ -n "$WIZARD" ]; then
-        echo "setup wizard at $WIZARD (browser suppressed by --no-browser)"
+        echo "setup wizard at $WIZARD (browser not opened: $BROWSER_WHY)"
+        # The setting is not a request for silence. A setup run from the menu
+        # has no terminal, so without this the wizard would be unreachable;
+        # --no-browser (autostart, scripts) means it and stays quiet.
+        [ "$BROWSER_WHY" = "--no-browser" ] || tell_url "$WIZARD"
     fi
 
-    trap 'kill "$SETUP_PID" 2>/dev/null; exit 130' INT TERM
     if ! wait "$SETUP_PID"; then
-        cat "$SETUP_LOG"
+        end_setup_log
         die "GobboNet's first-run setup did not finish."
     fi
-    cat "$SETUP_LOG"
-    rm -f "$SETUP_LOG"
-    trap - INT TERM
+    end_setup_log
+    trap - INT TERM HUP
 fi
 
 # CLEAR the packaged web_root this script used to write.
@@ -239,6 +287,9 @@ if [ -n "${WEBROOT:-}" ]; then
     unset _current_webroot
 fi
 
+# From here on a config exists, so open_browser can be read safely.
+read_open_browser
+
 # ---------------------------------------------------------------------------
 # The port is a config key, not a sidecar file. 9066 is the fallback rather
 # than the assumption, because a user who changed it should not be sent to the
@@ -250,7 +301,7 @@ URL="http://127.0.0.1:$PORT/"
 echo "port: $PORT"
 
 open_browser() {
-    [ "$OPEN_BROWSER" = "1" ] || { echo "browser suppressed by --no-browser"; return 0; }
+    [ "$OPEN_BROWSER" = "1" ] || { echo "browser not opened ($BROWSER_WHY); the chat is at $URL"; return 0; }
     if ! open_url "$URL"; then
         # Say which of the two it was. "No browser opener found" on a machine
         # that has xdg-open sends the next reader looking for a missing
@@ -384,9 +435,7 @@ fi
 # the GPU. The trap covers a normal exit as well as a session logout.
 # ---------------------------------------------------------------------------
 SERVER_PID=""
-EMBED_PID=""
 cleanup() {
-    [ -z "$EMBED_PID" ] || kill "$EMBED_PID" 2>/dev/null || true
     if [ -n "$SERVER_PID" ] && kill -0 "$SERVER_PID" 2>/dev/null; then
         echo "stopping server $SERVER_PID"
         kill "$SERVER_PID" 2>/dev/null
@@ -402,13 +451,10 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 cd "$PREFIX" || die "Could not enter $PREFIX."
-# Optional embedding model lives separately so it cannot become the chat model.
-RUNTIME_DATA="$("$BIN" config get data_dir)"
-EMBED_MODEL="$RUNTIME_DATA/embeddings/nomic-embed-text-v1.5.Q8_0.gguf"
-if [ -f "$EMBED_MODEL" ] && [ -n "$ENGINE" ] && [ -n "$("$BIN" config get server_exe)" ]; then
-    "$ENGINE" --model "$EMBED_MODEL" --host 127.0.0.1 --port 11436 --embeddings --pooling mean --ctx-size 2048 --gpu-layers 0 >"$RUNTIME_DATA/embed-server.log" 2>&1 &
-    EMBED_PID=$!
-fi
+# The optional embedding model (setup's "Download Nomic", in
+# <data_dir>/embeddings) is started by the server itself since 1.8.0: it
+# checks the model's pin, restarts it if it crashes and stands it down with
+# the chat model. embed_mode in config.toml says whether it runs.
 "$BIN" serve &
 SERVER_PID=$!
 echo "server pid: $SERVER_PID"

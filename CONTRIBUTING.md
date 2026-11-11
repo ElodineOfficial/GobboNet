@@ -24,8 +24,8 @@ make a report actionable:
 - the text from **COPY BUILD INFO**, in the same panel;
 - the output of `gobbonet doctor`: on Windows run `gobbonet.exe doctor` in the
   install folder; on Linux run `gobbonet doctor`;
-- how you started GobboNet (Start menu, `launch.bat`, `gobbonet.exe`, the
-  Linux launcher, the ZIP);
+- how you started GobboNet (a Start menu or desktop shortcut, `launch.bat`,
+  `gobbonet.exe`, the Linux menu or `gobbonet` command, the AppImage, the ZIP);
 - your OS and GPU.
 
 `gobbonet doctor` and the build info can include local network addresses and
@@ -67,7 +67,7 @@ merged, however useful they are otherwise.
    ```
 
    `tests/test-linux-onboarding.py` needs a built `linux-amd64/gobbonet` and an
-   engine; `./scripts/make-zip.sh` builds both. See [tests/README.md](tests/README.md).
+   engine; `bash ./scripts/make-zip.sh` builds both. See [tests/README.md](tests/README.md).
 
 2. **Keep the house rules the tests can't always catch:**
    - Batch files stay CRLF. Inside a `( )` block, escape parentheses in

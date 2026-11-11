@@ -4,11 +4,11 @@
 
 Builds `gobbonet.deb` for Ubuntu, Mint, Pop!_OS and Debian. Sibling of
 `installer-win/`, which builds the Windows `.exe`. **Neither touches the codebase** —
-both wrap a finished binary produced by `../scripts/build-release.sh`.
+both wrap a finished binary produced by `scripts/build-release.sh`.
 
 ```sh
-../scripts/build-release.sh          # produces dist/<version>/…-linux-amd64.tar.gz
-./build-deb.sh               # produces dist/gobbonet_<version>_amd64.deb
+bash ../scripts/build-release.sh     # produces dist/<version>/…-linux-amd64.tar.gz
+bash ./build-deb.sh          # produces dist/gobbonet_<version>_amd64.deb
 ```
 
 ## What the user does
@@ -68,7 +68,7 @@ still worked. That goal is right, but the means turned out to be redundant:
   that one backend and falls through to the CPU ones beside it.
 
 So the Vulkan bundle alone works everywhere, at ~92 MB instead of ~133 MB.
-`BUNDLE_CPU_ENGINE=1 ./build-deb.sh` ships both anyway.
+`BUNDLE_CPU_ENGINE=1 bash ./build-deb.sh` ships both anyway.
 
 ### Sizes are not what the plan assumed
 
@@ -133,9 +133,12 @@ gobbonet autostart              # reports
 
 The wizard offers the same choice on its final step, unchecked. The entry runs
 `gobbonet-launch --no-browser` — the server starts quietly and no browser window
-opens by itself at login. `gobbonet uninstall` removes it, because it lives
-outside the config directory and would otherwise be left pointing at a binary
-that is no longer there.
+opens by itself at login. From the AppImage it runs the AppImage file itself
+with `--no-browser`, which `AppRun` hands to the same launcher: the launcher
+inside the image is there only while it runs (until 1.8.0 the entry named it,
+and started nothing at login). `gobbonet uninstall` removes it, because it
+lives outside the config directory and would otherwise be left pointing at a
+binary that is no longer there.
 
 Worth recording: **the Windows installer has no startup entry at all.** It writes
 no `Run` key and drops no Startup-folder shortcut — it only offers to launch
@@ -157,7 +160,7 @@ visible; a script that delegates it cannot detect it.
 ## The AppImage
 
 ```sh
-./build-deb.sh && ./build-appimage.sh   # dist/GobboNet-<deb version>-x86_64.AppImage
+bash ./build-deb.sh && bash ./build-appimage.sh   # dist/GobboNet-<deb version, no +>-x86_64.AppImage
 ```
 
 Made from the `.deb`, so it carries the same files: `build-appimage.sh` unpacks
@@ -195,10 +198,12 @@ The approach is Deven-Eve's from issue #53.
 
 ## Deferred
 
-arm64 packages, autostart-at-login, and the hardware probe. Linux v1
-offers the catalogue unfiltered and lets the user pick, which is exactly what
-the Windows wizard already does when its probe fails. (The `.rpm` was on this
-list once; it is built by `installer-fedora/` now.)
+arm64 packages, and a recommended pick for the PC. Linux v1 offers the
+catalogue unmarked and lets the user pick, which is exactly what the Windows
+wizard does when its hardware probe fails; since 1.7.7 it does ask first
+before a model too big for the GPU the engine reports. (The `.rpm` was on
+this list once; it is built by `installer-fedora/` now. So was
+autostart-at-login, which is in: see Launching above.)
 
 **arm64 note:** the original plan held arm64 back because upstream published no
 arm64 Linux engine. That is no longer true — `llama-<build>-bin-ubuntu-arm64.tar.gz`
@@ -239,3 +244,93 @@ a non-root user. Confirm the setup wizard, model loading, chat, desktop entry,
 and that existing user data survives the upgrade. Do not use a production home
 or purge a working installation just to perform a release test; use a disposable
 VM or test installation.
+
+## 1.8.0: the same package, for the 1.8.0 payload
+
+`build-deb.sh`, `postinst`, `postrm`, the menu entry and the icon are 1.7.9's,
+and so is the engine: llama.cpp b10456, from the same pinned archive. The
+package's 88 files, folders and links are 1.7.9's, with the same modes and
+owners. What changed is in the files it carries:
+
+- **`gobbonet`**, the 1.8.0 program.
+- **`gobbonet-launch`:**
+  - `open_browser = false` in config.toml starts GobboNet without a new
+    browser tab (PR #58);
+  - which build of the engine it picked, and why, goes to
+    `~/.local/share/gobbonet/engine-choice` for doctor and CONFIG (#72);
+  - the embedding server is started by GobboNet itself, not by the launcher;
+  - a first run that is stopped before setup finishes (a kill, a logout,
+    Ctrl+C) leaves no `setup.XXXXXX` behind, and stops the setup page with it.
+    Up to 1.8.0 only a finished setup removed that file, which kept the data
+    folder after `gobbonet uninstall`.
+- **`gobbonet-setup.py` and `wizard.html`:** the location page asks for a data
+  folder and a models folder (#68). A data folder whose only models are in its
+  own `models` subfolder (where 1.7.9 said existing models belong, and where
+  `gobbonet uninstall` leaves the ones it keeps) keeps that subfolder as the
+  models folder; it is not offered as one itself.
+- **`models.ini`**, the 1.8.0 catalogue, every model with a pinned checksum.
+- **This README.**
+
+`gobbonet uninstall` also clears what the launcher and setup leave in the
+data folder: the embedding model setup downloads (`embeddings/`), the
+launcher's log and `engine-choice` note, and old setup logs.
+
+**How it was built.** From the extracted 1.8.0 update ZIP, not a git checkout,
+as 1.7.9's was (its version says `nogit`): the package then carries exactly the
+ZIP's files and takes its build id from the program, `1.8.0+go.<commit>-1`. The
+engine archive was put in `vendor/` by hand, and the script checks it against
+its pin. `SOURCE_DATE_EPOCH` is the commit's time, so the same command gives
+the same file, byte for byte:
+
+```sh
+cd GobboNet/installer-linux       # in the extracted ZIP
+mkdir -p vendor && cp /path/to/llama-b10456-bin-ubuntu-vulkan-x64.tar.gz vendor/
+GOBBONET_BIN="$PWD/../linux-amd64/gobbonet" SKIP_ENGINE_FETCH=1 \
+    SOURCE_DATE_EPOCH="$(git -C /path/to/the/repo log -1 --format=%ct v1.8.0)" \
+    bash ./build-deb.sh
+```
+
+The same way rebuilds the official
+`gobbonet_1.7.9+go.nogit.20261102-1_amd64.deb` byte for byte from `git archive
+v1.7.9`, its program and `SOURCE_DATE_EPOCH=1793633538`.
+
+**How it was checked** (`docs/changelog/CHANGELOG-1.8.0-linux-installer.md`
+has the details):
+
+- entry by entry against the official 1.7.9: the same 88 entries in the same
+  order, with the same modes, owners and link targets. 81 are byte-identical,
+  the engine among them; the other 7 are the files above and `ENGINE.txt`'s
+  "bundled by" line, each byte-for-byte the ZIP's. `postinst` and `postrm` are
+  identical, and `control` differs only in Version and Installed-Size.
+  lintian reports the same findings for both;
+- installed with apt on Ubuntu 24.04 and used as ordinary users: an upgrade
+  over 1.7.9 that keeps the conversations, password, config and models; a
+  first run whose wizard pages match 1.7.9's except the location page and the
+  model page's note; a chat answered by the bundled engine; a first run
+  stopped part way; `apt remove` and `apt purge`, which leave the users' files
+  alone; and `gobbonet uninstall`, which leaves nothing of GobboNet's.
+
+## 1.8.0: the AppImage
+
+Made from the 1.8.0 `.deb` the way 1.7.9's was, with the same `AppRun` and the
+same pinned runtime. Two things changed:
+
+- **Its name** has no `+`: `GobboNet-1.8.0go.<commit>-1-x86_64.AppImage`, the
+  name GitHub lists it by once it is attached. The update file names it that
+  way, so the update button can find it (`docs/UPDATES.md`).
+- **Start at login** from the AppImage starts the AppImage file, as Launching
+  says.
+
+Built after the `.deb`, in the same extracted ZIP, with the same
+`SOURCE_DATE_EPOCH`:
+
+```sh
+cp /path/to/runtime-x86_64 vendor/appimage-runtime-20251108-x86_64   # or let the script fetch it
+SKIP_RUNTIME_FETCH=1 SOURCE_DATE_EPOCH=<the same> \
+    bash ./build-appimage.sh dist/gobbonet_1.8.0+go.<commit>-1_amd64.deb
+```
+
+`docs/changelog/CHANGELOG-1.8.0-appimage.md` has how it was checked: entry by
+entry against the official 1.7.9, run by ordinary users through FUSE (an
+upgrade from 1.7.9, first runs, Start at login, `gobbonet uninstall`), and the
+update button replacing it.

@@ -268,6 +268,9 @@ function renderThreadItem(t) {
   // Fork count badge (how many branches off THIS thread)
   const forkCount = getAllForksOf(t.id).length;
   const forkBadge = forkCount > 0 ? `<span class="thread-fork-count" title="${forkCount} branch${forkCount > 1 ? 'es' : ''}">⑂${forkCount}</span>` : '';
+  // Group chat badge (1.8.0): a chat started with a group, named in the title.
+  const groupBadge = t.groupId
+    ? `<span class="thread-group-badge" title="Group chat${t.groupName ? ': ' + escapeHtml(t.groupName) : ''}">&#128101;</span>` : '';
   return `<div class="thread-item${isActive?' active':''}${t.pinned?' thread-pinned':''}"
        data-thread-id="${escapeHtml(t.id)}"
        draggable="true"
@@ -280,7 +283,7 @@ function renderThreadItem(t) {
     <div class="thread-body">
       <div class="thread-name-row">
         <span class="thread-name" title="${escapeHtml(t.name)}">${escapeHtml(t.name)}</span>
-        ${genBadge}${pinBadge}${branchBadge}${forkBadge}
+        ${genBadge}${pinBadge}${groupBadge}${branchBadge}${forkBadge}
       </div>
       ${tagPills}
     </div>
@@ -360,7 +363,7 @@ function renderSidebar() {
 
   // ── Unfiled ──────────────────────────────────────────────────────
   if (state.threads.length === 0) {
-    html += '<div class="empty-threads">No threads yet.<br>Click "+ NEW_THREAD" to start.</div>';
+    html += '<div class="empty-threads">No threads yet.<br>Click "+ THREAD" to start.</div>';
   } else if (unfiled.length > 0) {
     if (state.folders.length > 0 && !query)
       html += `<div class="unfiled-label" ondragover="onUnfiledDragOver(event)" ondragleave="onUnfiledDragLeave(event)" ondrop="onUnfiledDrop(event)">// UNFILED</div>`;

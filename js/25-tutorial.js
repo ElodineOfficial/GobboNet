@@ -24,7 +24,7 @@
    Stable targets. Each stop names data-tour="..." attributes, never a CSS
    class or a position, so moving controls around (as F3 did with CONFIG)
    cannot break it. A stop lists fallbacks in order: on the home screen there
-   is no message box yet, so "send a message" points at + NEW_THREAD instead.
+   is no message box yet, so "send a message" points at + THREAD instead.
    A stop whose targets are all missing still shows, centred, rather than
    being skipped. tests/test-tutorial.mjs checks every name exists.
 ================================================================ */
@@ -40,7 +40,7 @@ const TOUR_STEPS = [
     targets: ['message', 'new-chat'],
     text: (t) => t === 'message'
       ? 'Type here and press Enter to send; Shift+Enter starts a new line.'
-      : '+ NEW_THREAD starts a chat with your character; then type at the bottom and press Enter to send.',
+      : '+ THREAD starts a chat with your character; then type at the bottom and press Enter to send.',
   },
   {
     title: 'Choose a model',

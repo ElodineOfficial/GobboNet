@@ -91,6 +91,17 @@ func cmdSetup(argv []string) error {
 	if freshConfig && !*force {
 		fmt.Println("  No config was found, so this looks like a first run.")
 	}
+	// open_browser (1.8.0, PR #58) applies to setup as it does to every other
+	// start; --no-browser still beats it. A config this run just created holds
+	// the default, true, so a first run always opens the page.
+	if !*noBrowser && !freshConfig {
+		if cfg, err := config.Load(path); err == nil && !cfg.OpenBrowser {
+			*noBrowser = true
+			if *force || !setup.Complete(cfg.DataDir) {
+				fmt.Println("  Not opening a browser (open_browser = false in config.toml); the address is printed below.")
+			}
+		}
+	}
 	res, err := setup.Run(setup.Options{
 		ConfigPath:  path,
 		CatalogPath: catPath,

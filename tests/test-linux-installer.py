@@ -89,7 +89,7 @@ class TheWizard(unittest.TestCase):
     def test_the_order_between_them(self):
         # Each button leads to the next step of the documented flow.
         for wiring in ("$('save-location').onclick = function() {\n"
-                       "    post('/api/location', {path: $('data-path').value}).then(function(){\n"
+                       "    post('/api/location', {data: $('data-path').value, models: $('model-path').value}).then(function(){\n"
                        "      show(1);",
                        '.then(function () { step("port"); })',
                        "step('network');",
@@ -116,10 +116,49 @@ class TheWizard(unittest.TestCase):
         self.assertIn('s.model_dir', note)
 
 
+    # 1.8.0, issue #68: one "Data and model folder" field, with /models always
+    # added, meant pointing setup at a model collection gave an empty
+    # subfolder. tests/test-setup-folders.py runs the server side for real.
+    def test_location_asks_for_two_folders(self):
+        loc = WIZARD.split('id="location"', 1)[1].split('</section>', 1)[0]
+        labels = dict((f, t.strip()) for f, t in re.findall(r'<label for="([^"]+)">([^<]+)</label>', loc))
+        self.assertEqual(labels, {'data-path': 'Data folder', 'model-path': 'Models folder'})
+        self.assertNotIn('Data and model folder', WIZARD)
+        self.assertIn('id="model-note"', loc)
+
+    def test_a_data_folder_holding_models_offers_to_use_it(self):
+        loc = WIZARD.split('id="location"', 1)[1].split('</section>', 1)[0]
+        use = loc.split('id="c-usedata"', 1)[1].split('</div>\n        </div>', 1)[0]
+        self.assertIn('Use this folder for models', use)
+        self.assertIn('class="choice sel" id="c-usedata"', loc, 'using the folder is the pre-selected choice')
+        self.assertIn("Keep GobboNet's models in a models subfolder", loc)
+        follow = WIZARD.split('function followData() {', 1)[1].split('\n  }\n', 1)[0]
+        self.assertIn('scan(data)', follow)
+        self.assertIn('"Use this folder for models (" + found + " found)"', follow)
+        self.assertIn('if (modelsTouched) return;', follow, 'a typed models folder is never overwritten')
+        self.assertIn('"/api/scan?path=" + encodeURIComponent(', WIZARD)
+
+    def test_the_models_folder_follows_the_data_folder_until_typed_into(self):
+        self.assertIn('function defaultModels(data)', WIZARD)
+        self.assertIn('$("model-path").addEventListener("input", function () {\n    modelsTouched = true;', WIZARD)
+        load = WIZARD.split("$('data-path').value = s.data_dir;", 1)[1].split('setNote(s);', 1)[0]
+        self.assertIn("$('model-path').value = s.model_dir;", load)
+        self.assertIn('modelsTouched = trimSlash(s.model_dir || "") !== defaultModels(s.data_dir || "");', load)
+
+    def test_the_server_stores_model_dir_as_chosen(self):
+        setup = (LIN / 'gobbonet-setup.py').read_text(encoding='utf-8')
+        loc = setup.split("if self.path == '/api/location':", 1)[1].split("elif self.path == '/api/port':", 1)[0]
+        self.assertIn("put('model_dir', models)", loc)
+        self.assertNotIn("put('model_dir', path / 'models')", setup)
+        self.assertIn("writable(models, 'models')", loc)
+        self.assertIn("writable(data, 'data')", loc)
+        self.assertIn("mode=0o700", setup.split('def writable(', 1)[1].split('\ndef ', 1)[0])
+
+
 class TheBuildGuide(unittest.TestCase):
     def test_building_md_builds_the_deb_from_installer_linux(self):
         order = BUILDING.split('## Order matters', 1)[1].split('```', 2)[1]
-        self.assertIn('cd installer-linux && ./build-deb.sh', order)
+        self.assertIn('cd installer-linux && bash ./build-deb.sh', order)
 
 
 if __name__ == '__main__':

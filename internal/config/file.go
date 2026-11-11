@@ -2,6 +2,7 @@ package config
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -64,6 +65,33 @@ llm_url = "http://127.0.0.1:11437"
 search_url = "https://ollama.com/api"
 embed_url = "http://127.0.0.1:11436"
 
+# --- Embedding server (semantic search) ----------------------------------
+# The small model that lets RAG match notes by meaning. embed_mode says who
+# runs it:
+#   "managed"   GobboNet starts it beside the chat model on embed_url's
+#               port, restarts it if it crashes, and stands it down and
+#               brings it back with the chat model. Needs a local engine
+#               (server_exe); without one it acts as "external".
+#   "external"  something else runs it; embed_url is used as it is.
+#   "off"       no semantic search; RAG matches by tags only.
+embed_mode = "managed"
+
+# Empty means GobboNet's own, nomic-embed-text-v1.5.Q8_0.gguf, looked for
+# in <data_dir>/embeddings and then in model_dir (where 1.7 put it on
+# Windows), and checked against its SHA-256 pin before every start. A
+# path here is used as it is, without a pin. When there is no model,
+# semantic search stays off and the chat page says why: the Windows first
+# run and the Linux setup wizard are what download it.
+embed_model = ""
+
+# Layers on the GPU. 0 keeps it on the CPU, where it is quick enough and
+# never takes VRAM from the chat model.
+embed_gpu_layers = 0
+
+# Context in tokens. Also its batch size, because an embedder has to take
+# each input whole.
+embed_ctx = 2048
+
 # --- Model catalogue ----------------------------------------------------
 # The list of downloadable models shown by "Add a Model" in the config
 # panel. Keeping it online means models added after your install show up
@@ -92,11 +120,13 @@ model_catalog_url = "https://goblincorps.com/gobbonet_model_list.json"
 # the weights, so the two would have to agree in order to lie. When both
 # exist and disagree, the download is refused outright.
 #
-# Left false because only some entries in the models.ini that ships here
-# carry a hash so far (catalog/pin-hashes.py adds the rest), so turning it
-# on refuses the others. Turn it on when you run a catalogue of your own
-# with a sha256 on every entry -- then a missing hash means the catalogue
-# is wrong, and you want to hear about it rather than download anyway.
+# Every entry in the models.ini that ships here carries a hash since
+# 1.8.0, and a served list that lacks one borrows it from there, so turning
+# this on refuses only a model your own catalogue leaves unpinned. Left
+# false so a catalogue of your own still works as it did; turn it on when
+# yours has a sha256 on every entry -- then a missing hash means the
+# catalogue is wrong, and you want to hear about it rather than download
+# anyway.
 require_checksum = false
 
 # --- Endorsed mods --------------------------------------------------------
@@ -109,6 +139,15 @@ require_checksum = false
 # another list, or empty it to switch the list off. Mods you add by hand in
 # the mods folder work either way.
 mod_list_url = "https://goblincorps.com/gobbonet_mod_list.json"
+
+# --- Updates --------------------------------------------------------------
+# The release list ABOUT > CHECK FOR UPDATES asks: GobboNet's releases on
+# GitHub. Asked only when you press the button, as a plain GET with nothing
+# about you or this install; the version comparison happens here. UPDATE NOW
+# installs only a release signed with a key built into this program, and
+# never an older release than the one running -- the same release only when
+# it is a later build of it (a fix). Empty switches the button off.
+update_releases_url = "https://api.github.com/repos/ElodineOfficial/gobbonet/releases?per_page=20"
 
 # API key sent to the upstream llama.cpp server (never exposed to the
 # browser). Set this if your upstream requires authentication.
@@ -138,6 +177,15 @@ listen_port = 9066
 # Connect by IP first if the hostname is blocked. UI saves apply immediately;
 # manual config edits require a restart. No wildcards or provider-wide trust.
 
+# --- Starting GobboNet --------------------------------------------------
+# Open the chat in your browser when GobboNet starts: the Start menu and
+# desktop shortcuts, launch.bat, "Setup or add a model", the Linux menu
+# entry and gobbonet setup. false starts it without a new tab, for
+# someone who keeps one open or uses a phone; the address is still
+# printed. --no-browser on the command line beats this. CONFIG > Basics
+# sets it from any signed-in device.
+open_browser = true
+
 # --- Local-backend (hot-swap) settings ----------------------------------
 # Set server_exe to the llama-server binary to run in LOCAL MODE, where
 # this program starts, supervises and hot-swaps llama.cpp for you.
@@ -163,6 +211,21 @@ gpu_layers = -1
 # Mixture-of-Experts models use at least 2048 (they page out to system RAM at
 # 1024 on cards they do not fit); set this above 2048 to raise that too.
 gpu_reserve_mib = 1024
+
+# Which GPU runs the model. "auto" lets llama.cpp choose: every dedicated
+# GPU, and an integrated one only when there is no dedicated one. "none"
+# runs everything on the CPU. Or name devices as llama-server
+# --list-devices prints them: "Vulkan1", or "CUDA0,CUDA1" for two. A device
+# that is no longer there falls back to "auto" with a warning. gobbonet
+# doctor lists the devices; CONFIG > Performance has the same choice.
+gpu_device = "auto"
+
+# Linux, hybrid laptops: true sets the PRIME render-offload pair
+# (__NV_PRIME_RENDER_OFFLOAD=1, __VK_LAYER_NV_optimus=NVIDIA_only) on the
+# engine alone, as prime-run does, so the NVIDIA card is used however
+# GobboNet is started. Only useful when the engine sees just the
+# integrated GPU; gobbonet doctor says when that is the case.
+gpu_prime_offload = false
 
 # Context window in tokens. Must not exceed the model's maximum.
 ctx_size = 16384
@@ -253,6 +316,11 @@ job_max_age_hours = 48
 # streaming this no longer applies. 10 to 86400.
 reply_start_timeout_seconds = 300
 
+# How long one MCP tool call may take, in seconds, before it is
+# cancelled and the character is told it ran out of time. See
+# [[mcp_server]] near the end of this file. 1 to 3600.
+mcp_call_timeout_seconds = 30
+
 # idle_standdown_minutes
 #   Unload the model after this many minutes with no messages,
 #   freeing its VRAM, and reload it on the next one. 0 keeps it
@@ -273,6 +341,45 @@ reply_start_timeout_seconds = 300
 #   Turn it off for a machine where nobody reads the console.
 #   The log file is written either way; "gobbonet doctor" says
 #   where it is.
+
+# ================================================================
+# [[mcp_server]] -- tools from MCP servers
+# ================================================================
+#
+# An MCP server is a separate program that offers tools a
+# character can call: read a folder, query a database, work
+# another app. GobboNet starts each one itself, on this PC, and
+# talks to it over the program's own input and output. It runs
+# with your permissions and can do anything you can, so add only
+# programs you trust.
+#
+# Each server is one [[mcp_server]] table:
+#
+#   name     a short id: lowercase letters, digits, - and _
+#   command  the program, by name (found on PATH) or full path
+#   args     its arguments, one list item each. No shell reads
+#            them, so quotes, *, $ and | mean nothing special
+#   env      environment variables for it, as a table
+#   enabled  starts false; nothing runs until it is true
+#
+# The program gets a few of GobboNet's environment variables
+# (PATH, HOME, the proxy settings and their like, never a
+# GOBBONET_ one) plus env.
+# Its error output goes to mcp-<name>.log beside llama-server.log.
+#
+# CONFIG > Advanced > MCP Servers adds, changes and switches
+# these on, from a browser on this PC only. Any signed-in device
+# can switch one off. A character only gets the tools ticked for
+# it in its card, and you are asked before every call unless you
+# change that in CONFIG.
+#
+# [[mcp_server]]
+# name = "files"
+# command = "npx"
+# args = ["-y", "@modelcontextprotocol/server-filesystem", "/home/me/Documents"]
+# enabled = false
+#
+# MCP servers added from CONFIG are written below this line.
 
 # ================================================================
 # [ui] -- presets for the chat page
@@ -328,7 +435,8 @@ func fieldByTOMLKey(c *Config, key string) (reflect.Value, bool) {
 	t := v.Type()
 	for i := 0; i < t.NumField(); i++ {
 		tag := t.Field(i).Tag.Get("toml")
-		if tag == key {
+		// A table has no one-line value, so it is not a key here; see Keys.
+		if tag == key && !isTableField(t.Field(i).Type) {
 			return v.Field(i), true
 		}
 	}
@@ -337,7 +445,7 @@ func fieldByTOMLKey(c *Config, key string) (reflect.Value, bool) {
 
 // Keys lists every settable config key, in declaration order.
 //
-// Table-valued fields such as [ui] are skipped. `config get`/`config set` deal
+// Table-valued fields such as [ui] and [[mcp_server]] are skipped. `config get`/`config set` deal
 // in single scalar values for the launcher scripts, and there is no sensible
 // string form of a whole table -- so listing it as a key would only advertise
 // a command that cannot work. Detected by kind rather than by name, so a table
@@ -346,7 +454,7 @@ func Keys() []string {
 	var out []string
 	t := reflect.TypeOf(Config{})
 	for i := 0; i < t.NumField(); i++ {
-		if t.Field(i).Type.Kind() == reflect.Map {
+		if isTableField(t.Field(i).Type) {
 			continue
 		}
 		if tag := t.Field(i).Tag.Get("toml"); tag != "" && tag != "-" {
@@ -379,6 +487,20 @@ func (c *Config) Get(key string) (string, error) {
 	default:
 		return "", fmt.Errorf("config key %q has an unsupported type", key)
 	}
+}
+
+// GetJSON returns one value as JSON: `config get --json KEY`. A list item
+// can hold a space (a folder called "My Models"), which Get's space-separated
+// form cannot carry; the Linux setup reads model_dirs this way (1.8.0, #68).
+func (c *Config) GetJSON(key string) ([]byte, error) {
+	field, ok := fieldByTOMLKey(c, key)
+	if !ok {
+		return nil, fmt.Errorf("unknown config key %q", key)
+	}
+	if field.Kind() == reflect.Slice && field.Len() == 0 {
+		return []byte("[]"), nil // a nil list is still a list
+	}
+	return json.Marshal(field.Interface())
 }
 
 // Serialise read-modify-write operations within this process. Network access,
@@ -500,8 +622,38 @@ func validateValue(key, value string) error {
 		if _, err := strconv.ParseBool(value); err != nil {
 			return fmt.Errorf("%s must be true or false, got %q", key, value)
 		}
+	case reflect.Slice:
+		if _, err := listItems(value); err != nil {
+			return fmt.Errorf("%s: %w", key, err)
+		}
 	}
 	return nil
+}
+
+// listItems reads the value of a list key. Space-separated words, as before
+// ("a.example b.example"), or -- for items that hold spaces, such as a
+// folder called "My Models" (1.8.0, issue #68) -- a JSON array of strings:
+// ["/home/me/My Models", "/mnt/models"]. Space-splitting the folder turned it
+// into two folders that do not exist.
+func listItems(value string) ([]string, error) {
+	trimmed := strings.TrimSpace(value)
+	if !strings.HasPrefix(trimmed, "[") {
+		return strings.Fields(value), nil
+	}
+	var items []string
+	if err := json.Unmarshal([]byte(trimmed), &items); err != nil {
+		return nil, fmt.Errorf(`a list starting with [ must be a JSON array of strings, like ["/a folder", "/another"]`)
+	}
+	for _, it := range items {
+		for _, r := range it {
+			// strconv.Quote writes these as Go escapes (\x07), which TOML
+			// does not read: the file would no longer load.
+			if r < 0x20 || r == 0x7f {
+				return nil, fmt.Errorf("list items cannot hold control characters")
+			}
+		}
+	}
+	return items, nil
 }
 
 func formatValue(key, value string) string {
@@ -510,7 +662,7 @@ func formatValue(key, value string) string {
 	case reflect.Int, reflect.Bool:
 		return value
 	case reflect.Slice:
-		parts := strings.Fields(value)
+		parts, _ := listItems(value) // validateValue has already checked it
 		quoted := make([]string, len(parts))
 		for i, p := range parts {
 			quoted[i] = strconv.Quote(p)

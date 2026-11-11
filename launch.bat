@@ -109,10 +109,10 @@ if not errorlevel 1 set "HAVE_CURL=1"
 :: An exit-code check is NOT enough here. Wine ships a powershell.exe
 :: stub that exits cleanly while being unable to execute anything, so
 :: "did it return 0" waves those systems through to fail much later
-:: inside fileserver.ps1 with something unreadable. Instead we require
-:: PowerShell to echo a marker back AND to resolve the .NET type the
-:: file server is actually built on. Either failure means there is no
-:: usable PowerShell on this machine.
+:: inside the hardware probe or a download with something unreadable.
+:: Instead we require PowerShell to echo a marker back AND to resolve
+:: the .NET type the download fallback (:http_get) is built on. Either
+:: failure means there is no usable PowerShell on this machine.
 ::
 :: The path here is deliberately NOT quoted, and that is load-bearing.
 :: `for /f` hands its command to a second cmd, which strips one quote
@@ -124,7 +124,7 @@ if not errorlevel 1 set "HAVE_CURL=1"
 :: leaving the quotes off is safe; the bare-name fallback above needs
 :: none either.
 set "PS_PROBE="
-for /f "usebackq delims=" %%P in (`!T_PS! -NoProfile -Command "$null=[System.Net.HttpListener]; Write-Output 'GOBBONET_PS_OK'" 2^>nul`) do set "PS_PROBE=%%P"
+for /f "usebackq delims=" %%P in (`!T_PS! -NoProfile -Command "$null=[System.Net.WebClient]; Write-Output 'GOBBONET_PS_OK'" 2^>nul`) do set "PS_PROBE=%%P"
 if /i "!PS_PROBE!"=="GOBBONET_PS_OK" set "HAVE_PS=1"
 
 "!T_CERTUTIL!" -? >nul 2>&1
@@ -159,10 +159,10 @@ if not defined HAVE_PS (
     echo.
     echo  [*] No working PowerShell found.
     echo.
-    echo      GobboNet leans on it hard: the chat server itself
-    echo      ^(fileserver.ps1^), the hardware probe and the model
-    echo      identifier are all PowerShell. Those parts won't start
-    echo      without it.
+    echo      This window leans on it: the hardware probe, the model
+    echo      identifier and the password check are all PowerShell.
+    echo      Those parts won't run without it. gobbonet.exe itself
+    echo      does not need it.
     echo.
     echo      Worth knowing: Wine ships a powershell.exe that exists but
     echo      can't actually run anything, so finding the file is not the
@@ -174,6 +174,23 @@ if not defined HAVE_PS (
     echo.
     echo      Continuing anyway. If you've swapped those pieces out
     echo      yourself, this message is expected -- ignore it.
+    echo.
+)
+
+:: ---------------------------------------------------------------
+:: gobbonet.exe IS THE SERVER (1.8.0)
+::
+:: Up to 1.7.9 a missing gobbonet.exe, or GOBBONET_LEGACY_SERVER=1, sent
+:: this script down a second path: it started llama-server itself and
+:: served the chat from a PowerShell script. That path was deprecated in
+:: 1.7.9 and is gone. Checking here, before the password prompt and the
+:: downloads, means nobody answers every question only to be told at the
+:: end that there is nothing to hand the answers to.
+:: ---------------------------------------------------------------
+if not exist "%~dp0gobbonet.exe" goto :no_gobbonet_exe
+if defined GOBBONET_LEGACY_SERVER (
+    echo  [*] GOBBONET_LEGACY_SERVER is set, but the legacy PowerShell server was
+    echo      removed in GobboNet 1.8. The setting is ignored; gobbonet.exe runs.
     echo.
 )
 
@@ -289,28 +306,6 @@ set "CTX_SIZE=16384"
 set "GPU_LAYERS=-1"
 set "KV_CACHE_TYPE=q8_0"
 
-:: Log verbosity handed to llama-server as -lv. Not cosmetic: STEP 3b confirms
-:: GPU offload by reading the log, and llama.cpp files the lines it needs above
-:: the default threshold.
-::
-:: In common/log.cpp, common_get_verbosity maps GGML_LOG_LEVEL_INFO to
-:: LOG_LEVEL_TRACE, which is 4, while the default threshold is
-:: LOG_DEFAULT_LLAMA = LOG_LEVEL_INFO, which is 3. Anything the engine logs at
-:: INFO is therefore dropped unless the threshold is raised. A few lines still
-:: arrive because common emits them through its own LOG_INF at level 3, and
-:: upstream has been moving those across too -- from b9829 the ones STEP 3b
-:: looks for are gone, so every launch warns that GPU acceleration could not be
-:: confirmed on a machine where it is working perfectly well (issue #33).
-::
-:: 4 is trace, not debug. DEBUG is level 5 and stays filtered, so this asks for
-:: exactly the messages that used to arrive by default rather than opening the
-:: floodgates. Drop it to 3 for a quieter log, at the cost of the GPU check on
-:: any engine from b9829 onward.
-::
-:: -lv is accepted by both pinned engines and long predates them, so setting it
-:: does not narrow which build can be dropped in.
-set "LOG_VERBOSITY=4"
-
 :: ---------------------------------------------------------------
 :: SECURITY -- access password (hashed, set by you on first run)
 ::
@@ -322,15 +317,15 @@ set "LOG_VERBOSITY=4"
 :: one; we store only a salted SHA-256 HASH of it in ".gobbonet-secret"
 :: (kept next to this script and excluded from source control). The
 :: plaintext is never written to disk and never put in an environment
-:: variable -- only the salt+hash are passed to the file server, which
+:: variable -- only the salt+hash are passed to gobbonet.exe, which
 :: re-hashes what you type at login and compares.
 ::
 :: To change the password later: run  launch.bat reset-password
 :: (or just delete the .gobbonet-secret file and relaunch).
 ::
-:: llama-server is bound to 127.0.0.1 (loopback) below, so it is not
-:: reachable from the LAN at all -- only this machine's file server
-:: proxy can talk to it. That binding is the access control for the
+:: gobbonet.exe binds llama-server to 127.0.0.1 (loopback), so it is not
+:: reachable from the LAN at all -- only gobbonet.exe's own proxy can
+:: talk to it. That binding is the access control for the
 :: model; no separate API key is needed.
 :: ---------------------------------------------------------------
 set "SECRET_FILE=%~dp0.gobbonet-secret"
@@ -341,22 +336,8 @@ if /i "%~1"=="reset-password" (
     echo  [..] Password reset requested -- you'll set a new one now.
 )
 
-:: Record that a password was WRITTEN this run, not merely read.
-::
-:: Cleared first, deliberately. setlocal inherits this window's
-:: environment, so a value left behind by an earlier run in the same cmd
-:: session -- or set by hand -- would otherwise make a run that changed
-:: nothing look like a run that set a new password, and the adoption
-:: branch at :launch would refuse to reuse a perfectly good server.
-::
-:: This covers "launch.bat reset-password" too: that deletes the secret
-:: file above, so the call below fires and the flag is set. Which is
-:: correct -- reset-password is the clearest case of all for refusing to
-:: adopt a process still holding the old salt.
-set "SECRET_JUST_SET="
 if not exist "!SECRET_FILE!" (
     call :setup_password
-    set "SECRET_JUST_SET=1"
 )
 if not exist "!SECRET_FILE!" (
     echo  [ERROR] No password was set. Cannot start securely. Exiting.
@@ -364,16 +345,15 @@ if not exist "!SECRET_FILE!" (
     exit /b 1
 )
 
-:: Load the stored salt:hash for handoff to the file server.
+:: Load the stored salt:hash for handoff to gobbonet.exe.
 ::
 :: This is validated on EVERY run, not just the run that created it.
 :: Previously the first-run path checked what landed on disk and every
 :: later run read the file blind -- so if .gobbonet-secret was later
 :: emptied, truncated or locked by antivirus, ACCESS_SECRET came back
-:: empty, GEMMA_ACCESS_SECRET was empty, and fileserver.ps1 exited
-:: instantly inside a hidden window. From the outside that is
-:: indistinguishable from a port or firewall failure, and it sends
-:: everyone hunting the wrong thing.
+:: empty and the server that was handed it exited instantly inside a
+:: hidden window. From the outside that is indistinguishable from a port
+:: or firewall failure, and it sends everyone hunting the wrong thing.
 set "ACCESS_SECRET="
 for /f "usebackq delims=" %%S in ("!SECRET_FILE!") do if not defined ACCESS_SECRET set "ACCESS_SECRET=%%S"
 
@@ -390,8 +370,9 @@ if not defined ACCESS_SECRET (
     exit /b 1
 )
 
-:: Ask the consumer's own question -- fileserver.ps1 tests this exact
-:: pattern at startup, so a pass here cannot become a failure there.
+:: The shape gobbonet.exe accepts for a stored password (salt:hash, both
+:: hex; internal/auth/secret.go), checked here so a bad file is named
+:: before the questions start rather than at the login screen.
 if not defined HAVE_PS goto :secret_shape_ok
 set "GN_PWCHECK=!ACCESS_SECRET!"
 powershell -NoProfile -Command "if ($env:GN_PWCHECK -match '^([0-9a-fA-F]+):([0-9a-fA-F]+)$') { exit 0 } else { exit 1 }" >nul 2>&1
@@ -430,10 +411,8 @@ exit /b 1
 :: So the run also leaves .gobbonet-setup-pending until :launch: while it is
 :: there and the config still names no engine, launch runs this setup again
 :: instead of serving nothing (cmd/gobbonet/launch.go).
-if not defined GOBBONET_LEGACY_SERVER if exist "%~dp0gobbonet.exe" (
-    type nul > "%~dp0.gobbonet-setup-pending" 2>nul
-    "%~dp0gobbonet.exe" config set access_secret "!ACCESS_SECRET!" >nul 2>&1
-)
+type nul > "%~dp0.gobbonet-setup-pending" 2>nul
+"%~dp0gobbonet.exe" config set access_secret "!ACCESS_SECRET!" >nul 2>&1
 
 :: CTX_SIZE notes:
 ::   This is the default starting value. When you pick a model from
@@ -468,6 +447,10 @@ set "MODEL_MAX_CTX=131072"
 set "MODEL_THINK_FMT=none"
 
 :: MODEL_USE_JINJA / MODEL_CHAT_TEMPLATE - chat-template handling.
+::   Since 1.8.0 these describe the model in this window only: gobbonet.exe
+::   starts llama-server and chooses the same flags for itself
+::   (internal/supervisor). The notes below explain what it chooses.
+::
 ::   Default is --jinja (use the template baked into the GGUF). That works
 ::   for most modern GGUFs (Gemma 4 channels, gpt-oss Harmony, Mistral Small
 ::   v7-tekken, Qwen3 think mode, etc.).
@@ -492,8 +475,7 @@ set "MODEL_THINK_FMT=none"
 ::   set an unrecognized name, llama-server treats the literal text as the
 ::   template body and the model is fed that constant string instead of your
 ::   chat (it ends up babbling about "tekken"). Use "mistral-v7" for Mistral
-::   Small 24B / its finetunes -- the guard further down rewrites the -tekken
-::   form to it automatically, but don't rely on that; prefer the working name.
+::   Small 24B / its finetunes.
 ::
 ::   The :identify_model block below sets these per family.
 set "MODEL_USE_JINJA=1"
@@ -504,7 +486,6 @@ set "MODEL_CHAT_TEMPLATE_FILE="
 set "LLAMA_DIR=%~dp0llama-cpp"
 set "MODEL_DIR=%~dp0models"
 set "SERVER_EXE=!LLAMA_DIR!\llama-server.exe"
-set "LOG_FILE=%~dp0llama-server.log"
 
 :: llama.cpp release pin, read from engine.sha256 beside this script (issue #63).
 ::
@@ -539,37 +520,32 @@ if exist "%~dp0engine.sha256" (
     set "LLAMA_PIN_SHA256=60f3d31cc7c2fe62de8f34f8d75ffd06655b4de83bcc5aa6f08df56be42ebb91"
 )
 
-:: LAUNCH_SCRIPT holds the cmd line we hand to the OS to start llama-server.
-:: It lives in the project root (not %TEMP%) on purpose: fileserver.ps1
-:: needs to be able to overwrite it during a hot-swap, and the monitor
-:: loop here needs the same fixed location to restart after a crash.
-:: Either party may rewrite this file; whichever did it last wins, and
-:: the next restart picks up the new contents. Keep these paths in sync
-:: with fileserver.ps1's GEMMA_LAUNCH_SCRIPT / SwapLock / SwapStatus.
-set "LAUNCH_SCRIPT=%~dp0.llama-launch.cmd"
-set "SWAP_LOCK=%~dp0.swap-in-progress"
-set "SWAP_STATUS=%~dp0.swap-status.json"
-
 :: Model GGUF - set this to use a specific file.
 :: Leave empty to auto-detect the first .gguf in the models folder.
 set "MODEL_GGUF="
 
 :: ---------------------------------------------------------------
-:: EMBEDDING SERVER (RAG Retriever A) -- optional, CPU by default
+:: EMBEDDING MODEL (RAG Retriever A) -- optional
 ::
 :: A second llama-server instance with --embeddings powers semantic
 :: retrieval for the RAG. It is OPTIONAL: if the model cannot be
-:: fetched or the server will not start, chat works normally and the
-:: RAG falls back to tag-only retrieval (Retriever B). It is CPU-only
-:: by default (EMBED_GPU_LAYERS=0) so it never steals VRAM from the
-:: chat model -- embeddings are cheap on CPU. Set EMBED_GPU_LAYERS=99
-:: to opt into GPU offload.
+:: fetched, chat works normally and the RAG falls back to tag-only
+:: retrieval (Retriever B).
 ::
-:: To disable entirely: set EMBED_ENABLE=0.
+:: Since 1.8.0 this script only DOWNLOADS the model, into models\ as
+:: before. gobbonet.exe starts the embedding server, restarts it if it
+:: crashes, and stands it down with the chat model -- including when it
+:: is started from the Start menu, which never runs this script. How it
+:: runs is set in config.toml: embed_mode, embed_model, embed_gpu_layers
+:: (CPU by default, so it never takes VRAM from the chat model) and
+:: embed_ctx. See CONFIG > Advanced > Config File.
+::
+:: To skip the download and switch semantic search off: set
+:: EMBED_ENABLE=0. This writes embed_mode = "off" into config.toml; to
+:: switch it back on, set embed_mode = "managed" there.
 :: nomic-embed-text wants the search_document:/search_query: task
-:: prefixes (chat.html adds them) and mean pooling (--pooling mean,
-:: set in the launch line further down). A lighter alternative is
-:: bge-small-en; if you swap models, update EMBED_MODEL_GGUF + URL.
+:: prefixes (chat.html adds them). A lighter alternative is
+:: bge-small-en; point embed_model at it in config.toml.
 :: ---------------------------------------------------------------
 set "EMBED_ENABLE=1"
 if defined GEMMA_EMBED_PORT (
@@ -577,11 +553,9 @@ if defined GEMMA_EMBED_PORT (
 ) else (
     set "EMBED_PORT=11436"
 )
-:: SEARCH_PORT is gone. Web search is served by fileserver.ps1 on the web UI
-:: port now, so nothing binds 11435 and GEMMA_SEARCH_PORT no longer does
+:: SEARCH_PORT is gone. Web search is served by gobbonet.exe on the web UI
+:: port, so nothing binds 11435 and GEMMA_SEARCH_PORT no longer does
 :: anything. Setting it is harmless; it is simply ignored.
-set "EMBED_CTX=2048"
-set "EMBED_GPU_LAYERS=0"
 set "EMBED_MODEL_GGUF=nomic-embed-text-v1.5.Q8_0.gguf"
 set "EMBED_MODEL_URL=https://huggingface.co/nomic-ai/nomic-embed-text-v1.5-GGUF/resolve/main/nomic-embed-text-v1.5.Q8_0.gguf?download=true"
 :: Known-good SHA-256 of the embedding GGUF -- the sha256 HuggingFace
@@ -595,13 +569,26 @@ set "EMBED_MODEL_URL=https://huggingface.co/nomic-ai/nomic-embed-text-v1.5-GGUF/
 :: also why a WRONG pin is dangerous in a quiet way -- it would turn RAG
 :: off for every user with no obvious cause -- so the mismatch message
 :: below names that possibility explicitly.
+::
+:: gobbonet.exe checks the model against its own copy of this pin before
+:: every start (internal/config/embed.go); tests/test-embed-supervisor.py
+:: keeps the two equal.
 set "EMBED_PIN_SHA256=3e24342164b3d94991ba9692fdc0dd08e3fd7362e0aacc396a9a5c54a544c3b7"
-set "EMBED_LOG_FILE=%~dp0embed-server.log"
-set "EMBED_LAUNCH_SCRIPT=%~dp0.embed-launch.cmd"
 
 goto :main
 
 :: ===============================================================
+:no_gobbonet_exe
+echo.
+echo  [ERROR] gobbonet.exe is missing from:
+echo          %~dp0
+echo.
+echo      GobboNet runs everything through gobbonet.exe. Extract the full
+echo      GobboNet package into this folder again, or reinstall. If the
+echo      file disappears again, your antivirus has probably quarantined
+echo      it: restore it there and add an exclusion for this folder.
+goto :fatal
+
 :fatal
 echo.
 echo  [FATAL] See the error above. Press any key to close.
@@ -724,9 +711,9 @@ set "GOBBONET_SECRET_OUT="
 :: return empty. Every one of those used to surface as "No password was
 :: set. Cannot start securely." several lines later, with no hint why.
 ::
-:: The file must be one line of <hex>:<hex> -- that is exactly what
-:: fileserver.ps1 parses at startup, so if it does not match here it was
-:: never going to work there either.
+:: The file must be one line of <hex>:<hex> -- the form gobbonet.exe
+:: reads, so if it does not match here it was never going to work there
+:: either.
 set "PW_OK="
 set "PW_LINE="
 set "PW_TRIES=0"
@@ -783,7 +770,7 @@ if not defined PW_LINE (
     echo   an exclusion for this folder rules it out.
 ) else (
     echo   The file was read, but its contents are not in the form
-    echo   fileserver.ps1 can parse.
+    echo   gobbonet.exe can read.
 )
 echo.
 echo   The file is one line, no trailing newline, in this exact form:
@@ -820,15 +807,6 @@ echo       Powered by llama.cpp  //  Vulkan GPU
 echo       PRIVACY: FULLY OFFLINE - ZERO TELEMETRY
 echo  ====================================================
 echo.
-
-:: Clear any stale hot-swap state from a previous crash. These files
-:: coordinate between fileserver.ps1 (which initiates swaps) and the
-:: monitor loop below (which would otherwise try to "fix" the server
-:: going down mid-swap). If we crashed mid-swap last time the lock
-:: would still be sitting here, telling the monitor to do nothing
-:: forever -- so blow it away on a clean boot.
-if exist "!SWAP_LOCK!"   del /f /q "!SWAP_LOCK!"   >nul 2>&1
-if exist "!SWAP_STATUS!" del /f /q "!SWAP_STATUS!" >nul 2>&1
 
 :: ---------------------------------------------------------------
 :: STEP 1: CHECK FOR LLAMA-SERVER
@@ -1064,9 +1042,9 @@ goto :fatal
 :: IDENTIFY MODEL -- read the chat template baked into the GGUF
 ::
 :: Detection is driven by the embedded tokenizer.chat_template (ground
-:: truth), NOT the filename. identify-model.ps1 is the single source of
-:: truth, shared with the models-list.json builder further down, so the
-:: initial launch and the hot-swap dropdown can never disagree.
+:: truth), NOT the filename. identify-model.ps1 reads it here for the
+:: summary in this window; gobbonet.exe does the same detection in Go
+:: (internal/models) for the model it actually starts.
 ::
 :: Thinking-format names mirror chat.html's registry:
 ::   none      = no thinking (Llama, Mistral, Phi, Gemma 3 base)
@@ -1088,7 +1066,8 @@ set "MODEL_CHAT_TEMPLATE="
 set "MODEL_CHAT_TEMPLATE_FILE="
 
 :: identify-model.ps1 prints a block of `set` statements; we CALL them
-:: into the current environment so they feed the launch command below.
+:: into the current environment so they feed the summary below and
+:: active-model.json. gobbonet.exe picks the engine's template flags itself.
 set "ID_SCRIPT=%~dp0identify-model.ps1"
 set "ID_OUT=%TEMP%\gobbo_model_%RANDOM%.cmd"
 if exist "!ID_SCRIPT!" (
@@ -1366,6 +1345,7 @@ set "DL_SHA256="
 if "!MODEL_CHOICE!"=="1" (
     set "DL_REPO=bartowski/google_gemma-4-E4B-it-GGUF"
     set "DL_FILE=google_gemma-4-E4B-it-Q4_K_M.gguf"
+    set "DL_SHA256=d35a3aa7a6d47de237fd488bb6f7f3efd62908d828f85a63da0ee93acdbefe9f"
     set "MODEL_ID=gemma4-e4b"
     set "MODEL_DISPLAY=Gemma 4 E4B IT"
     set "MODEL_TAGS=jack-of-all-trades"
@@ -1379,6 +1359,7 @@ if "!MODEL_CHOICE!"=="1" (
 if "!MODEL_CHOICE!"=="2" (
     set "DL_REPO=bartowski/Llama-3.2-3B-Instruct-GGUF"
     set "DL_FILE=Llama-3.2-3B-Instruct-Q8_0.gguf"
+    set "DL_SHA256=b5607b5090a8280063fff2d706bb3408ca6542341b06aab39c3eca0a28575921"
     set "MODEL_ID=llama32-3b"
     set "MODEL_DISPLAY=Llama 3.2 3B Instruct"
     set "MODEL_TAGS=jack-of-all-trades"
@@ -1392,6 +1373,7 @@ if "!MODEL_CHOICE!"=="2" (
 if "!MODEL_CHOICE!"=="3" (
     set "DL_REPO=bartowski/Mistral-7B-Instruct-v0.3-GGUF"
     set "DL_FILE=Mistral-7B-Instruct-v0.3-Q6_K.gguf"
+    set "DL_SHA256=757d75df89821a94841f341f3270b0709d36891dd8fbc41dfd059d213b54c3f5"
     set "MODEL_ID=mistral-7b"
     set "MODEL_DISPLAY=Mistral 7B v0.3"
     set "MODEL_TAGS=roleplay"
@@ -1405,6 +1387,7 @@ if "!MODEL_CHOICE!"=="3" (
 if "!MODEL_CHOICE!"=="4" (
     set "DL_REPO=bartowski/Qwen_Qwen3.5-9B-GGUF"
     set "DL_FILE=Qwen_Qwen3.5-9B-Q4_K_M.gguf"
+    set "DL_SHA256=d784ce9eda1a5a7b51e8f705a9e6310844bf4f173654d115823c775fdea56d43"
     set "MODEL_ID=qwen35-9b"
     set "MODEL_DISPLAY=Qwen3.5 9B"
     set "MODEL_TAGS=coding"
@@ -1421,6 +1404,7 @@ if "!MODEL_CHOICE!"=="4" (
 if "!MODEL_CHOICE!"=="5" (
     set "DL_REPO=bartowski/google_gemma-4-26B-A4B-it-GGUF"
     set "DL_FILE=google_gemma-4-26B-A4B-it-Q4_K_S.gguf"
+    set "DL_SHA256=2700522f644211990d7082f480e7f564a05b4613e93e54d7e274be7e727e5916"
     set "MODEL_ID=gemma4-26b"
     set "MODEL_DISPLAY=Gemma 4 26B-A4B MoE"
     set "MODEL_TAGS=roleplay,jack-of-all-trades"
@@ -1434,6 +1418,7 @@ if "!MODEL_CHOICE!"=="5" (
 if "!MODEL_CHOICE!"=="6" (
     set "DL_REPO=bartowski/Qwen_Qwen3.6-35B-A3B-GGUF"
     set "DL_FILE=Qwen_Qwen3.6-35B-A3B-Q4_K_M.gguf"
+    set "DL_SHA256=b46fedd33e0bfb0cae308aa3c158d0a4b2c4a1d2185a1ed6f093cdaf39064772"
     set "MODEL_ID=qwen36-35b"
     set "MODEL_DISPLAY=Qwen3.6 35B-A3B MoE"
     set "MODEL_TAGS=coding,jack-of-all-trades"
@@ -1455,6 +1440,7 @@ if "!MODEL_CHOICE!"=="7" (
     rem it the URL 404s, which is what made this slot uninstallable.
     set "DL_REPO=bartowski/deepseek-ai_DeepSeek-R1-0528-Qwen3-8B-GGUF"
     set "DL_FILE=deepseek-ai_DeepSeek-R1-0528-Qwen3-8B-Q8_0.gguf"
+    set "DL_SHA256=9144694fd6a4347d9842b20797946754fb673871b92ba966e32e51b9057fa428"
     set "MODEL_ID=deepseek-r1-8b"
     set "MODEL_DISPLAY=DeepSeek-R1 8B"
     set "MODEL_TAGS=coding"
@@ -1470,6 +1456,7 @@ if "!MODEL_CHOICE!"=="8" (
     rem MXFP4 uppercase. Hugging Face paths are case-sensitive, so the
     rem lowercase spelling 404s.
     set "DL_FILE=gpt-oss-20b-MXFP4.gguf"
+    set "DL_SHA256=27cd6c432c7672cb812a92f611cf3ba7bbc35928262bb1e1253ff4ee6ae35901"
     set "MODEL_ID=gpt-oss-20b"
     set "MODEL_DISPLAY=gpt-oss 20B"
     set "MODEL_TAGS=coding,jack-of-all-trades"
@@ -1483,6 +1470,7 @@ if "!MODEL_CHOICE!"=="8" (
 if "!MODEL_CHOICE!"=="9" (
     set "DL_REPO=bartowski/c4ai-command-r7b-12-2024-GGUF"
     set "DL_FILE=c4ai-command-r7b-12-2024-Q6_K.gguf"
+    set "DL_SHA256=a19c0e9ceb5b29da7059acd4db343d445980e267caa34b3b37864b4f965b7126"
     set "MODEL_ID=command-r7b"
     set "MODEL_DISPLAY=Command R 7B (12-2024)"
     set "MODEL_TAGS=jack-of-all-trades"
@@ -1496,6 +1484,7 @@ if "!MODEL_CHOICE!"=="9" (
 if "!MODEL_CHOICE!"=="10" (
     set "DL_REPO=bartowski/c4ai-command-r-08-2024-GGUF"
     set "DL_FILE=c4ai-command-r-08-2024-Q4_K_S.gguf"
+    set "DL_SHA256=036ef6a9fd808b2fb09a3b1bca79da5ebc16e20ae5c27a714a2319b43ef89a17"
     set "MODEL_ID=command-r-35b"
     set "MODEL_DISPLAY=Command R 35B (08-2024)"
     set "MODEL_TAGS=roleplay"
@@ -1509,6 +1498,7 @@ if "!MODEL_CHOICE!"=="10" (
 if "!MODEL_CHOICE!"=="12" (
     set "DL_REPO=bartowski/Llama-3.2-1B-Instruct-GGUF"
     set "DL_FILE=Llama-3.2-1B-Instruct-Q8_0.gguf"
+    set "DL_SHA256=432f310a77f4650a88d0fd59ecdd7cebed8d684bafea53cbff0473542964f0c3"
     set "MODEL_ID=llama32-1b"
     set "MODEL_DISPLAY=Llama 3.2 1B Instruct"
     set "MODEL_TAGS=jack-of-all-trades"
@@ -1538,6 +1528,7 @@ if "!MODEL_CHOICE!"=="13" (
 if "!MODEL_CHOICE!"=="14" (
     set "DL_REPO=bartowski/phi-4-GGUF"
     set "DL_FILE=phi-4-Q4_K_M.gguf"
+    set "DL_SHA256=009aba717c09d4a35890c7d35eb59d54e1dba884c7c526e7197d9c13ab5911d9"
     set "MODEL_ID=phi4-14b"
     set "MODEL_DISPLAY=Phi-4 14B"
     set "MODEL_TAGS=coding,jack-of-all-trades"
@@ -1552,6 +1543,7 @@ if "!MODEL_CHOICE!"=="14" (
 if "!MODEL_CHOICE!"=="15" (
     set "DL_REPO=bartowski/mistralai_Mistral-Small-3.2-24B-Instruct-2506-GGUF"
     set "DL_FILE=mistralai_Mistral-Small-3.2-24B-Instruct-2506-Q4_K_M.gguf"
+    set "DL_SHA256=80f5bda68f156f12650ca03a0a2dbfae06a215ac41caa773b8631a479f82415e"
     set "MODEL_ID=mistral-small-32-24b"
     set "MODEL_DISPLAY=Mistral Small 3.2 24B (2506)"
     set "MODEL_TAGS=roleplay,jack-of-all-trades"
@@ -1581,6 +1573,7 @@ if "!MODEL_CHOICE!"=="16" (
 if "!MODEL_CHOICE!"=="17" (
     set "DL_REPO=unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF"
     set "DL_FILE=Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf"
+    set "DL_SHA256=fadc3e5f8d42bf7e894a785b05082e47daee4df26680389817e2093056f088ad"
     set "MODEL_ID=qwen3-coder-30b"
     set "MODEL_DISPLAY=Qwen3-Coder 30B-A3B MoE"
     set "MODEL_TAGS=coding"
@@ -1762,405 +1755,55 @@ echo.
 :: format) get populated. Skipping this was why a freshly downloaded model
 :: launched with empty settings and stalled on the first run, while a
 :: restart -- which DOES identify the model -- worked. :identify_model sets
-:: GGUF_BASENAME from GGUF_PATH and returns via :write_model_json.
+:: GGUF_BASENAME from GGUF_PATH and carries on at :write_model_json.
 goto :identify_model
 
 :: ---------------------------------------------------------------
-:: WRITE ACTIVE-MODEL.JSON
-:: Tells chat.html which model is loaded so it can update the UI.
-:: Served by the file server at /active-model.json
+:: MODEL IDENTIFIED
+::
+:: Up to 1.7.9 this point wrote active-model.json and models-list.json
+:: for the PowerShell server to hand to the page. gobbonet.exe answers
+:: both itself, from its own scan of models\ (internal/models/info.go),
+:: so nothing is written here any more.
 :: ---------------------------------------------------------------
 :write_model_json
-echo  [..] Writing active-model.json...
-(
-    echo {
-    echo   "id": "!MODEL_ID!",
-    echo   "name": "!MODEL_DISPLAY!",
-    echo   "family": "!MODEL_FAMILY!",
-    echo   "ggufFile": "!GGUF_BASENAME!",
-    echo   "maxCtx": !MODEL_MAX_CTX!,
-    echo   "defaultCtx": !CTX_SIZE!,
-    echo   "thinkingFormat": "!MODEL_THINK_FMT!"
-    echo }
-) > "%~dp0active-model.json"
-echo  [OK] active-model.json written ^(!MODEL_DISPLAY!^)
-echo.
 
 :: ---------------------------------------------------------------
-:: WRITE MODELS-LIST.JSON
+:: STEP 3: LLAMA-SERVER (gobbonet.exe starts it)
 ::
-:: chat.html's header dropdown is populated by fetching this file
-:: from the file server. It needs one record per .gguf in models\,
-:: with the same metadata launch.bat would have set if THAT file had
-:: been the active choice (family, thinking format, max context,
-:: useJinja, chatTemplate). When the user picks a different option,
-:: fileserver.ps1 reads the record back out of this file and uses it
-:: to build the swap command line -- so the per-model quirks (e.g.
-:: Mistral Nemo's MODEL_USE_JINJA=0 + mistral-v3-tekken template)
-:: ride along correctly without launch.bat being in the loop.
+:: Everything above this line asks and fetches: the password, the
+:: engine, the hardware probe, the model menu and the checksum of what
+:: it downloaded. That is the Windows experience and it stays in this
+:: window.
 ::
-:: identify-model.ps1 (the SAME script :identify_model used above) reads
-:: every GGUF in models\ and writes one record per file. Detection lives
-:: in exactly one place now, so the dropdown, the hot-swap launcher and
-:: the initial launch can never disagree about a model template/jinja mode.
-:: ---------------------------------------------------------------
-echo  [..] Writing models-list.json...
-set "MODELS_LIST_JSON=%~dp0models-list.json"
-set "ACTIVE_GGUF_NAME=!GGUF_BASENAME!"
-if exist "%~dp0identify-model.ps1" (
-    powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0identify-model.ps1" -ModelsDir "!MODEL_DIR!" -Active "!ACTIVE_GGUF_NAME!" -OutFile "!MODELS_LIST_JSON!"
-) else (
-    echo  [*] identify-model.ps1 not found; cannot build models-list.json.
-)
-
-if errorlevel 1 (
-    echo  [*] models-list.json write failed; header dropdown will be empty.
-    echo       Hot-swap requires this file -- check that PowerShell can run.
-)
-echo.
-
-:: ---------------------------------------------------------------
-:: STEP 3: START LLAMA-SERVER
+:: This script does not start the chat model. gobbonet.exe does, at
+:: STEP 5, with the choices collected above -- it has to own the process
+:: for idle stand-down, hot-swaps and restarts to work at all.
 :: ---------------------------------------------------------------
 :start_server
-
-:: ---------------------------------------------------------------
-:: WHO STARTS llama-server
-::
-:: Everything above this line is unchanged: this window asked for the
-:: password, fetched the engine, probed the hardware, offered the
-:: model menu and checked what it downloaded. That is the Windows
-:: experience and it stays exactly where it was.
-::
-:: What changes is who runs the server from here on. When
-:: gobbonet.exe is present it starts llama-server ITSELF, which is
-:: what makes the features that live in the server work at all --
-:: idle stand-down has to own the process to unload it. So this
-:: script skips its own llama-server start and hands over the
-:: choices it just collected at STEP 5.
-::
-:: Without gobbonet.exe, or with GOBBONET_LEGACY_SERVER=1, the old
-:: path below runs untouched.
-:: ---------------------------------------------------------------
-if defined GOBBONET_LEGACY_SERVER goto :start_server_legacy
-if not exist "%~dp0gobbonet.exe" goto :start_server_legacy
-echo  [OK] gobbonet.exe is here -- it will start llama-server itself.
+echo  [OK] gobbonet.exe will start llama-server itself.
 echo       Your model choice and settings are handed to it below, and
 echo       its output appears in THIS window.
 echo.
-goto :start_embed
-
-:start_server_legacy
-:: The managed path hands -1 (automatic placement) to gobbonet.exe, which
-:: capability-checks the engine and fits layers itself. llama-server started
-:: from here gets no such check, so this path keeps the 99-layer default
-:: it has always had -- including for fileserver.ps1 hot-swaps, which
-:: inherit GEMMA_GPU_LAYERS from this value.
-if "!GPU_LAYERS!"=="-1" (
-    echo  [*] Legacy launcher uses 99 GPU layers; automatic fitting needs gobbonet.exe.
-    set "GPU_LAYERS=99"
-)
-echo  [..] Checking for running llama-server...
-
-call :http_alive "http://127.0.0.1:!SERVER_PORT!/health"
-if not errorlevel 1 (
-    echo  [OK] llama-server already running on port !SERVER_PORT!
-    goto :verify_gpu
-)
-
-:: Log file for diagnostics - lives next to this script
-echo  [..] Starting llama-server...
-echo       Model:      !GGUF_PATH!
-echo       Port:       !SERVER_PORT!
-echo       Context:    !CTX_SIZE! tokens
-echo       KV Cache:   !KV_CACHE_TYPE! (quantized for max context)
-echo       GPU layers: !GPU_LAYERS!
-echo       Log file:   !LOG_FILE!
-echo.
-echo       NOTE: The GGUF file usually contains its own chat template.
-if not "!MODEL_CHAT_TEMPLATE_FILE!"=="" (
-    echo             Using project template file: !MODEL_CHAT_TEMPLATE_FILE!
-    echo             ^(--jinja on, embedded template overridden^)
-) else (
-    if "!MODEL_USE_JINJA!"=="1" (
-        if not "!MODEL_CHAT_TEMPLATE!"=="" (
-            echo             Using --jinja with override: !MODEL_CHAT_TEMPLATE!
-        ) else (
-            echo             Using --jinja to honor the embedded Jinja template.
-        )
-    ) else (
-        if not "!MODEL_CHAT_TEMPLATE!"=="" (
-            echo             Using llama-server built-in: !MODEL_CHAT_TEMPLATE!
-            echo             ^(--jinja disabled for this model family^)
-        ) else (
-            echo             --jinja disabled; falling back to fingerprint match.
-        )
-    )
-)
-echo.
-
-:: CHAT TEMPLATE HANDLING
-::
-:: --jinja tells llama-server to use the chat_template baked into the GGUF.
-:: That's the default and works for most modern models (Gemma 4 channels,
-:: gpt-oss Harmony, Mistral Small v7-tekken, Qwen3 think mode, etc.).
-::
-:: For a handful of families, --jinja produces garbage because the embedded
-:: template is incomplete or contains Jinja constructs that minja can't
-:: render. Mistral Nemo merges are the canonical example - see the comment
-:: at the top of this script. For those, :identify_model sets:
-::   MODEL_USE_JINJA=0
-::   MODEL_CHAT_TEMPLATE=<built-in template name, e.g. mistral-v3-tekken>
-:: which makes us pass --chat-template <name> instead of --jinja, using
-:: llama-server's C++ reference implementation of the template.
-::
-:: Important: we ONLY pass --chat-template when MODEL_CHAT_TEMPLATE names a
-:: built-in. Passing an arbitrary template name silently falls back to a
-:: wrong format and causes the model to echo system info instead of
-:: chatting - that's the footgun the old comment here was guarding against.
-
-:: --parallel 1 pins the server to a single slot. The default ('auto'
-:: -> 4 slots) splits the unified KV cache four ways and causes the
-:: server to bounce between slots via LRU/LCP selection. With two
-:: differently-shaped requests in flight (e.g. lore summarization +
-:: chat completion), slot churn invalidates cached prefixes on both
-:: sides, forcing a full prompt re-prefill (~27s on a 11K context).
-:: One slot = consistent cache reuse = the followup chat call after
-:: a summarization is fast instead of doing prefill from scratch.
-::
-:: --reasoning-format auto asks the server to route chain-of-thought
-:: into a separate reasoning_content channel. Without it, CoT arrives
-:: inline in 'content' and we rely entirely on the client-side parser.
-:: With it, the server does the split for us and the client parser
-:: becomes a safety net rather than the only line of defense. This is
-:: a no-op for non-reasoning models, so it's safe to always pass.
-
-:: Build optional flags conditionally so we don't accidentally emit
-:: '--jinja' and '--chat-template <name>' together (mixing the two is
-:: legal but defeats the point of routing around a broken Jinja template).
-::
-:: Precedence for the template source:
-::   1. MODEL_CHAT_TEMPLATE_FILE -- a real .jinja file shipped with the
-::      project (e.g. granite.jinja). REQUIRES --jinja to be honored as a
-::      template (without --jinja, --chat-template-file is ignored). This
-::      feeds our file INSTEAD of the GGUF's embedded template, so it both
-::      sidesteps a broken embedded template and formats correctly. Used
-::      for Granite, whose embedded template crashes the loader AND whose
-::      built-in NAME doesn't resolve on current builds (it gets treated as
-::      a literal template -- the model ends up fed just the word "granite").
-::   2. MODEL_CHAT_TEMPLATE -- a built-in template NAME (e.g.
-::      mistral-v3-tekken). Sent with an explicit --no-jinja; llama-server's
-::      C++ reference implementation renders it.
-::   3. Neither -- plain --jinja, honoring the GGUF's embedded template.
-set "JINJA_FLAG="
-set "CHAT_TEMPLATE_FLAG="
-
-:: 1.7.9: the "rambles about tekken" symptom was never an unknown name.
-:: mistral-v7-tekken is registered in every pinned build (b8941, b9294,
-:: b10456). The real cause: llama-server now runs with Jinja ON by default,
-:: and with Jinja on it reads --chat-template as Jinja SOURCE, so any built-in
-:: name renders as its own literal text. The old rewrite here to "mistral-v7"
-:: hid that and brought back issue #20's wrong spacing. It is gone; the fix is
-:: the explicit --no-jinja below, sent with every built-in name.
-
-:: Guard: if a template FILE was specified, make sure it is actually a Jinja
-:: template and not an empty file or a failed download (the classic "Entry not
-:: found" 404 body). A bad file fed via --chat-template-file renders to a
-:: constant string for every turn, exactly like the -tekken trap above. If it
-:: looks unusable, drop it and fall back to the embedded template via --jinja.
-if not "!MODEL_CHAT_TEMPLATE_FILE!"=="" (
-    set "TEMPLATE_FILE_PATH=%~dp0!MODEL_CHAT_TEMPLATE_FILE!"
-    if exist "!TEMPLATE_FILE_PATH!" (
-        findstr /c:"{%%" /c:"{{" "!TEMPLATE_FILE_PATH!" >nul 2>&1
-        if errorlevel 1 (
-            echo  [*] Template file has no Jinja markers ^(empty / failed download?^): !MODEL_CHAT_TEMPLATE_FILE!
-            echo       Ignoring it and using the embedded template instead.
-            set "MODEL_CHAT_TEMPLATE_FILE="
-        )
-    )
-)
-
-if not "!MODEL_CHAT_TEMPLATE_FILE!"=="" (
-    rem Resolve the filename against the project root (same dir as this
-    rem script / the server exe). A bare filename keeps models-list.json
-    rem portable; we expand to a full path only at launch time.
-    set "TEMPLATE_FILE_PATH=%~dp0!MODEL_CHAT_TEMPLATE_FILE!"
-    if exist "!TEMPLATE_FILE_PATH!" (
-        set "JINJA_FLAG=--jinja"
-        rem Note: value intentionally contains embedded quotes around the
-        rem path (it may contain spaces). Using the set VAR=value form
-        rem (no outer quotes) so the quotes belong to the value itself.
-        set CHAT_TEMPLATE_FLAG=--chat-template-file "!TEMPLATE_FILE_PATH!"
-    ) else (
-        echo  [*] Chat-template file not found: !TEMPLATE_FILE_PATH!
-        echo       Falling back to embedded template via --jinja.
-        set "JINJA_FLAG=--jinja"
-    )
-) else (
-    rem Jinja's state is always stated: leaving the flag out no longer turns
-    rem it off on current engines. A built-in NAME always goes with Jinja off,
-    rem or llama-server renders the name itself as the prompt.
-    if "!MODEL_USE_JINJA!"=="1" (set "JINJA_FLAG=--jinja") else (set "JINJA_FLAG=--no-jinja")
-    if not "!MODEL_CHAT_TEMPLATE!"=="" (
-        set "JINJA_FLAG=--no-jinja"
-        set "CHAT_TEMPLATE_FLAG=--chat-template !MODEL_CHAT_TEMPLATE!"
-    )
-)
-
-:: Write a small launcher script so we can reliably redirect output
-:: to a log file. (start + cmd /c + multi-line caret = quoting hell.)
-:: LAUNCH_SCRIPT lives in the project root (see CONFIG at the top of
-:: this script) instead of %TEMP% so fileserver.ps1 can rewrite it
-:: during a hot-swap and the next monitor-loop restart picks up the
-:: new model.
-> "!LAUNCH_SCRIPT!" (
-    echo @echo off
-    echo "!SERVER_EXE!" --model "!GGUF_PATH!" --port !SERVER_PORT! --host 127.0.0.1 --ctx-size !CTX_SIZE! --n-gpu-layers !GPU_LAYERS! --cache-type-k !KV_CACHE_TYPE! --cache-type-v !KV_CACHE_TYPE! --parallel 1 -lv !LOG_VERBOSITY! !JINJA_FLAG! !CHAT_TEMPLATE_FLAG! --reasoning-format auto ^> "!LOG_FILE!" 2^>^&1
-)
-
-start /min "llama-server" "!LAUNCH_SCRIPT!"
-
-echo  [..] Waiting for server to load model...
-echo       The first launch on a NEW PC can take several minutes while
-echo       your GPU compiles its shaders. Later starts are much faster.
-echo       (If the server process stops, we halt and show the log.)
-echo.
-
-set "RETRIES=0"
-:wait_loop
-set /a RETRIES+=1
-:: Fast-fail: if the server process has exited, it crashed during load
-:: (model too big for VRAM/RAM, or an incompatible GGUF). Don't make the
-:: user wait out the full timeout for a server that is already gone.
-:: (Skip the first few polls so we don't race the process appearing.)
-if !RETRIES! lss 3 goto :wait_poll
-tasklist /fi "imagename eq llama-server.exe" 2>nul | findstr /i "llama-server.exe" >nul
-if errorlevel 1 (
-    echo.
-    echo  [ERROR] llama-server stopped during startup -- it could not load the model.
-    echo         Most often the model is too large for your VRAM/RAM, or the GGUF
-    echo         is incompatible with this llama.cpp build. Try a smaller model.
-    echo.
-    echo  [LOG] Server log:  !LOG_FILE!
-    if exist "!LOG_FILE!" type "!LOG_FILE!"
-    goto :fatal
-)
-:wait_poll
-:: Patient cap for a genuine first load: 300 polls x 2s = ~10 minutes,
-:: enough for first-ever Vulkan shader compilation on a new machine.
-if !RETRIES! gtr 300 (
-    echo.
-    echo  [ERROR] llama-server did not become ready within ~10 minutes.
-    echo         The model may be too large for your hardware. Try a smaller model,
-    echo         or reduce GPU_LAYERS in this script.
-    echo.
-    echo  [LOG] Server log:  !LOG_FILE!
-    if exist "!LOG_FILE!" type "!LOG_FILE!"
-    goto :fatal
-)
-timeout /t 2 /nobreak >nul
-set /p "=." <nul
-
-call :http_health "http://127.0.0.1:!SERVER_PORT!/health"
-if errorlevel 1 goto :wait_loop
-
-echo.
-echo  [OK] llama-server is ready!
-echo.
 
 :: ---------------------------------------------------------------
-:: STEP 3b: VERIFY GPU OFFLOAD
-:: Check the log file for Vulkan/GPU info so the user knows
-:: whether inference is running on GPU or stuck on CPU.
-:: ---------------------------------------------------------------
-:verify_gpu
-set "GPU_CONFIRMED=0"
-
-:: Evidence that layers actually reached the GPU.
-::
-:: Deliberately several patterns rather than one. These strings are
-:: llama.cpp's internal log wording, not an interface it owes us, and it has
-:: already moved them once. "offloading" catches the per-layer lines that
-:: appear before the "offloaded N/N" summary, and ROCm/SYCL cover backends a
-:: hand-swapped engine might bring. Any single hit is enough.
-::
-:: This only reads what -lv asked for: at the default threshold the engine
-:: files these at a level it does not print. See LOG_VERBOSITY at the top.
-if exist "!LOG_FILE!" (
-    findstr /i /c:"offloaded" /c:"offloading" /c:"Vulkan0" /c:"CUDA0" /c:"Metal0" /c:"ROCm0" /c:"SYCL0" "!LOG_FILE!" >nul 2>&1
-    if not errorlevel 1 set "GPU_CONFIRMED=1"
-)
-
-if "!GPU_CONFIRMED!"=="1" (
-    echo  [OK] GPU acceleration detected
-) else (
-    echo.
-    echo  [*] WARNING: Could not confirm GPU acceleration.
-    echo       The model may be running on CPU, which is VERY slow.
-    echo.
-    echo       Possible causes:
-    echo         0. A newer llama.cpp than this script expects. It files the
-    echo            offload lines above the default log threshold, so they
-    echo            never reach the log even though the GPU is working.
-    echo            Raise LOG_VERBOSITY at the top of this script if
-    echo            -lv !LOG_VERBOSITY! was not enough.
-    echo         1. GPU drivers not installed or outdated
-    echo            AMD: amd.com/en/support
-    echo            NVIDIA: nvidia.com/Download/index.aspx
-    echo         2. Wrong llama.cpp build for your GPU
-    echo            Vulkan build supports AMD, Intel, and some NVIDIA.
-    echo            CUDA build is faster on NVIDIA if available.
-    echo         3. GPU doesn't have enough VRAM for this model
-    echo            Try a smaller model or lower GPU_LAYERS.
-    echo.
-    echo       Check the log file for details:
-    echo         !LOG_FILE!
-    echo.
-    if exist "!LOG_FILE!" (
-        echo  [LOG] GPU-related log lines:
-        findstr /i /c:"Vulkan" /c:"CUDA" /c:"GPU" /c:"backend" /c:"offload" /c:"error" /c:"fail" "!LOG_FILE!" 2>nul
-        echo.
-    )
-    call :prompt_yn "  Continue anyway?" CONTINUE_CPU
-    if /i "!CONTINUE_CPU!"=="N" goto :fatal
-)
-
-:: Check for VRAM pressure warnings
-if exist "!LOG_FILE!" (
-    findstr /i /c:"cannot meet free memory" /c:"failed to fit" "!LOG_FILE!" >nul 2>&1
-    if not errorlevel 1 (
-        echo.
-        echo  [*] VRAM WARNING: Model is tight on your GPU memory.
-        echo       If you get 500 errors during chat, try:
-        echo         - Reduce CTX_SIZE at the top of this script
-        echo         - Use a smaller model or quantization
-        echo       Current CTX_SIZE = !CTX_SIZE!
-    )
-)
-echo.
-
-:: ---------------------------------------------------------------
-:: STEP 3c: EMBEDDING SERVER (RAG Retriever A) -- optional
-:: Second llama-server (--embeddings) on loopback :EMBED_PORT, CPU by
-:: default. Degrade-safe: any failure just logs a note and continues
-:: to the search proxy; chat is never blocked. NOT part of the
-:: health-monitor / hot-swap loop -- if it dies, the RAG degrades to
-:: tag-only and the chat server is left untouched.
+:: STEP 3c: EMBEDDING MODEL (RAG Retriever A) -- optional
+:: Downloaded once into models\, where gobbonet.exe finds it and starts
+:: the embedding server itself (1.8.0). Degrade-safe: any failure just
+:: logs a note and continues to the hand-over; chat is never blocked.
 :: ---------------------------------------------------------------
 :start_embed
 if /i "!EMBED_ENABLE!"=="0" (
-    echo  [*] Embedding server disabled ^(EMBED_ENABLE=0^) -- RAG uses tag-only retrieval.
-    goto :start_proxy
-)
-
-call :http_alive "http://127.0.0.1:!EMBED_PORT!/health"
-if not errorlevel 1 (
-    echo  [OK] Embedding server already on :!EMBED_PORT!
+    echo  [*] Embedding model skipped ^(EMBED_ENABLE=0^) -- RAG uses tag-only retrieval.
+    "%~dp0gobbonet.exe" config set embed_mode off >nul 2>&1
     goto :start_proxy
 )
 
 set "EMBED_PATH=!MODEL_DIR!\!EMBED_MODEL_GGUF!"
-if exist "!EMBED_PATH!" goto :embed_spawn
+if exist "!EMBED_PATH!" (
+    echo  [OK] Embedding model is here -- gobbonet.exe starts the embedding server.
+    goto :start_proxy
+)
 
 set "EMBED_PART=!EMBED_PATH!.part"
 echo  [..] Downloading embedding model ^(one-time, ~146 MB^): !EMBED_MODEL_GGUF!
@@ -2206,42 +1849,14 @@ if errorlevel 1 (
     goto :start_proxy
 )
 
-:embed_spawn
-:: Write a small launcher (mirrors the chat server's .llama-launch.cmd).
-:: --pooling mean is required by nomic/e5-style embedders; skip it and
-:: retrieval quality quietly drops.
-:: --batch-size/--ubatch-size are raised to EMBED_CTX because non-causal
-:: embedders must fit the WHOLE input in one ubatch. llama-server's
-:: default ubatch of 512 silently rejected anything longer, which made
-:: long storybook chunks invisible to semantic retrieval (the request
-:: 400s, chat.html got null, and the doc just never matched). chat.html
-:: now also slices its inputs into sub-512-token segments, so either
-:: side alone keeps embeds working -- together they give full headroom.
-> "!EMBED_LAUNCH_SCRIPT!" (
-    echo @echo off
-    echo "!SERVER_EXE!" --model "!EMBED_PATH!" --port !EMBED_PORT! --host 127.0.0.1 --embeddings --pooling mean --ctx-size !EMBED_CTX! --batch-size !EMBED_CTX! --ubatch-size !EMBED_CTX! --n-gpu-layers !EMBED_GPU_LAYERS! ^> "!EMBED_LOG_FILE!" 2^>^&1
-)
-echo  [..] Starting embedding server on :!EMBED_PORT! ^(CPU^)...
-start /min "embed-server" "!EMBED_LAUNCH_SCRIPT!"
-
-set "ERETRIES=0"
-:embed_wait
-set /a ERETRIES+=1
-if !ERETRIES! gtr 40 (
-    echo  [*] Embedding server did not come up in time -- RAG semantic search OFF.
-    echo      Chat works normally; weighted-tag retrieval still functions.
-    goto :start_proxy
-)
-timeout /t 1 /nobreak >nul
-call :http_alive "http://127.0.0.1:!EMBED_PORT!/health"
-if errorlevel 1 goto :embed_wait
-echo  [OK] Embedding server ready on :!EMBED_PORT!
+:: Into place: gobbonet.exe starts the embedding server from it.
+echo  [OK] Embedding model ready -- gobbonet.exe starts the embedding server.
 echo.
 
 :: ---------------------------------------------------------------
 :: STEP 4: WEB SEARCH
 ::
-:: There is no separate process for this any more -- fileserver.ps1
+:: There is no separate process for this any more -- gobbonet.exe
 :: serves /search directly. The label below is kept because several
 :: earlier branches jump to it; it is now just the point where the
 :: embedding step finishes.
@@ -2258,12 +1873,12 @@ echo.
 :: file already carries two comments explaining why the same pattern was
 :: removed from the download paths. The search path had kept a worse version.
 ::
-:: fileserver.ps1 now serves /search itself (Handle-Search). Same destination,
-:: same forwarded header, one fewer process, one fewer port, and no encoded
-:: payload anywhere in the project.
+:: The server now answers /search itself. Same destination, same forwarded
+:: header, one fewer process, one fewer port, and no encoded payload anywhere
+:: in the project.
 
 :: ---------------------------------------------------------------
-:: STEP 5: FILE SERVER (serves chat.html over HTTP for LAN access)
+:: STEP 5: HAND OVER TO gobbonet.exe (it serves the chat, here and on the LAN)
 :: ---------------------------------------------------------------
 :launch
 
@@ -2281,8 +1896,10 @@ echo.
 :: (internal/auth/secret.go) and quietly upgrades to Argon2id on the
 :: first successful login.
 :: ---------------------------------------------------------------
-if defined GOBBONET_LEGACY_SERVER goto :launch_legacy
-if not exist "%~dp0gobbonet.exe" goto :launch_legacy
+:: Checked once more: an antivirus scan can quarantine the file between the
+:: first check and now, and "the system cannot find the file" is a worse
+:: message than the one :no_gobbonet_exe gives.
+if not exist "%~dp0gobbonet.exe" goto :no_gobbonet_exe
 
 echo  [..] Handing over to gobbonet.exe with the settings from this run...
 set "GN=%~dp0gobbonet.exe"
@@ -2301,11 +1918,34 @@ if exist "%~dp0.gobbonet-setup-pending" del /q "%~dp0.gobbonet-setup-pending" >n
 echo  [OK] Settings written.
 echo.
 
+:: 1.8.0 (PR #58): open_browser in config.toml decides whether the chat
+:: opens in a browser, here as on every other start -- "Setup or add a
+:: model" too. It is read into a file and back rather than through
+:: for /f, so the install path never goes through cmd's quote handling.
+:: gobbonet launch --no-browser sets GOBBONET_OPEN_BROWSER=false for this
+:: run, and that beats the file. Anything else, or nothing, means open.
+set "GN_OPEN=--open"
+set "GN_OPEN_VAL="
+set "GN_OPEN_FILE=%TEMP%\gobbonet_open_browser_%RANDOM%.txt"
+"!GN!" config get open_browser > "!GN_OPEN_FILE!" 2>nul
+if exist "!GN_OPEN_FILE!" set /p GN_OPEN_VAL=<"!GN_OPEN_FILE!"
+del /q "!GN_OPEN_FILE!" >nul 2>&1
+if /i "!GN_OPEN_VAL!"=="false" set "GN_OPEN="
+if /i "!GOBBONET_OPEN_BROWSER!"=="false" set "GN_OPEN="
+if not defined GN_OPEN echo  [..] Not opening a browser ^(open_browser = false^). The chat will be at http://127.0.0.1:!WEB_PORT!/
+
 :: --model, because STEP 2 just asked which one. Letting the server
 :: pick the first file it scans would make that menu decorative.
 set "GOBBONET_BANNER_SHOWN=1"
-"!GN!" --open --model "!GGUF_BASENAME!"
+"!GN!" !GN_OPEN! --model "!GGUF_BASENAME!"
+set "GN_RC=!errorlevel!"
 set "GOBBONET_BANNER_SHOWN="
+
+:: 3 is RESTART NOW in ABOUT (the update button, 1.8.0): the updated
+:: gobbonet.exe is already running in this window, and this script steps out
+:: of its way. `exit`, not `exit /b`, so the keep-open guard's prompt does not
+:: open underneath it either.
+if "!GN_RC!"=="3" exit 0
 
 :: gobbonet runs until Ctrl+C. Reaching here means it stopped; the
 :: keep-open guard holds the window so its last words stay readable.
@@ -2313,539 +1953,9 @@ echo.
 echo  [..] GobboNet has stopped.
 exit /b
 
-:launch_legacy
-
-:: 1.7.9: the PowerShell server is deprecated and goes in 1.8. It runs only
-:: when gobbonet.exe is missing or GOBBONET_LEGACY_SERVER is set.
-echo  [*] DEPRECATED: the legacy PowerShell server ^(fileserver.ps1^) is being used.
-echo      It will be removed in GobboNet 1.8. Re-extract the full GobboNet package
-echo      so gobbonet.exe is present, or clear GOBBONET_LEGACY_SERVER.
-echo.
-if not exist "%~dp0chat.html" (
-    echo  [ERROR] chat.html not found in: %~dp0
-    goto :fatal
-)
-
-:: Start a lightweight HTTP file server on the web UI port
-:: This lets your phone load chat.html over the network
-:: Lenient on purpose: / answers 401 when not logged in, which is our own
-:: auth layer and therefore proof the file server is up.
-:: Cleared for the same reason SECRET_JUST_SET is: setlocal inherits
-:: this window's environment.
-set "PW_PORT_CONFLICT="
-call :http_probe "http://127.0.0.1:!WEB_PORT!/"
-if errorlevel 1 goto :fs_port_free
-
-:: Something is already answering on the web port.
-::
-:: Adopting it is normally exactly right: it saves a spawn and avoids a
-:: duplicate server fighting over the same port.
-::
-:: It is wrong in precisely one case, and that case is the bug behind
-:: "I set a password in the installer and the browser will not accept
-:: it". The access secret reaches fileserver.ps1 by ENVIRONMENT VARIABLE
-:: at spawn time -- GEMMA_ACCESS_SECRET, set further down -- and
-:: fileserver.ps1 reads it once into $AccessSalt / $AccessHash at
-:: startup (fileserver.ps1:217-223). It never re-reads it. So a server
-:: still running from before the password change is still hashing
-:: against the OLD salt, and it will reject the new password no matter
-:: what is on disk.
-::
-:: That is why the obvious remedies all fail: deleting .gobbonet-secret,
-:: uninstalling, reinstalling and adding antivirus exceptions every one
-:: of them touches DISK, and none of them touches a running PROCESS.
-:: Only ending that process does -- which is why a reboot "fixes" it and
-:: why the whole thing feels supernatural.
-if not defined SECRET_JUST_SET (
-    echo  [OK] File server already running on :!WEB_PORT!
-    goto :get_lan_ip
-)
-
-:: A password was written this run AND something already holds the
-:: port. Flag THAT combination, not the password alone: on a first
-:: install the password is also new, but the port is free and the
-:: launch must proceed normally. Fall through to the holder check
-:: below, which names the PID.
-set "PW_PORT_CONFLICT=1"
-echo.
-echo  [*] You set a new password this run, but something is already
-echo      serving :!WEB_PORT!.
-echo.
-
-:fs_port_free
-
-:: ---------------------------------------------------------------
-:: Is the port already taken, and by what?
-::
-:: This is the check behind both "custom ports do not work" and "I rebooted
-:: and it fixed itself". Same cause: something was already bound to the
-:: port. Usually it is a fileserver.ps1 orphaned by a previous run --
-:: closing the launcher window does not stop it -- and a reboot clears it,
-:: which is why rebooting appears to fix a configuration that was never
-:: wrong.
-::
-:: HttpListener's message for this is unhelpful, so identify the holder here
-:: and name it. "PID 9312, powershell.exe" turns a mystery into one Task
-:: Manager click.
-:: ---------------------------------------------------------------
-set "PORT_HOLDER="
-if defined HAVE_PS (
-    set "GN_CHKPORT=!WEB_PORT!"
-    for /f "usebackq delims=" %%H in (`powershell -NoProfile -Command "try { $p=[int]$env:GN_CHKPORT; $c=Get-NetTCPConnection -LocalPort $p -State Listen -ErrorAction Stop | Select-Object -First 1; if ($c) { $pr=Get-Process -Id $c.OwningProcess -ErrorAction SilentlyContinue; ('PID {0} ({1})' -f $c.OwningProcess, $(if($pr){$pr.ProcessName}else{'unknown'})) } } catch { }"`) do set "PORT_HOLDER=%%H"
-    set "GN_CHKPORT="
-)
-:: The password case, handled before the generic "try anyway?" prompt
-:: below, because starting anyway genuinely cannot help here and
-:: offering it would be misleading.
-::
-:: A second fileserver.ps1 fails to bind a port that is already held and
-:: exits. The :fserver_wait probe loop further down would then get its
-:: 401 from the OLD server, report [OK] File server on :!WEB_PORT!, and
-:: hand the user straight back into the wrong-password loop -- with one
-:: extra dead PowerShell for company. Stopping here is the only outcome
-:: that leaves them able to act.
-::
-:: Gated on PW_PORT_CONFLICT, which is set ONLY when the probe found
-:: something already on the port. A first install also sets a new
-:: password, and must not be stopped here.
-::
-:: Not gated on PORT_HOLDER being resolved. The holder lookup needs
-:: PowerShell and Get-NetTCPConnection, and when either is unavailable
-:: PORT_HOLDER is empty -- but the probe already proved something is
-:: there, so the advice below stands with or without a PID.
-if defined PW_PORT_CONFLICT (
-    echo.
-    echo  [!] The password you just set will NOT work while that
-    echo      process is running.
-    echo.
-    if defined PORT_HOLDER (
-        echo      Holding :!WEB_PORT! right now: !PORT_HOLDER!
-        echo.
-    )
-    echo      A GobboNet file server loads the password ONCE, when it
-    echo      starts. The one already running loaded the previous
-    echo      password and cannot see the new one, so it will keep
-    echo      rejecting it. Reinstalling does not help -- that replaces
-    echo      files on disk, and this is a process in memory.
-    echo.
-    echo      Fix, in order of preference:
-    echo        1. End that PID in Task Manager, then run launch.bat again.
-    echo        2. Or reboot, which ends it for you.
-    echo        3. If it is NOT GobboNet, that program owns the port --
-    echo           pick another: put a number in .gobbonet-port, or run
-    echo               set GEMMA_LISTEN_PORT=9067
-    echo           in this window and launch again.
-    echo.
-    pause
-    goto :fatal
-)
-
-if defined PORT_HOLDER (
-    echo.
-    echo  [*] Port !WEB_PORT! is already in use by !PORT_HOLDER!.
-    echo.
-    echo      If that is powershell.exe it is almost certainly a GobboNet
-    echo      file server left over from a previous run -- closing the
-    echo      launcher window does not stop it. End that PID in Task
-    echo      Manager, or reboot, then start again.
-    echo.
-    echo      If it is something else, that program owns the port. Choose a
-    echo      different one: put a number in .gobbonet-port, or run
-    echo          set GEMMA_LISTEN_PORT=9067
-    echo      in this window and launch again.
-    echo.
-    call :prompt_yn "  Try to start anyway?" PORT_TRY_ANYWAY
-    if /i not "!PORT_TRY_ANYWAY!"=="Y" goto :fatal
-)
-
-echo  [..] Starting file server on :!WEB_PORT!...
-
-:: Use the standalone fileserver.ps1 (reverse proxy included).
-:: Environment variables pass config without batch escaping issues.
-if not exist "%~dp0fileserver.ps1" (
-    echo  [ERROR] fileserver.ps1 not found in: %~dp0
-    echo         This file should be alongside launch.bat and chat.html.
-    goto :fatal
-)
-set "GEMMA_ROOT=%~dp0."
-set "GEMMA_LLM_PORT=!SERVER_PORT!"
-set "GEMMA_EMBED_PORT=!EMBED_PORT!"
-:: Extra env vars the file server needs to spawn a replacement
-:: llama-server during a hot-swap. fileserver.ps1 reads these once at
-:: startup and uses them to build the new launch command when the
-:: /swap-model endpoint is hit. Keep them consistent with the values
-:: used by :start_server above.
-set "GEMMA_SERVER_EXE=!SERVER_EXE!"
-set "GEMMA_MODEL_DIR=!MODEL_DIR!"
-set "GEMMA_CTX_SIZE=!CTX_SIZE!"
-set "GEMMA_GPU_LAYERS=!GPU_LAYERS!"
-set "GEMMA_KV_CACHE_TYPE=!KV_CACHE_TYPE!"
-set "GEMMA_LOG_FILE=!LOG_FILE!"
-set "GEMMA_LAUNCH_SCRIPT=!LAUNCH_SCRIPT!"
-set "GEMMA_ACCESS_SECRET=!ACCESS_SECRET!"
-:: fileserver.ps1 resolves the port the same way, but pass it explicitly so
-:: the two can never disagree about which port this run is using.
-set "GEMMA_LISTEN_PORT=!WEB_PORT!"
-:: -WindowStyle Hidden removed, deliberately, for two reasons.
-::
-:: 1. A hidden-window PowerShell that binds a LAN-facing port is its own
-::    antivirus signal, on top of the encoded-payload one this release
-::    already removed. -File against a real .ps1 gets AMSI-scanned in
-::    plaintext and reads as what it is: a web server.
-::
-:: 2. It was actively harmful. fileserver.ps1 records that hidden state
-::    propagates to children created by Start-Process, so the cmd it spawns
-::    for a model hot-swap never allocated a console and llama-server could
-::    not write its log. That comment is still in fileserver.ps1; this is
-::    the cause it was working around.
-::
-:: start /min alone gives a minimised taskbar entry instead of nothing. That
-:: is one more button than before -- the honest cost of this change.
-start /min powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0fileserver.ps1"
-
-set "FRETRIES=0"
-:fserver_wait
-set /a FRETRIES+=1
-if !FRETRIES! gtr 8 (
-    echo.
-    echo  [*] File server did not come up on :!WEB_PORT!.
-    echo.
-    rem fileserver.ps1 has always printed the specific reason -- into a
-    rem window started with -WindowStyle Hidden, so nobody ever read it.
-    rem It now mirrors startup output to fileserver.log. Print that rather
-    rem than guessing; the old guess named one of four possible causes and
-    rem was usually the wrong one.
-    if exist "%~dp0fileserver.log" (
-        echo      --- fileserver.log -------------------------------------
-        type "%~dp0fileserver.log"
-        echo      -------------------------------------------------------
-    ) else (
-        echo      fileserver.log was never written, which means PowerShell
-        echo      did not run the script at all. Suspect AppLocker or WDAC
-        echo      script policy, or antivirus quarantine of fileserver.ps1.
-    )
-    echo.
-    rem The old text said 'Desktop chat still works normally.' It does not:
-    rem chat.html is SERVED by this file server and all model traffic is
-    rem proxied same-origin through /llm, so when this is down there is no
-    rem chat at all. A leftover from the pre-proxy design, and reporters
-    rem were right to call it out.
-    echo      Desktop chat is ALSO down -- chat.html is served by this
-    echo      server, so there is nothing for the browser to reach.
-    echo.
-    echo      Stopgap: open chat.html directly from this folder in your
-    echo      browser. It falls back to talking to llama-server on
-    echo      127.0.0.1:!SERVER_PORT! without the proxy, state sync or
-    echo      hot-swap, but it will chat.
-    goto :get_lan_ip
-)
-timeout /t 1 /nobreak >nul
-:: Lenient on purpose: / answers 401 when not logged in, which is our own
-:: auth layer and therefore proof the file server is up.
-call :http_probe "http://127.0.0.1:!WEB_PORT!/"
-if errorlevel 1 goto :fserver_wait
-echo  [OK] File server on :!WEB_PORT!
-
-:: Did it fall back to loopback? fileserver.ps1 retries 127.0.0.1 when the
-:: wildcard prefix is refused, so the chat works here but phones cannot
-:: reach it. That is the normal state after changing ports or upgrading
-:: from an install that only ever had a URL ACL for the old one -- and it
-:: is silent unless someone reads the log, which nobody does when the chat
-:: is working. Say it in the window instead.
-if exist "%~dp0fileserver.log" (
-    findstr /c:"THIS PC ONLY" "%~dp0fileserver.log" >nul 2>&1
-    if not errorlevel 1 (
-        echo.
-        echo  [*] The file server is bound to this PC only.
-        echo      Other devices on your network cannot reach it yet.
-        echo.
-        echo      Windows needs a URL reservation for port !WEB_PORT!, and
-        echo      there is not one. If you changed the port, or upgraded from
-        echo      a version that used 8080, the old reservation does not
-        echo      carry over.
-        echo.
-        echo      Fix: right-click setup-lan.bat and Run as administrator.
-        echo      It reads the same port this launcher is using.
-        echo.
-    )
-)
-
-:: ---------------------------------------------------------------
-:: STEP 6: GET LAN IP + LAUNCH BROWSER
-:: ---------------------------------------------------------------
-:get_lan_ip
-:: Detect the local network IP so we can show the phone URL
-for /f "tokens=2 delims=:" %%A in ('ipconfig ^| findstr /i "IPv4" ^| findstr /v "127.0.0.1"') do (
-    set "LAN_IP=%%A"
-    for /f "tokens=* delims= " %%B in ("!LAN_IP!") do set "LAN_IP=%%B"
-    goto :got_ip
-)
-set "LAN_IP=<could not detect>"
-:got_ip
-
-:: ---------------------------------------------------------------
-:: HOSTNAME / mDNS DETECTION
-::
-:: Windows 10 (1703+) and Windows 11 automatically advertise the
-:: PC's name on the local network via mDNS through the dnscache
-:: service. Modern Android (Nov 2021+) and iOS resolve <name>.local
-:: in browsers natively - no app or config needed on the phone.
-::
-:: The hostname URL is preferred because it's STABLE across IP
-:: rotations: the browser keys localStorage by origin, and the
-:: hostname stays the same even when the LAN IP changes. Users
-:: who bookmark <hostname>.local:<port> won't lose their chats when
-:: their PC's DHCP lease rolls over.
-:: ---------------------------------------------------------------
-set "LAN_HOST=!COMPUTERNAME!"
-:: Lowercase the hostname (mDNS is case-insensitive but bookmarks look better)
-:: Build a lowercase copy via a small PowerShell call. Falls back to the
-:: original case on any error.
-for /f "usebackq delims=" %%A in (`powershell -NoProfile -Command "$env:COMPUTERNAME.ToLower()" 2^>nul`) do set "LAN_HOST=%%A"
-if not defined LAN_HOST set "LAN_HOST=!COMPUTERNAME!"
-
-:: Quick reachability check - does this PC respond to its own .local name?
-:: If yes, mDNS is working and other devices on the LAN should reach us
-:: at <LAN_HOST>.local. If no, fall back to recommending the IP URL only.
-set "MDNS_OK=0"
-ping -n 1 -w 500 "!LAN_HOST!.local" >nul 2>&1
-if not errorlevel 1 set "MDNS_OK=1"
-
-:: ---------------------------------------------------------------
-:: IP CHANGE DETECTION
-::
-:: Each LAN IP is a separate browser origin. When this PC's IP
-:: rotates between launches, the phone's localStorage at the OLD IP
-:: stays put (and unreachable), and the phone bookmark needs to be
-:: updated. Without a warning, users think their chats vanished -
-:: they didn't, the new origin just has its own (empty) localStorage.
-::
-:: Also: chat.html now mirrors state to the file server's /state
-:: endpoint, so even if the user IS on a new IP, their data will be
-:: offered for restore on first load. This warning just gets ahead
-:: of the surprise.
-::
-:: NOTE: this whole problem disappears if users bookmark the .local
-:: hostname URL instead of the IP URL. The warning is here for users
-:: who haven't switched yet.
-:: ---------------------------------------------------------------
-set "LAST_IP_FILE=%~dp0.last-lan-ip"
-set "PREV_LAN_IP="
-if exist "!LAST_IP_FILE!" (
-    set /p "PREV_LAN_IP="<"!LAST_IP_FILE!"
-)
-:: Save current IP for next launch
-> "!LAST_IP_FILE!" echo !LAN_IP!
-
-set "IP_CHANGED=0"
-if defined PREV_LAN_IP (
-    if /i not "!PREV_LAN_IP!"=="!LAN_IP!" (
-        if not "!LAN_IP!"=="<could not detect>" (
-            set "IP_CHANGED=1"
-        )
-    )
-)
-
-echo.
-echo  ====================================================
-echo   Ready! Opening chat in your browser.
-echo.
-if "!IP_CHANGED!"=="1" (
-    echo   [*] LAN IP CHANGED since last launch!
-    echo       Previous: http://!PREV_LAN_IP!:!WEB_PORT!
-    echo       Current:  http://!LAN_IP!:!WEB_PORT!
-    echo.
-    if "!MDNS_OK!"=="1" (
-        echo       TIP: Bookmark http://!LAN_HOST!.local:!WEB_PORT!
-        echo       on your phone instead - that URL stays the
-        echo       same even when the IP rotates.
-    ) else (
-        echo       Update your phone's bookmark to the NEW URL.
-    )
-    echo       Your chats are safe - the chat app will offer
-    echo       to restore them automatically on first load.
-    echo.
-)
-echo   PRIVACY SUMMARY:
-echo     llama.cpp:    100%% offline, zero telemetry
-echo     Search proxy: only active when you click the
-echo                   search icon in chat
-echo     No accounts, no API keys, no tracking.
-echo.
-echo   LAN ACCESS (same Wi-Fi / network):
-echo     On this PC:    http://127.0.0.1:!WEB_PORT!
-if "!MDNS_OK!"=="1" (
-    echo     On your phone: http://!LAN_HOST!.local:!WEB_PORT!  [stable, recommended]
-    echo                or  http://!LAN_IP!:!WEB_PORT!          [also works]
-    echo.
-    echo     The .local URL is preferred - it survives IP changes,
-    echo     so your bookmarks never break. Works on Android 12+
-    echo     and any iPhone or iPad without extra setup.
-) else (
-    echo     On your phone: http://!LAN_IP!:!WEB_PORT!
-    echo.
-    echo     [*] mDNS not responding on this PC. The .local
-    echo         hostname can't be used until that's fixed -
-    echo         see TROUBLESHOOTING.md or run setup-lan.bat
-    echo         as Administrator to open UDP 5353.
-)
-echo.
-echo   If your phone can't connect, run setup-lan.bat
-echo   as Administrator once to open the firewall.
-echo.
-echo   ----------------------------------------------------
-echo   SECURITY NOTE: connections use plain HTTP, so traffic
-echo   on your network is NOT encrypted. The password keeps
-echo   strangers out, but anyone who has your Wi-Fi password
-echo   and is actively snooping could in theory read it.
-echo   This is fine for a home network you trust. Don't run
-echo   it on shared/public Wi-Fi, and don't reuse an
-echo   important password here. (See SECURITY.md for the
-echo   optional HTTPS setup if you want encryption.)
-echo   ----------------------------------------------------
-echo.
-echo   This window will minimize in 8 seconds.
-echo   It monitors server health in the background.
-echo.
-echo   To shut down: restore this window and press Ctrl+C,
-echo   or simply close it.
-echo  ====================================================
-echo.
-
-start "" "http://127.0.0.1:!WEB_PORT!"
-
-:: Pause longer on IP change so the user actually reads the warning
-if "!IP_CHANGED!"=="1" (
-    timeout /t 15 /nobreak >nul
-) else (
-    timeout /t 8 /nobreak >nul
-)
-call :minimize_window
-
-:: ---------------------------------------------------------------
-:: HEALTH MONITOR
-:: ---------------------------------------------------------------
-set "LLM_MISSES=0"
-
-:monitor_loop
-timeout /t 15 /nobreak >nul
-
-call :llm_state
-if "!LLM_STATE!"=="0" (
-    set "LLM_MISSES=0"
-    goto :monitor_loop
-)
-
-:: ---- llama-server is unreachable ----
-::
-:: Before assuming a crash, check whether fileserver.ps1 is doing a
-:: hot-swap right now. During a swap it intentionally kills the
-:: running llama-server, rewrites !LAUNCH_SCRIPT!, and spawns a new
-:: one -- if we race in with our own taskkill + restart we end up
-:: with two server processes fighting for the same port. The lock
-:: file is created BEFORE the kill and removed once the new server
-:: reports healthy (or the swap errors out), so it's the source of
-:: truth for "leave this alone".
-if exist "!SWAP_LOCK!" (
-    echo  [..] %TIME% -- llama-server transitioning ^(hot-swap in progress^), monitor standing down.
-    goto :monitor_loop
-)
-
-:: ---- Server is down - restart it ----
-:: State 1 -- the process is alive but /health is not saying "ok" yet.
-:: That is loading, or busy serving the generation the user is watching.
-:: Killing it here is how a working server got destroyed mid-conversation
-:: and then "never came back": the restart wait asked the same question and
-:: got the same answer, forever, while the browser carried on fine.
-::
-:: Give it eight cycles (~2 minutes) before treating it as genuinely wedged.
-if "!LLM_STATE!"=="1" (
-    set /a LLM_MISSES+=1
-    if !LLM_MISSES! lss 8 (
-        echo  [..] %TIME% -- llama-server running but not reporting ready ^(loading or busy^). Leaving it alone.
-        goto :monitor_loop
-    )
-    echo.
-    echo  [*] %TIME% - llama-server has been running without reporting ready for ~2 minutes.
-) else (
-    echo.
-    echo  [*] %TIME% - llama-server is no longer running.
-)
-
-call :restore_window
-set "LLM_MISSES=0"
-echo  [..] Stopping the chat model on port !SERVER_PORT!...
-:: Targeted by port, NOT by image name. The embedding server is the same
-:: llama-server.exe binary, so `taskkill /im llama-server.exe` killed it
-:: too -- silently taking RAG down on every restart and never bringing it
-:: back, because nothing here restarts the embedding server.
-set "GN_KILLPORT=!SERVER_PORT!"
-if defined HAVE_PS (
-    powershell -NoProfile -ExecutionPolicy Bypass -Command "$p=$env:GN_KILLPORT; Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'llama-server.exe' -and $_.CommandLine -like ('*--port ' + $p + '*') } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }" >nul 2>&1
-) else (
-    echo      [*] No PowerShell -- falling back to killing every llama-server.exe.
-    echo          This also stops the embedding server, so RAG will be off
-    echo          until you restart the launcher.
-    taskkill /f /im llama-server.exe >nul 2>&1
-)
-set "GN_KILLPORT="
-timeout /t 3 /nobreak >nul
-
-echo  [..] Restarting llama-server...
-start /min "llama-server" "!LAUNCH_SCRIPT!"
-
-echo  [..] Waiting for server to come back up...
-set "RRETRIES=0"
-:restart_wait
-set /a RRETRIES+=1
-if !RRETRIES! gtr 90 (
-    echo.
-    echo  [*] %TIME% - Server did not restart within 3 minutes.
-    echo       Check the log file for errors:
-    echo         !LOG_FILE!
-    echo  [LOG] Last 10 lines:
-    powershell -NoProfile -Command "Get-Content '!LOG_FILE!' -Tail 10" 2>nul
-    echo.
-    echo  [..] Will keep trying every 15 seconds...
-    goto :monitor_loop
-)
-timeout /t 2 /nobreak >nul
-set /p "=." <nul
-call :llm_state
-if "!LLM_STATE!"=="0" goto :restart_ok
-:: A server that is up and answering, but not saying "ok", is still a server.
-:: After ~40s of that we stop demanding the magic word and go back to
-:: monitoring -- the alternative is printing dots forever at someone whose
-:: chat is working perfectly well.
-if "!LLM_STATE!"=="1" if !RRETRIES! gtr 20 (
-    echo.
-    echo  [OK] %TIME% - llama-server is running and serving requests.
-    echo       ^(It is not reporting "ready" on /health, which usually just
-    echo        means it is busy with a generation. Resuming monitoring.^)
-    goto :restart_resume
-)
-goto :restart_wait
-
-:restart_ok
-echo.
-echo  [OK] %TIME% - llama-server restarted successfully!
-:restart_resume
-timeout /t 5 /nobreak >nul
-call :minimize_window
-set "LLM_MISSES=0"
-goto :monitor_loop
-
 :: ===============================================================
 :: UTILITY SUBROUTINES
 :: ===============================================================
-:minimize_window
-powershell -NoProfile -command "try{Add-Type -Name W -Namespace C -MemberDefinition '[DllImport(\"kernel32.dll\")]public static extern IntPtr GetConsoleWindow();[DllImport(\"user32.dll\")]public static extern bool ShowWindow(IntPtr h,int c);' -EA Stop}catch{};[C.W]::ShowWindow([C.W]::GetConsoleWindow(),6)" >nul 2>&1
-exit /b
-
-:restore_window
-powershell -NoProfile -command "try{Add-Type -Name W -Namespace C -MemberDefinition '[DllImport(\"kernel32.dll\")]public static extern IntPtr GetConsoleWindow();[DllImport(\"user32.dll\")]public static extern bool ShowWindow(IntPtr h,int c);' -EA Stop}catch{};[C.W]::ShowWindow([C.W]::GetConsoleWindow(),9)" >nul 2>&1
-exit /b
-
 :: ---------------------------------------------------------------
 :: HTTP HELPERS
 ::
@@ -2902,60 +2012,12 @@ if "!_OK!"=="0" if defined HAVE_PS (
 endlocal & set "HTTP_OK=%_OK%"
 goto :eof
 
-:: :http_probe <url>   -> errorlevel 0 if ANYTHING answered, including a
-::                        404, 401 or 503.
-::
-:: Deliberately lenient, and correct for exactly one caller: the file
-:: server, which answers / with 401 when you are not logged in. A 401 there
-:: IS proof of life -- it is our own auth layer talking.
-::
-:: For every other service use :http_alive. "Something answered" is not the
-:: same question as "my service is running", and conflating them is what
-:: made Ollama look like llama.cpp.
-:http_probe
-setlocal EnableDelayedExpansion
-set "_RC=1"
-if defined HAVE_CURL (
-    curl.exe -s -o nul "%~1" >nul 2>&1
-    if not errorlevel 1 set "_RC=0"
-) else (
-    set "GN_URL=%~1"
-    powershell -NoProfile -ExecutionPolicy Bypass -Command "try { $r=[Net.WebRequest]::Create($env:GN_URL); $r.Timeout=3000; $r.GetResponse().Close(); exit 0 } catch [Net.WebException] { if ($_.Exception.Response) { exit 0 } else { exit 1 } } catch { exit 1 }" >nul 2>&1
-    if not errorlevel 1 set "_RC=0"
-)
-endlocal & exit /b %_RC%
-
-:: :llm_state -> sets LLM_STATE:  0 = healthy
-::                                1 = process running, not answering "ok" yet
-::                                2 = no llama-server process at all
-::
-:: The monitor used to ask one question -- does /health say ok -- and treat
-:: anything else as death. That is too blunt. A server that is loading a
-:: model, or busy with the generation the user is watching, can fail that
-:: check while being perfectly alive, which is how the launcher ended up
-:: killing a working server and then waiting forever for it to "come back"
-:: while the user carried on chatting in the browser.
-::
-:: Distinguishing "not ready" from "not there" is the whole fix. Only state
-:: 2 justifies killing anything.
-:llm_state
-setlocal EnableDelayedExpansion
-set "_S=2"
-tasklist /fi "imagename eq llama-server.exe" 2>nul | findstr /i "llama-server.exe" >nul 2>&1
-if not errorlevel 1 set "_S=1"
-if "!_S!"=="1" (
-    call :http_health "http://127.0.0.1:!SERVER_PORT!/health"
-    if not errorlevel 1 set "_S=0"
-)
-endlocal & set "LLM_STATE=%_S%"
-goto :eof
-
 :: :http_alive <url>  -> errorlevel 0 if the URL returned HTTP 200 AND the
-::                       body contains "status". Use this to answer "is MY
-::                       service on this port", never :http_probe.
+::                       body contains "status". It answers "is MY service
+::                       on this port".
 ::
-:: Why this exists: :http_probe answers "did anything answer at all", which
-:: is the wrong question for a port that something else might own. curl -s
+:: Why it is strict: a lenient probe answers "did anything answer at all",
+:: which is the wrong question for a port that something else might own. curl -s
 :: exits 0 on a 404, and the PowerShell fallback treats any HTTP response as
 :: success, so a machine running Ollama on 11434 reported
 ::     [OK] llama-server already running on port 11434
@@ -2974,9 +2036,10 @@ goto :eof
 :: WHY THIS IS PIPED rather than staged through a scratch file in %TEMP%,
 :: which is what it used to do (issue #36 follow-up). The file version
 :: printed "The system cannot find the drive specified." once per call on
-:: some machines. :http_health below has always had this piped shape and
-:: has never printed it -- including one session where it polled five
-:: times in a row silently while all three :http_alive calls complained.
+:: some machines. :http_health, removed with the legacy server in 1.8.0,
+:: had always had this piped shape and never printed it -- including one
+:: session where it polled five times in a row silently while all three
+:: :http_alive calls complained.
 :: Running the old body statement by statement outside the launcher
 :: reproduced nothing at all, so rather than keep hunting for which line
 :: was talking, this drops the scratch file, the delete and %TEMP%
@@ -2998,20 +2061,6 @@ if defined HAVE_CURL (
 ) else (
     set "GN_URL=%~1"
     powershell -NoProfile -ExecutionPolicy Bypass -Command "try { $r=[Net.WebRequest]::Create($env:GN_URL); $r.Timeout=3000; $resp=$r.GetResponse(); if ([int]$resp.StatusCode -ne 200) { $resp.Close(); exit 1 }; $sr=New-Object IO.StreamReader($resp.GetResponseStream()); $b=$sr.ReadToEnd(); $sr.Close(); $resp.Close(); if ($b -match 'status') { exit 0 } else { exit 1 } } catch { exit 1 }" >nul 2>&1
-    if not errorlevel 1 set "_RC=0"
-)
-endlocal & exit /b %_RC%
-
-:: :http_health <url>  -> errorlevel 0 if the body contains "ok"
-:http_health
-setlocal EnableDelayedExpansion
-set "_RC=1"
-if defined HAVE_CURL (
-    curl.exe -s "%~1" 2>nul | findstr /i "ok" >nul 2>&1
-    if not errorlevel 1 set "_RC=0"
-) else (
-    set "GN_URL=%~1"
-    powershell -NoProfile -ExecutionPolicy Bypass -Command "try { $c=(New-Object Net.WebClient).DownloadString($env:GN_URL); if ($c -match 'ok') { exit 0 } else { exit 1 } } catch { exit 1 }" >nul 2>&1
     if not errorlevel 1 set "_RC=0"
 )
 endlocal & exit /b %_RC%

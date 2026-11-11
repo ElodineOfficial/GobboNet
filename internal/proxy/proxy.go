@@ -1,5 +1,5 @@
 // Package proxy is the streaming reverse proxy behind /llm/*, /search/* and
-// /embed/*. Port of Invoke-Proxy from fileserver.ps1.
+// /embed/*. Port of Invoke-Proxy from the 1.7 PowerShell server.
 //
 // The original hand-rolled hop-by-hop header stripping and chunked framing.
 // This uses httputil.ReverseProxy instead: the standard library already knows
@@ -187,7 +187,7 @@ func (p *Proxy) rewrite(r *httputil.ProxyRequest) {
 	r.Out.URL.RawQuery = r.In.URL.RawQuery
 	r.Out.Host = p.upstream.Host
 
-	// Our session cookie is for THIS server and nothing else. fileserver.ps1
+	// Our session cookie is for THIS server and nothing else. The 1.7 PowerShell server
 	// forwarded it, which was harmless when every upstream was a loopback port
 	// it had spawned itself. Here the upstream may be a remote host, so passing
 	// the cookie on would hand our access token to a third machine — and into

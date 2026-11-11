@@ -37,7 +37,7 @@ func processGroupID(cmd *exec.Cmd) int {
 //
 // Windows has no signal that reliably reaches a detached console-less child, so
 // this uses taskkill /T (tree) — the documented way to end a process and its
-// descendants, and what fileserver.ps1's Stop-Process approach was reaching for.
+// descendants, and what the 1.7 PowerShell server's Stop-Process approach was reaching for.
 //
 // taskkill exits non-zero when the PID is already gone, which is success here,
 // so an error is only reported when the tree is demonstrably still present.

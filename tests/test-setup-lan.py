@@ -75,7 +75,7 @@ def main():
     check("asks BEFORE falling back to .gobbonet-port", ask != -1 and ask < sidecar,
           "the sidecar does not exist yet on a first run; the binary always knows")
     check("still falls back to .gobbonet-port", sidecar != -1,
-          "the launch.bat/fileserver.ps1 path has no gobbonet.exe to ask")
+          "for when gobbonet.exe cannot answer: missing, quarantined, or an unreadable config")
     check("reads GOBBONET_LISTEN_PORT", "GOBBONET_LISTEN_PORT" in setup)
     check("still reads the deprecated GEMMA_LISTEN_PORT", "GEMMA_LISTEN_PORT" in setup)
     g_new = setup.find("GOBBONET_LISTEN_PORT")
@@ -175,15 +175,26 @@ def main():
           'set rule name="mDNS (UDP-In)" profile=%%F new enable=yes' in setup and
           not re.search(r'set rule name="mDNS \(UDP-In\)" new [^\n]*profile=', setup))
 
-    print("\nURL reservation (1.7.9, PR #7)")
-    check("  no reservation for Everyone any more", ";;;WD)" not in setup and ";;;WD^)" not in setup)
-    check("  granted to the console user's SID", "sddl=D:(A;;GX;;;!GN_ACL_SID!)" in setup and "Win32_ComputerSystem" in setup)
-    check("  the SID is validated before use", 'findstr /r "^S-1-[0-9][0-9-]*$"' in setup)
-    check("  who gets it is printed", "The reservation will belong to: !GN_ACL_USER!" in setup)
-    check("  no SID: skipped, never widened", "if not defined GN_ACL_SID endlocal & goto :eof" in setup)
-    acl = setup[setup.find(":add_urlacl"):]
-    check("  an existing reservation is replaced, not kept",
-          acl.find("http delete urlacl") != -1 and acl.find("http delete urlacl") < acl.find("http add urlacl"))
+    print("\nURL reservation (1.8.0: removed, never added)")
+    # Only the PowerShell server listened through HTTP.SYS. gobbonet.exe binds
+    # with Winsock, so a reservation does nothing for it -- and the ones older
+    # versions made (for Everyone, up to 1.7.8) let any account on the PC serve
+    # a page at the chat's address while GobboNet is stopped.
+    check("  setup-lan.bat adds no reservation", "http add urlacl" not in setup)
+    check("  no reservation for Everyone anywhere", ";;;WD)" not in setup and ";;;WD^)" not in setup)
+    check("  the SID lookup that only served the reservation is gone", "GN_ACL_SID" not in setup)
+    check("  the web port's old reservation is removed", "call :drop_urlacl !WEB_PORT!" in setup)
+    check("  and the old 11435 and 8080 ones",
+          "call :drop_urlacl 11435" in setup and 'call :drop_urlacl 8080' in setup)
+    drop = setup[setup.find("\n:drop_urlacl\n"):]
+    shows = [m.start() for m in re.finditer("http show urlacl", drop)]
+    delete = drop.find("http delete urlacl")
+    check("  a removal is checked afterwards, not assumed",
+          len(shows) >= 2 and shows[0] < delete < shows[1], (shows, delete))
+    check("  matched on the URL, never netsh's translated header",
+          'findstr /i ":!_PORT!/"' in drop)
+    check("  teardown-lan.bat still removes old reservations",
+          "call :drop_urlacl !WEB_PORT!" in teardown and "http delete urlacl" in teardown)
 
     print("\nquoting")
     check("  no pipe in any PowerShell call (escaping differs between for /f and a plain line)",

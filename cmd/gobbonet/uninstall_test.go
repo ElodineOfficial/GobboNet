@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ElodineOfficial/GobboNet/internal/config"
 )
 
 // The Windows uninstaller runs `gobbonet uninstall --yes --keep-models` so the
@@ -32,8 +34,14 @@ func TestUninstallRemovesEveryConversationFileAndKeepsModels(t *testing.T) {
 	}
 	gone := []string{
 		"state.json", "state.json.bak", "state.keyring", ".state.lock",
-		"llama-server.log", "setup-complete.json", ".jobs/job.json",
+		"llama-server.log", "embed-server.log", "setup-complete.json", ".jobs/job.json",
 		"state-phone.json", "state-phone.json.bak", "state-work.json",
+		"mcp-files.log",
+		// 1.8.0: the update button's download folder, and the Linux
+		// launcher's files, which are written to this default folder.
+		"update/GobboNet-1_8_1-update.zip.part", "launch.log", "engine-choice",
+		// The setup log a first run that never finished left (mktemp's shape).
+		"setup.a1B2c3",
 	}
 	for _, name := range gone {
 		write(filepath.Join(dataDir, name))
@@ -45,7 +53,8 @@ func TestUninstallRemovesEveryConversationFileAndKeepsModels(t *testing.T) {
 		t.Fatal(err)
 	}
 	write(filepath.Join(configDir, "startup-error.log"))
-	kept := []string{"models/model.gguf", "notes-the-user-made.txt"}
+	// setup.notes.txt is not mktemp's shape, so it is not the launcher's.
+	kept := []string{"models/model.gguf", "notes-the-user-made.txt", "setup.notes.txt"}
 	for _, name := range kept {
 		write(filepath.Join(dataDir, name))
 	}
@@ -54,7 +63,7 @@ func TestUninstallRemovesEveryConversationFileAndKeepsModels(t *testing.T) {
 		t.Fatalf("uninstall: %v", err)
 	}
 
-	for _, name := range append(gone, ".jobs") {
+	for _, name := range append(gone, ".jobs", "update") {
 		if _, err := os.Stat(filepath.Join(dataDir, name)); err == nil {
 			t.Errorf("left behind: %s", name)
 		}
@@ -254,7 +263,9 @@ func TestUninstallFindsTheConfigAndItsDataDir(t *testing.T) {
 	}
 	write(filepath.Join(chosen, "models", "model.gguf"), "x")
 	defaultData := filepath.Join(home, "data", "gobbonet")
-	write(filepath.Join(defaultData, "launch.log"), "x") // the Linux launcher's log stays in the default folder
+	write(filepath.Join(defaultData, "launch.log"), "x")              // the Linux launcher's log stays in the default folder
+	write(filepath.Join(defaultData, "engine-choice"), "build=cpu\n") // and its engine note (1.8.0)
+	write(filepath.Join(chosen, "update", "GobboNet-1_8_1-update.zip.part"), "x")
 
 	if err := cmdUninstall([]string{"--yes", "--keep-models"}); err != nil {
 		t.Fatalf("uninstall: %v", err)
@@ -272,6 +283,36 @@ func TestUninstallFindsTheConfigAndItsDataDir(t *testing.T) {
 	}
 	if exists(defaultData) {
 		t.Error("the launcher's log folder was left behind")
+	}
+	if exists(filepath.Join(chosen, "update")) {
+		t.Error("the update button's download folder was left behind")
+	}
+}
+
+// 1.8.0: an uninstall after the update button has been used, with nothing of
+// the user's own in the data folder, leaves no data folder. The button's
+// download folder stays once it is made, and with the Linux launcher's log
+// and engine-choice note in the default folder, that folder survived.
+func TestUninstallRemovesTheDataFolderAfterAnUpdate(t *testing.T) {
+	home, write := uninstallEnv(t)
+	write(filepath.Join(home, "config", "gobbonet", "config.toml"), "listen_port = 9066\n")
+	data := filepath.Join(home, "data", "gobbonet")
+	write(filepath.Join(data, "state.json"), "x")
+	write(filepath.Join(data, "launch.log"), "x")
+	write(filepath.Join(data, "engine-choice"), "build=vulkan\n")
+	if err := os.MkdirAll(filepath.Join(data, "update"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmdUninstall([]string{"--yes", "--keep-models"}); err != nil {
+		t.Fatalf("uninstall: %v", err)
+	}
+	if exists(data) {
+		entries, _ := os.ReadDir(data)
+		var left []string
+		for _, e := range entries {
+			left = append(left, e.Name())
+		}
+		t.Errorf("the data folder was left behind, holding %v", left)
 	}
 }
 
@@ -304,5 +345,152 @@ func TestUninstallStopsOnAnUnreadableConfig(t *testing.T) {
 	}
 	if !exists(filepath.Join(configDir, "config.toml")) || !exists(filepath.Join(home, "data", "gobbonet", "state.json")) {
 		t.Error("removed files after refusing")
+	}
+}
+
+// 1.8.0 (#68): the Linux setup can point model_dir at a collection the user
+// already had. "Delete the downloaded models" used to RemoveAll model_dir, which
+// for such a folder -- or a home folder -- takes everything in it. Now a chosen
+// folder only ever loses the .gguf files directly in it.
+func chosenModelsFixture(t *testing.T, modelDir func(home string) string) (home, models string) {
+	t.Helper()
+	home, write := uninstallEnv(t)
+	models = modelDir(home)
+	data := filepath.Join(home, "gobbonet-data")
+	write(filepath.Join(home, "config", "gobbonet", "config.toml"),
+		"data_dir = "+strconvQuote(data)+"\nmodel_dir = "+strconvQuote(models)+"\n")
+	write(filepath.Join(data, "state.json"), `{"threads":[]}`)
+	for _, f := range []string{"a.gguf", "B.GGUF", "c.gguf.part", "notes.txt", "other-app.bin", filepath.Join("sub", "d.gguf")} {
+		write(filepath.Join(models, f), "x")
+	}
+	write(filepath.Join(home, "elsewhere", "target.gguf"), "x")
+	if err := os.Symlink(filepath.Join(home, "elsewhere", "target.gguf"), filepath.Join(models, "linked.gguf")); err != nil {
+		t.Logf("no symlink here (%v); the link case is skipped", err)
+	}
+	return home, models
+}
+
+func strconvQuote(s string) string {
+	return `"` + strings.ReplaceAll(strings.ReplaceAll(s, `\`, `\\`), `"`, `\"`) + `"`
+}
+
+func TestUninstallTakesOnlyGGUFFilesFromAChosenModelsFolder(t *testing.T) {
+	home, models := chosenModelsFixture(t, func(h string) string { return filepath.Join(h, "My Models") })
+	if err := cmdUninstall([]string{"--yes", "--remove-models"}); err != nil {
+		t.Fatalf("uninstall: %v", err)
+	}
+	for _, gone := range []string{"a.gguf", "B.GGUF", "c.gguf.part", "linked.gguf"} {
+		if p := filepath.Join(models, gone); exists(p) {
+			t.Errorf("%s was left in the chosen folder", gone)
+		}
+	}
+	for _, kept := range []string{"notes.txt", "other-app.bin", filepath.Join("sub", "d.gguf")} {
+		if !exists(filepath.Join(models, kept)) {
+			t.Errorf("deleted %s: only .gguf files directly in a chosen folder may go", kept)
+		}
+	}
+	if !exists(filepath.Join(home, "elsewhere", "target.gguf")) {
+		t.Error("deleted the file a link pointed at, outside the models folder")
+	}
+}
+
+func TestUninstallKeepsAChosenModelsFolderUnlessAsked(t *testing.T) {
+	_, models := chosenModelsFixture(t, func(h string) string { return filepath.Join(h, "My Models") })
+	if err := cmdUninstall([]string{"--yes"}); err != nil {
+		t.Fatalf("uninstall: %v", err)
+	}
+	for _, kept := range []string{"a.gguf", "B.GGUF", "notes.txt", filepath.Join("sub", "d.gguf")} {
+		if !exists(filepath.Join(models, kept)) {
+			t.Errorf("--yes without --remove-models deleted %s", kept)
+		}
+	}
+}
+
+// The worst case the new setup makes possible: a home folder full of GGUFs
+// chosen as the models folder. Only those GGUFs can go.
+func TestUninstallNeverEmptiesAHomeFolderChosenForModels(t *testing.T) {
+	home, models := chosenModelsFixture(t, func(h string) string { return h })
+	if err := cmdUninstall([]string{"--yes", "--remove-models"}); err != nil {
+		t.Fatalf("uninstall: %v", err)
+	}
+	if !exists(filepath.Join(models, "notes.txt")) || !exists(filepath.Join(home, "elsewhere", "target.gguf")) || !exists(filepath.Join(home, "sub", "d.gguf")) {
+		t.Error("uninstall deleted files from the home folder that were not top-level .gguf models")
+	}
+	if exists(filepath.Join(home, "a.gguf")) {
+		t.Error("the top-level .gguf the user asked to remove is still there")
+	}
+}
+
+// Its own models folder still goes whole when asked, as before.
+func TestUninstallStillRemovesItsOwnModelsFolder(t *testing.T) {
+	home, write := uninstallEnv(t)
+	data := filepath.Join(home, "data", "gobbonet")
+	write(filepath.Join(data, "models", "a.gguf"), "x")
+	write(filepath.Join(data, "models", "a.jinja"), "x")
+	if err := cmdUninstall([]string{"--yes", "--remove-models"}); err != nil {
+		t.Fatalf("uninstall: %v", err)
+	}
+	if exists(filepath.Join(data, "models")) {
+		t.Error("GobboNet's own models folder was not removed with --remove-models")
+	}
+}
+
+func TestOwnModelsFolder(t *testing.T) {
+	for _, c := range []struct {
+		dir, data, cfg, exe string
+		want                bool
+	}{
+		{"/d/gobbonet/models", "/d/gobbonet", "/c/gobbonet", "/usr/lib/gobbonet", true},
+		{"/c/gobbonet/models", "/d/gobbonet", "/c/gobbonet", "", true},
+		{"/opt/GobboNet/models", "/d/gobbonet", "/c/gobbonet", "/opt/GobboNet", true},
+		{"/home/me/My Models", "/d/gobbonet", "/c/gobbonet", "/usr/lib/gobbonet", false},
+		{"/d/gobbonet", "/d/gobbonet", "/c/gobbonet", "", false},
+		{"/home/me", "/d/gobbonet", "/c/gobbonet", "", false},
+		{"/d/gobbonet/models/sub", "/d/gobbonet", "", "", false},
+	} {
+		if got := ownModelsFolder(c.dir, c.data, c.cfg, c.exe); got != c.want {
+			t.Errorf("ownModelsFolder(%q) = %v, want %v", c.dir, got, c.want)
+		}
+	}
+}
+
+// The Linux setup downloads GobboNet's embedding model into
+// <data_dir>/embeddings when asked (since 1.7). Up to 1.8.0 uninstall left it,
+// 146 MB, and the data folder with it. It goes with the data whatever is said
+// about models: it is part of GobboNet, not one of the user's models.
+func TestUninstallRemovesGobboNetsEmbeddingModel(t *testing.T) {
+	home, write := uninstallEnv(t)
+	write(filepath.Join(home, "config", "gobbonet", "config.toml"), "listen_port = 9066\n")
+	data := filepath.Join(home, "data", "gobbonet")
+	write(filepath.Join(data, "state.json"), "x")
+	write(filepath.Join(data, "embeddings", config.EmbedModelFile), "gguf")
+	write(filepath.Join(data, "embeddings", "nomic-embed-text-v1.5.Q8_0.part"), "half") // gobbonet-setup.py's name for it
+	if err := cmdUninstall([]string{"--yes", "--keep-models"}); err != nil {
+		t.Fatalf("uninstall: %v", err)
+	}
+	if exists(filepath.Join(data, "embeddings")) {
+		t.Error("GobboNet's embedding model was left behind")
+	}
+	if exists(data) {
+		t.Error("the data folder was left behind")
+	}
+}
+
+// Only GobboNet's own file goes: a data_dir the user chose may already hold a
+// folder called embeddings with files of their own in it.
+func TestUninstallKeepsTheUsersOwnFilesInEmbeddings(t *testing.T) {
+	home, write := uninstallEnv(t)
+	write(filepath.Join(home, "config", "gobbonet", "config.toml"), "listen_port = 9066\n")
+	data := filepath.Join(home, "data", "gobbonet")
+	write(filepath.Join(data, "embeddings", config.EmbedModelFile), "gguf")
+	write(filepath.Join(data, "embeddings", "my-own-vectors.bin"), "theirs")
+	if err := cmdUninstall([]string{"--yes", "--remove-models"}); err != nil {
+		t.Fatalf("uninstall: %v", err)
+	}
+	if exists(filepath.Join(data, "embeddings", config.EmbedModelFile)) {
+		t.Error("GobboNet's embedding model was left behind")
+	}
+	if !exists(filepath.Join(data, "embeddings", "my-own-vectors.bin")) {
+		t.Error("removed a file of the user's from the embeddings folder")
 	}
 }

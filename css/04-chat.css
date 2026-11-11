@@ -199,6 +199,20 @@
   flex-shrink: 0;
   cursor: default;
 }
+/* Auto Reroll marker (1.8.0) -- this reply was written again because it used
+   an off-limits word; "kept" when the last try still did. Same build as the
+   ✂ badge; cyan when it worked, magenta when a word stayed. */
+.gen-reroll-badge {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  color: var(--cyan-mid);
+  opacity: 0.75;
+  white-space: nowrap;
+  flex-shrink: 0;
+  cursor: default;
+}
+.gen-reroll-badge.gen-reroll-kept { color: var(--magenta); }
 .msg-avatar {
   width: calc(50px * var(--avatar-scale, 1));
   height: calc(50px * var(--avatar-scale, 1));

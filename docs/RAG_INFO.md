@@ -263,9 +263,12 @@ the threshold is your coarse one.
    shouldn't, lower its weight (`divine [1.0]` → `divine [0.5]`). The weighted-tag Pareto
    view (fire frequency × weight per tag) is where you spot which terms to re-tune.
 4. **Remember the reliable path.** If the embedding server is ever down, semantic
-   retrieval quietly switches off, but names, weighted tags and plain-text entries'
+   retrieval switches off, but names, weighted tags and plain-text entries'
    words keep working. Since 1.7.9, plain text does not depend on the
-   embedding model being available.
+   embedding model being available. Since 1.8.0 GobboNet runs the embedding
+   server itself and restarts it if it crashes, and it is no longer quiet about
+   it: CONFIG > Privacy Status and the line under the RAG Storybook say whether
+   matching by meaning is on, and why not (`embed_mode` in `config.toml`).
 
 ---
 

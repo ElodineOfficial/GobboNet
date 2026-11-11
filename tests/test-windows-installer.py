@@ -108,8 +108,11 @@ class TheFlow(unittest.TestCase):
 
     def test_the_console_picks_the_model_then_opens_the_browser(self):
         # launch.bat asks for the model, then hands over to gobbonet.exe with
-        # that choice and opens the browser. That is "CMD pops up".
-        self.assertIn('"!GN!" --open --model "!GGUF_BASENAME!"', LAUNCH)
+        # that choice and opens the browser. That is "CMD pops up". Since 1.8.0
+        # the --open is held in GN_OPEN, which open_browser = false in
+        # config.toml empties (tests/test-launch-open-browser.py).
+        self.assertIn('"!GN!" !GN_OPEN! --model "!GGUF_BASENAME!"', LAUNCH)
+        self.assertIn('set "GN_OPEN=--open"', LAUNCH)
         self.assertIn('-File "%~dp0hardware-probe.ps1"', LAUNCH)
 
 
@@ -130,6 +133,23 @@ class WhatItInstalls(unittest.TestCase):
     def test_everything_installed_at_the_root_is_uninstalled(self):
         for name in installed_root_files():
             self.assertIn('Delete "$INSTDIR\\%s"' % name, UNINSTALL, '%s is installed but never removed' % name)
+
+    def test_what_the_update_button_leaves_is_uninstalled(self):
+        # 1.8.0: the update button swaps gobbonet.exe for the new program and
+        # keeps the one it replaced beside it until the next start; a check
+        # that never finished leaves the new program under its own name. The
+        # names are internal/update/install.go's (swap, NewPathFor).
+        install_go = (ROOT / 'internal' / 'update' / 'install.go').read_text(encoding='utf-8')
+        self.assertIn('old := target + ".old"', install_go)
+        self.assertIn('"%s.old-%d", target', install_go)
+        self.assertIn('+ ".new" + filepath.Ext(target)', install_go)
+        for line in ('Delete "$INSTDIR\\gobbonet.exe.old"', 'Delete "$INSTDIR\\gobbonet.exe.old-*"',
+                     'Delete "$INSTDIR\\gobbonet.new.exe"'):
+            self.assertIn(line, UNINSTALL, 'the uninstaller should remove what an update leaves: ' + line)
+            # After stop-gobbonet.bat, which stops a copy still running from
+            # the renamed file, and before the folder is removed.
+            self.assertLess(UNINSTALL.index('stop-gobbonet.bat" /quiet'), UNINSTALL.index(line))
+            self.assertLess(UNINSTALL.index(line), UNINSTALL.index('RMDir "$INSTDIR"'))
 
     def test_the_go_server_is_installed_and_stopped_first(self):
         self.assertIn('File "${APPSRC}\\gobbonet.exe"', INSTALL)

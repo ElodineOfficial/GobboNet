@@ -108,7 +108,7 @@
 .mod-error { font-size: 11px; color: var(--red, #ff4466); margin-top: 2px; }
 .mod-tools { display: flex; gap: 6px; }
 .mods-note-error { color: var(--red, #ff4466) !important; }
-#ext-modal.mods-readonly .ext-entry input,
+#ext-modal.mods-readonly .ext-entry input:not(.ext-entry-enabled),
 #ext-modal.mods-readonly .ext-entry textarea { opacity: 0.6; pointer-events: none; }
 @media (max-width: 700px) {
   .mod-row { grid-template-columns: auto 1fr; }

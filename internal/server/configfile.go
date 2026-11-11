@@ -168,6 +168,11 @@ func (s *Server) handleConfigFile(w http.ResponseWriter, r *http.Request) {
 		what = "put back the previous version"
 	}
 	log.Printf("[config] %s from CONFIG: %s (changed: %s); applies on the next start", s.cfg.Path, what, strings.Join(res.Changed, ", "))
+	// MCP servers are the exception: one switched off here stops now.
+	if s.applyMCPEdit(res) {
+		out["applied_now"] = []string{"mcp_server", "mcp_call_timeout_seconds"}
+		log.Printf("[config] the MCP server settings apply now")
+	}
 	httpx.WriteJSON(w, r, http.StatusOK, out)
 }
 

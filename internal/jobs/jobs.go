@@ -25,7 +25,7 @@
 // splitting, tool-call unwrapping and reasoning-field routing all stay in
 // chat.html where they already live. This package stays a dumb, faithful pipe.
 //
-// The wire contract belongs to fileserver.ps1, which defined it, and the stock
+// The wire contract belongs to the 1.7 PowerShell server, which defined it, and the stock
 // frontend is written against that. Poll chunks go out base64-encoded as
 // chunk_b64; job ids stay 32 lowercase hex; the status vocabulary is unchanged.
 // Deviating buys nothing and costs compatibility with the one client there is.
@@ -185,7 +185,7 @@ func (j *Job) snapshot() (status, errMsg string, size int, startedAt, updatedAt 
 }
 
 // read returns the raw byte window [from, from+max) of the spool, exactly as
-// fileserver.ps1's poll branch does.
+// the 1.7 PowerShell server's poll branch did.
 //
 // No character alignment, deliberately. An earlier revision nudged the window
 // to a rune boundary because the chunk went out as a JSON string and Go turns
@@ -881,7 +881,7 @@ func (m *Manager) handlePoll(w http.ResponseWriter, r *http.Request, job *Job) {
 
 	if len(chunk) > 0 {
 		// base64, and NOT a plain JSON string, because chunk_b64 is the wire
-		// contract fileserver.ps1 defined and the stock frontend is the only
+		// contract the 1.7 PowerShell server defined and the stock frontend is the only
 		// client: js/03-generation.js reads j.chunk_b64 and nothing else.
 		//
 		// Sending UTF-8 directly does save the 33% base64 overhead, and an

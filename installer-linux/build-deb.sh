@@ -2,9 +2,9 @@
 #
 # Build gobbonet.deb.
 #
-#   ./build-deb.sh                        use dist/ from ../scripts/build-release.sh
-#   GOBBONET_BIN=/path/to/gobbonet ./build-deb.sh
-#   SKIP_ENGINE_FETCH=1 ./build-deb.sh    use whatever is already in vendor/
+#   bash ./build-deb.sh                      use dist/ from scripts/build-release.sh
+#   GOBBONET_BIN=/path/to/gobbonet bash ./build-deb.sh
+#   SKIP_ENGINE_FETCH=1 bash ./build-deb.sh  use whatever is already in vendor/
 #
 # Everything this script checks is checked BEFORE dpkg-deb runs. A package that
 # builds but ships without a working engine is worse than one that failed to
@@ -112,14 +112,14 @@ fi
 # having to remember. A packaging-only rebuild of the SAME upstream version
 # passes the next number explicitly:
 #
-#   DEB_REVISION=2 ./build-deb.sh
+#   DEB_REVISION=2 bash ./build-deb.sh
 DEB_REVISION="${DEB_REVISION:-1}"
 case "$DEB_REVISION" in
     ''|*[!0-9]*) fail "DEB_REVISION must be a positive integer, got '$DEB_REVISION'" ;;
 esac
 
 # ---------------------------------------------------------------------------
-# The Go binary. Built by ../scripts/build-release.sh, which refuses a dirty tree and
+# The Go binary. Built by scripts/build-release.sh, which refuses a dirty tree and
 # stamps the version with the commit sha.
 # ---------------------------------------------------------------------------
 GOBBONET_BIN="${GOBBONET_BIN:-${GOBBONET_RUNTIME_DIR:+$GOBBONET_RUNTIME_DIR/gobbonet}}"
@@ -128,7 +128,7 @@ if [ -z "$GOBBONET_BIN" ]; then
 fi
 [ -n "$GOBBONET_BIN" ] && [ -f "$GOBBONET_BIN" ] || fail \
 "no linux/amd64 gobbonet binary found.
-       Run ../scripts/build-release.sh first, or set GOBBONET_BIN=/path/to/gobbonet
+       Run bash ../scripts/build-release.sh first, or set GOBBONET_BIN=/path/to/gobbonet
        (build-release.sh archives its output, so you may need to unpack
         dist/<version>/gobbonet-<version>-linux-amd64.tar.gz)"
 
@@ -370,7 +370,7 @@ if [ -f icon/gobbonet-256.png ]; then
     install -m 0644 icon/gobbonet-256.png \
         "$STAGE/usr/share/icons/hicolor/256x256/apps/gobbonet.png"
 else
-    fail "icon/gobbonet-256.png is missing — run ./make-icon.sh"
+    fail "icon/gobbonet-256.png is missing — it is part of the repository: git checkout -- installer-linux/icon/gobbonet-256.png"
 fi
 
 install -m 0644 "$ROOT/LICENSE" "$STAGE/usr/share/doc/gobbonet/copyright"

@@ -4,7 +4,8 @@
 chat state across devices, and — when you ask it to — starts and supervises
 llama.cpp itself.
 
-It replaces the runtime half of `fileserver.ps1` + `launch.bat`'s monitor loop.
+It replaced the runtime half of the 1.7 PowerShell server (`fileserver.ps1`)
+and `launch.bat`'s monitor loop; 1.8.0 removed both, so it is the only server.
 The setup half (hardware probe, model download) still lives in the launcher
 scripts.
 
@@ -15,12 +16,12 @@ go build -o gobbonet ./cmd/gobbonet
 ```
 
 Go 1.25+. No cgo, no runtime dependencies — the result is one file, with the
-chat page compiled in (run `./scripts/stage-web.sh` first; see below).
+chat page compiled in (run `bash ./scripts/stage-web.sh` first; see below).
 
 ## Releases
 
 ```sh
-./scripts/build-release.sh
+bash ./scripts/build-release.sh
 ```
 
 Cross-compiles for linux/amd64, linux/arm64, windows/amd64, darwin/arm64 and
@@ -93,6 +94,12 @@ It is never discovered — see `internal/server/webroot.go`.
 ./gobbonet config set llm_url http://192.168.1.100:8080
 ./gobbonet config keys           # list every settable key
 ```
+
+A list key takes words (`config set allowed_hosts "a.example b.example"`) or,
+for items with spaces in them, a JSON array:
+`config set model_dirs '["/home/me/My Models", "/mnt/models"]'`.
+`config get --json KEY` prints a value as JSON, so a script reading a list
+gets the items back whole (1.8.0).
 
 Every subcommand takes `--config PATH`, `config get`/`set` included — a launcher
 that pins an explicit config must be able to read and write that same file
@@ -259,7 +266,7 @@ setter that disagreed about which file they meant would be worse than either
 layer alone.
 
 A `perf.toml` that is unparseable or out of range **stops the server**, naming
-the file and the value. `fileserver.ps1` warns and falls back to its auto
+the file and the value. The PowerShell server warned and fell back to its auto
 values; this does not. The file is only ever written by code that validates
 first, so a bad one means a hand edit — and running settings the user did not
 choose, having noticed they did not choose them, is the quiet substitution this
@@ -397,7 +404,30 @@ A model load has its own bound, `model_load_timeout_seconds` (default 180, 10 to
 7200): start-up, a swap, the reload after idle stand-down, and a restart from
 CONFIG > Performance. `/swap-status` reports it as `load_timeout_seconds`, and the
 page waits that long plus 30 seconds, so the server's reason always arrives
-before the page gives up. Both messages name the setting. The between-chunks watchdog
+before the page gives up. Both messages name the setting.
+
+`/swap-model` takes `{"file": "<name>.gguf"}`, a plain file name in the models
+folder. Since 1.8.0 it also takes `"auto": true` for a switch the page makes on
+its own (model links, #52): that one is refused with 409 and `"busy": true`
+while any reply is being written for any device, and `/swap-status` carries
+`"busy": true` for as long as that lasts. A swap picked from the model menu
+has no `auto` and is not held.
+
+When a load fails, `/swap-status` also carries `cause` (`engine_too_old`,
+`incomplete_file`, `out_of_memory`, `file_not_found`), `advice` (one plain
+sentence for it) and `log` (`llama-server.log`, the file's name only), beside
+the engine's own line in `message` (1.8.0, #67). The cause is read from the
+whole of the engine's output, so llama.cpp's sign-off line no longer hides it;
+see `internal/supervisor/cause.go`. Every engine run starts a marked section of
+`llama-server.log`, which `gobbonet doctor` reads for LAST MODEL LOAD.
+
+`/model-check` is CHECK FILE: POST `{"index": N, "source": "catalogue"}`
+re-hashes an installed catalogue model against the catalogue's pinned SHA-256
+with no network; `"source": "huggingface"` first asks huggingface.co for the
+checksum it records, and is sent only from the "Ask HuggingFace" button. GET
+polls. `/gpu` lists the devices the engine itself sees (`llama-server
+--list-devices`, run once and cached) and saves `gpu_device` and
+`gpu_prime_offload` (1.8.0, #72). The between-chunks watchdog
 bounds the **gap**, never the total, so a long healthy generation is never cut off.
 
 **There is no fixed total cap** (since 1.7.7). There used to be one — thirty
@@ -444,7 +474,7 @@ kill a generation the user is reading.
 
 Poll responses carry the SSE bytes base64-encoded in `chunk_b64`, and the window
 is a plain byte range with no character alignment — byte-for-byte the framing
-`fileserver.ps1` defined. `js/03-generation.js` reads `chunk_b64` and nothing
+the PowerShell server defined. `js/03-generation.js` reads `chunk_b64` and nothing
 else, and it does not error on an unrecognised payload: it leaves the offset
 where it was and polls a healthy job forever with nothing to show. Character
 splits are the client's problem to solve and it already does, decoding with
@@ -492,7 +522,8 @@ list when BROWSE is clicked; see docs/ENDORSED-MODS.md.)
 Upstream ran a relay for this until 1.6.0: a hidden-window PowerShell started
 from `launch.bat` with `-EncodedCommand` and 4,656 characters of base64, binding
 11435 and forwarding authenticated traffic to that same host. 1.6.0 deleted it
-(`Handle-Search` in `fileserver.ps1` makes the call directly) because the shape
+(`Handle-Search` in the PowerShell server made the call directly, and this
+server does the same) because the shape
 — encoded PowerShell, hidden window, listener, external relay — is what
 antivirus scores as command-and-control largely regardless of payload.
 
@@ -589,6 +620,102 @@ reparented to init, disappears from any walk of our own descendants, and keeps
 holding GPU memory. The next model then fails to allocate a backend buffer, and
 nothing in that error points at the real cause.
 
+### The embedding server (1.8.0)
+
+The embedding server that lets the RAG Storybook match by meaning is a second
+managed child, through the same code (`internal/supervisor/managed.go`): its own
+process group, the Windows kill-on-close job, the same sweep on stop and the
+same restart loop, one second doubling to two minutes. Up to 1.7.9 a launcher
+script started it and nothing watched it.
+
+`embed_mode` in `config.toml` says who runs it. `managed` (the default) starts
+it after the chat model has loaded, on `embed_url`'s port, with
+`EmbedArgs` (`--embeddings --pooling mean`, batch sizes raised to `embed_ctx`,
+`embed_gpu_layers` on the GPU, 0 by default). It needs a local engine and an
+`embed_url` on this PC; otherwise it acts as `external`, which uses `embed_url`
+as it is. `off` starts nothing.
+
+GobboNet's own model, `nomic-embed-text-v1.5.Q8_0.gguf`, is looked for in
+`<data_dir>/embeddings` (where the Linux setup wizard puts it) and then in
+`model_dir` (where `launch.bat` downloads it), and is checked against its SHA-256
+pin before every start. A missing or mismatched model is reported, never retried.
+A server GobboNet did not start, already answering on the port, is used as it is
+and looked at again every 30 seconds; GobboNet starts its own when it goes.
+Idle stand-down stops it after the chat model and brings it back after the chat
+model has reloaded, and an `/embed` request wakes it on its own.
+
+`/health-fileserver` reports it as `embed` (`running`, `starting`, `restarting`,
+`standby`, `failed`, `external` or `off`) with `embed_detail` saying why; Privacy
+Status and the line under the RAG Storybook show it, and `gobbonet doctor` has
+an EMBEDDING SERVER section. Its log is `embed-server.log` beside
+`llama-server.log`.
+
+### MCP servers (1.8.0)
+
+An MCP server is a program that offers tools a character can call. Each is an
+`[[mcp_server]]` table in `config.toml` (`name`, `command`, `args`, `env`,
+`enabled`, which starts `false`), added in CONFIG > Advanced > MCP Servers or by
+hand. `internal/mcp` runs them, through the third managed-process path in the
+supervisor package (`supervisor.Child`): its own process group, the Windows
+kill-on-close job, the same sweep on stop. A server is started by direct exec
+of its argument list, never through a shell, the first time a tool list or a
+call needs it, and runs until it is switched off, changed, or GobboNet stops.
+One that exits is started again on the next use, after a wait that doubles from
+one second to two minutes. Its error output goes to `mcp-<name>.log` beside
+`llama-server.log`, with GobboNet's own lines about it; neither ever holds a
+tool's arguments or results.
+
+It inherits only `PATH`, `HOME` and their like (the official MCP SDKs' list,
+plus the locale and temp-folder names, and the proxy and certificate settings
+`npx -y` and `uvx` need to fetch a server behind a company proxy) from
+GobboNet's environment, never a `GOBBONET_` variable, plus its own `env`
+table.
+
+The client is small and our own: newline-delimited JSON-RPC 2.0 over stdio,
+`initialize`, `tools/list` (paged) and `tools/call`, answering the server's
+`ping`. Resources, prompts, sampling, roots, elicitation and the remote HTTP
+transport are not offered. It asks for MCP `2025-06-18` and accepts
+`2024-11-05` to `2025-11-25`. A call that runs past `mcp_call_timeout_seconds`
+(30 by default) is cancelled at the server. Text results reach the character as
+they are; an image, audio or a binary file is named in a line saying it was not
+shown. A result is cut to the chat page's `toolResultMaxChars`.
+
+| Route | Who | What |
+|---|---|---|
+| `GET /mcp/tools[?refresh=1]` | any signed-in device, GobboNet's own page | every server, its state and, once running, its tools; starts enabled servers |
+| `POST /mcp/call` | any signed-in device, with an `Origin` that is this server | `{server, tool, arguments, max_chars}`: the server must be on and list the tool |
+| `GET /mcp/servers` | any signed-in device, GobboNet's own page | the tables and their state; `env` values only to this PC |
+| `POST /mcp/servers` | `disable`: any signed-in device; `save`, `enable`, `remove`: a browser on this PC | `{action, name, server}`; the file is checked as `Load` reads it before it is written |
+
+"This PC" is the Config File editor's test (`fromThisPC`): loopback, a
+loopback `Host`, no forwarding headers. A browser sends `Origin` on every POST,
+so requiring it on `/mcp/call` keeps every other website from making a call,
+even on an install with no password. Saving MCP settings in the Config File
+editor applies them at once, as the box does. `gobbonet doctor` has an MCP
+SERVERS section.
+
+On Windows, a command such as `npx` is `npx.cmd`, which Windows runs through
+`cmd.exe` however it is started. Name `node.exe` and the script instead where
+a server's arguments hold `&`, `|`, `%` or quotes.
+
+### The update button (1.8.0)
+
+ABOUT > CHECK FOR UPDATES. `internal/update` reads GitHub's release list
+(`update_releases_url`), only when the button is pressed. It takes a release
+only from its signed `gobbonet-update.json`, ed25519 with a key built into the
+program, and installs only a later release, or a later build of the same one
+(its serial, `version.Stamp`, is the commit time). The download's and the
+program's SHA-256 are pinned; the new program is run once before it is moved
+into place, and the old one waits beside it as `.old` until the next start.
+docs/UPDATES.md has the maintainer's side.
+
+| Route | Who | What |
+|---|---|---|
+| `GET /update/check` | any signed-in device, GobboNet's own page | `status` (`available`, `current`, `manual`, `unverifiable`, `off`, `dev`, `error`), the offer, and whether this install can take it; asks GitHub, at most once a minute |
+| `GET /update/status` | any signed-in device, GobboNet's own page | the install: `state`, `done`, `total`, `error`, `can_restart` |
+| `POST /update/install` | a browser on this PC, with an `Origin` that is this server | `{build, serial}`: the offer the person confirmed; anything else is 409 |
+| `POST /update/restart` | the same | after an install: stop, and start the new program (exec on Linux; a new process in the same console on Windows) |
+
 ## Tests
 
 ```sh
@@ -615,7 +742,10 @@ internal/state/        /state and /state/info
 internal/models/       GGUF parsing, classifier, model metadata endpoints
 internal/jobs/         in-memory detached generation
 internal/proxy/        streaming reverse proxy
-internal/supervisor/   llama-server lifecycle, hot-swap, rollback
+internal/supervisor/   llama-server lifecycle, hot-swap, rollback; the
+                       embedding server; supervisor.Child for MCP servers
+internal/mcp/          MCP servers: the stdio client, their programs, tool calls
+internal/update/       the update button: the release list, signatures, the swap
 internal/static/       static file serving (over an fs.FS)
 internal/httpx/        response helpers, CORS, MIME
 internal/webui/        the frontend, compiled in; assets/ is staged, not committed

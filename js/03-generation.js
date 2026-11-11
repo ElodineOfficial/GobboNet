@@ -1,6 +1,6 @@
 /* @gobbonet-split js/03-generation.js
    Moved verbatim from chat.html lines 2020-3134.
-   detached jobs, token limit, timer, thinking formats, tool-call unwrap
+   detached jobs, token limit, auto reroll, timer, thinking formats, tool-call unwrap
    Load order is a contract -- see REFACTOR-PLAN.md before reordering.
    @end-split-header */
 /* ================================================================
@@ -28,8 +28,8 @@
    that tells boot which jobs to pick back up — see
    resumePendingJobs() near the boot block.
 
-   Fallbacks: on file:// there is no file server, and an older
-   fileserver.ps1 has no /llm/jobs route. Both cases 404/fail the
+   Fallbacks: on file:// there is no server, and the 1.7 PowerShell
+   server (removed in 1.8.0) has no /llm/jobs route. Both cases 404/fail the
    probe and we drop to the legacy direct-stream path automatically.
 ================================================================ */
 const JOBS_URL = LLAMA_URL + '/jobs';
@@ -165,7 +165,12 @@ function maybeApplySmartLimit(msg) {
   if (msg.smartCapped) return true;
   // Per-card. A code assistant and a DM want very different reply lengths,
   // which one global number could never serve.
-  const sl = resolveSmartLimit(typeof getActiveCard === 'function' ? getActiveCard() : null);
+  // The card writing THIS message: in a group chat that is the member whose
+  // turn it is, not the active character (1.8.0). An unstamped message, and
+  // a card since deleted, fall back to the active one as before.
+  const _writer = (msg.cardId && typeof state !== 'undefined' && Array.isArray(state.characterCards))
+    ? state.characterCards.find(c => c.id === msg.cardId) : null;
+  const sl = resolveSmartLimit(_writer || (typeof getActiveCard === 'function' ? getActiveCard() : null));
   if (!sl.enabled) return false;
   const text = msg.content || '';
   if (!text) return false;
@@ -201,6 +206,289 @@ function maybeApplySmartLimit(msg) {
   console.log(`[smart-limit] ~${est} est tokens ≥ cap ${limit} — cut at sentence end (${msg.content.length} chars), stopping generation`);
   stopGeneration({ keepChain: true });   // capping one reply shouldn't kill an auto-continue chain
   return true;
+}
+
+/* ================================================================
+   AUTO REROLL (1.8.0) -- a reply that uses an off-limits word is
+   written again.
+
+   Banned Phrases (logit bias, js/06-state-sync.js) pushes words down
+   before they are written, but it works on the model's tokens: a word
+   in another form, split into other pieces, or under a mild bias still
+   gets through. This reads the reply itself. As it streams, the
+   visible reply -- msg.content, never msg.reasoning -- is checked
+   against the card's list; on a hit the reply is stopped there and
+   generated again from scratch, up to card.autoRerollMax more times.
+   The last try is never stopped early: if it still uses a word, it is
+   kept whole and marked (msg.autoReroll.kept), so a turn always ends
+   with a complete reply.
+
+   What is never rerolled: a reply that has run a tool (a reroll would
+   run the tool again), one the user stopped or the runtime limit cut,
+   one that failed, and one finished while the page was closed (that is
+   folded in by finalizeJobIntoThread, which does not regenerate).
+
+   Matching: one word or phrase per line, any case, whole words only --
+   "nod" does not catch "nodded" -- with `*` at either end standing for
+   any run of letters ("chuckl*" catches chuckle, chuckled, chuckling).
+   A line that starts or ends with punctuation is matched as written,
+   so an em dash on its own line catches every em dash. Straight and
+   curly apostrophes match each other. While streaming, a word at the
+   very end of the text so far is not counted until the next character
+   shows it ended there: "chuckle" may yet become "chuckles".
+================================================================ */
+const AUTO_REROLL_MAX_DEFAULT = 3;
+const AUTO_REROLL_MAX_CEIL = 10;
+const AUTO_REROLL_MAX_ENTRIES = 200;
+const AUTO_REROLL_MAX_ENTRY_CHARS = 100;
+// What a card's list may hold, as text: 200 entries of 100 characters.
+const AUTO_REROLL_MAX_WORDS_CHARS = 20200;
+
+const _AR_WORD = /[\p{L}\p{N}_]/u;
+
+/** The card's off-limits list as matchers: [{ entry, re, wordEnd }]. */
+function autoRerollMatchers(raw) {
+  const out = [];
+  const seen = new Set();
+  for (let line of String(raw || '').split(/\r?\n/)) {
+    line = line.trim().replace(/\s+/g, ' ');
+    if (!line || line.length > AUTO_REROLL_MAX_ENTRY_CHARS) continue;
+    const key = line.toLowerCase();
+    if (seen.has(key)) continue;
+    const body = line.replace(/^\*+|\*+$/g, '');
+    if (!body) continue;   // "*" alone would match everything
+    seen.add(key);
+    const starStart = /^\*/.test(line), starEnd = /\*$/.test(line);
+    let src = '';
+    for (const ch of body) {
+      if (ch === ' ') src += '\\s+';
+      else if (ch === "'" || ch === '’') src += "['’]";
+      else if (ch === '*') src += '[\\p{L}\\p{N}_\'’-]*';
+      else src += ch.replace(/[.*+?^${}()|[\]\\\/-]/g, '\\$&');
+    }
+    const first = body[0], last = body[body.length - 1];
+    const wordStart = _AR_WORD.test(first), wordEnd = _AR_WORD.test(last);
+    if (starStart) src = '[\\p{L}\\p{N}_\'’-]*' + src;
+    if (starEnd) src += '[\\p{L}\\p{N}_\'’-]*';
+    if (wordStart) src = '(?<![\\p{L}\\p{N}_])' + src;
+    if (wordEnd) src += '(?![\\p{L}\\p{N}_])';
+    let re;
+    try { re = new RegExp(src, 'giu'); } catch (e) { continue; }
+    out.push({ entry: line, re, wordEnd: wordEnd || starEnd });
+    if (out.length >= AUTO_REROLL_MAX_ENTRIES) break;
+  }
+  return out;
+}
+
+/**
+ * The first off-limits word in text at or after `from`, or null:
+ * { entry, match, index }. `streaming` holds back a word that ends at the
+ * very end of the text, which the next characters may yet extend.
+ */
+function findOffLimitsWord(text, matchers, from = 0, streaming = false) {
+  text = String(text || '');
+  let best = null;
+  for (const m of matchers || []) {
+    m.re.lastIndex = Math.max(0, from);
+    let hit;
+    while ((hit = m.re.exec(text)) !== null) {
+      if (!hit[0]) { m.re.lastIndex++; continue; }
+      const end = hit.index + hit[0].length;
+      if (streaming && m.wordEnd && end >= text.length) break;
+      if (!best || hit.index < best.index) best = { entry: m.entry, match: hit[0], index: hit.index };
+      break;
+    }
+  }
+  return best;
+}
+
+/** The card's rule for this turn, or null when it has none. */
+function autoRerollRule(card) {
+  if (!card || card.autoRerollEnabled !== true) return null;
+  const matchers = autoRerollMatchers(card.autoRerollWords);
+  if (!matchers.length) return null;
+  let max = parseInt(card.autoRerollMax, 10);
+  if (!isFinite(max)) max = AUTO_REROLL_MAX_DEFAULT;
+  max = Math.min(AUTO_REROLL_MAX_CEIL, Math.max(1, max));
+  // Temperature 0 writes the same reply every time: a reroll could only
+  // repeat the hit, so the reply is checked and kept, never rerolled.
+  const t = Number(card.temperature);
+  const deterministic = card.temperature !== undefined && isFinite(t) && t <= 0;
+  return { matchers, max: deterministic ? 0 : max, deterministic };
+}
+
+/* The turn being checked. One at a time, as generations are; kept here and
+   not on the message, so nothing of it is ever saved or synced. */
+let _autoRerollTurn = null;   // { msg, rule, armed, scan, hit }
+
+/** Called by the stream feeder after every delta. True once a hit has
+ *  stopped this reply: the feeder stops feeding it. */
+function maybeAutoReroll(msg) {
+  const t = _autoRerollTurn;
+  if (!t || t.msg !== msg) return false;
+  if (t.hit) return true;
+  if (!t.armed) return false;
+  // A reply that has run a tool is not rerolled: that would run it again.
+  if (Array.isArray(msg.toolCalls) && msg.toolCalls.length) return false;
+  const text = msg.content || '';
+  if (t.scan > text.length) t.scan = text.length;   // the smart limit cut it
+  const from = Math.max(0, t.scan - AUTO_REROLL_MAX_ENTRY_CHARS * 2);
+  const hit = findOffLimitsWord(text, t.rule.matchers, from, true);
+  t.scan = text.length;
+  if (!hit) return false;
+  t.hit = hit;
+  if (msg._parseState) msg._parseState.pending = '';
+  console.log('[auto-reroll] the reply used "' + hit.match + '" (' + hit.entry + '); stopping it to write it again');
+  stopGeneration({ keepChain: true, autoReroll: true });
+  return true;
+}
+
+/** True while a hit has frozen this reply (the job poll keeps draining). */
+function autoRerollFrozen(msg) {
+  return !!(_autoRerollTurn && _autoRerollTurn.msg === msg && _autoRerollTurn.hit);
+}
+
+/* Set by stopGeneration for any stop that is not the reroll's or the smart
+   limit's own -- the Stop button, the runtime limit -- so a reroll never
+   starts after one. */
+let _genStopRequested = false;
+
+/** Put a reply back to empty for the next try. */
+function _resetForReroll(thread, msg) {
+  msg.content = '';
+  msg.reasoning = '';
+  for (const f of ['smartCapped', '_smartLimitAt', '_parseState', 'toolCalls', 'toolPrefix', '_pendingToolCalls', '_finishReason']) delete msg[f];
+  try {
+    if (thread && typeof state !== 'undefined' && thread.id === state.activeThreadId) {
+      renderMessages();
+      if (typeof scrollPinnedToBottom !== 'undefined' && scrollPinnedToBottom) scrollToBottom();
+    }
+  } catch (e) {}
+}
+
+/**
+ * runGenerationWithTools, with the card's Auto Reroll around it. Same
+ * arguments and result. Leaves msg.autoReroll = { rerolls, words, kept }
+ * when it rerolled or kept a reply that still uses a word: words are the
+ * off-limits words as the model wrote them, up to five.
+ */
+async function runGenerationWithReroll(thread, assistantMsg, requestBody, opts = {}) {
+  opts = opts || {};
+  const card = opts.card || ((typeof getActiveCard === 'function') ? getActiveCard() : null);
+  delete assistantMsg.autoReroll;
+  const rule = autoRerollRule(card);
+  _genStopRequested = false;
+  if (!rule) return runGenerationWithTools(thread, assistantMsg, requestBody, opts);
+
+  const words = [];
+  let rerolls = 0;
+  try {
+    for (;;) {
+      const lastTry = rerolls >= rule.max;
+      _autoRerollTurn = { msg: assistantMsg, rule, armed: !lastTry, scan: 0, hit: null };
+      const outcome = await runGenerationWithTools(thread, assistantMsg, requestBody, opts);
+      let hit = _autoRerollTurn.hit;
+      _autoRerollTurn = null;
+
+      const finished = !outcome.errored && (!outcome.aborted || assistantMsg.smartCapped || hit);
+      if (!finished || _genStopRequested) {
+        // Stopped by the user or the runtime limit, or failed: not ours to redo.
+        if (hit && _genStopRequested) return Object.assign({}, outcome, { aborted: true });
+        return outcome;
+      }
+      const usedTool = Array.isArray(assistantMsg.toolCalls) && assistantMsg.toolCalls.length > 0;
+      if (!hit) {
+        // A word the stream could not stop on: one that ended the reply, or
+        // text the parser only gave to the reply at the end.
+        finalizeStreamMessage(assistantMsg);
+        hit = findOffLimitsWord(assistantMsg.content || '', rule.matchers, 0, false);
+      }
+      // The word as the model wrote it ("chuckled"), not the list's entry ("chuckl*").
+      const said = hit ? String(hit.match).replace(/\s+/g, ' ').trim().toLowerCase().slice(0, 40) : '';
+      if (said && !words.includes(said)) words.push(said);
+      if (!hit || lastTry || usedTool) {
+        if (rerolls || hit) {
+          assistantMsg.autoReroll = { rerolls, words: words.slice(0, 5) };
+          if (hit) assistantMsg.autoReroll.kept = usedTool ? 'tool' : (rule.deterministic ? 'temperature' : 'tries');
+        }
+        if (hit && outcome.aborted && !assistantMsg.smartCapped) {
+          // Cannot happen: the last try is never stopped. Belt and braces.
+          return Object.assign({}, outcome, { aborted: false });
+        }
+        return outcome;
+      }
+      rerolls++;
+      console.log('[auto-reroll] try ' + (rerolls + 1) + ' of ' + (rule.max + 1));
+      try {
+        showModelSwitchToast('Auto reroll: the reply used “' + hit.match + '”, writing it again (' + rerolls + ' of ' + rule.max + ')', 'info', 3000);
+      } catch (e) {}
+      _resetForReroll(thread, assistantMsg);
+      // The stop that ended this try aborted the controller; the next try
+      // needs its own, or the direct stream would end before it starts.
+      if (typeof AbortController !== 'undefined') abortController = new AbortController();
+      if (_genStopRequested) return { errored: false, aborted: true, errorMessage: null, errorObj: null, jobMode: false };
+    }
+  } finally {
+    _autoRerollTurn = null;
+  }
+}
+
+/* ---- The card editor's Auto Reroll box (chat.html, card-auto-reroll-*) ---- */
+
+/** card.autoRerollMax, held to 1..10, 3 when unset. */
+function autoRerollMaxOf(card) {
+  const n = parseInt(card && card.autoRerollMax, 10);
+  if (!isFinite(n)) return AUTO_REROLL_MAX_DEFAULT;
+  return Math.min(AUTO_REROLL_MAX_CEIL, Math.max(1, n));
+}
+
+/** The line under the box: what it will do with what is in the editor. */
+function updateAutoRerollNote() {
+  const note = document.getElementById('card-auto-reroll-note');
+  if (!note) return;
+  const on = !!(document.getElementById('card-auto-reroll-enabled') || {}).checked;
+  const words = autoRerollMatchers((document.getElementById('card-auto-reroll-words') || {}).value || '');
+  const tries = autoRerollMaxOf({ autoRerollMax: (document.getElementById('card-auto-reroll-max') || {}).value });
+  const temp = Number((document.getElementById('card-temperature') || {}).value);
+  const n = words.length;
+  const these = n === 1 ? 'this word' : 'these ' + n + ' words';
+  const usesOne = n === 1 ? 'this word' : 'one of these ' + n + ' words';
+  let text;
+  if (!on) text = n ? 'Off: tick the box above to check replies for ' + these + '.' : '';
+  else if (!n) text = 'On, but the list is empty, so nothing is checked.';
+  else if (isFinite(temp) && temp <= 0) text = 'Temperature is 0, so every try would be the same reply: replies that use ' + usesOne + ' are marked, not written again. Raise Temperature above 0 to reroll.';
+  else text = 'On: a reply that uses ' + usesOne + ' is written again, up to ' + tries + (tries === 1 ? ' more time.' : ' more times.');
+  note.textContent = text;
+}
+
+/** ADD MY BANNED PHRASES: the Banned Phrases list, added to this one. */
+function addBannedToAutoReroll() {
+  const banned = document.getElementById('card-banned-phrases');
+  const box = document.getElementById('card-auto-reroll-words');
+  if (!banned || !box) return;
+  const have = box.value.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  const seen = new Set(have.map(l => l.toLowerCase()));
+  let added = 0;
+  for (const raw of banned.value.split(/\r?\n/)) {
+    const l = raw.trim();
+    if (!l || seen.has(l.toLowerCase())) continue;
+    seen.add(l.toLowerCase());
+    have.push(l);
+    added++;
+  }
+  box.value = have.join('\n');
+  updateAutoRerollNote();
+  const note = document.getElementById('card-auto-reroll-note');
+  if (note && !added) note.textContent = (banned.value.trim() ? 'Every Banned Phrase is already in this list. ' : 'Banned Phrases is empty. ') + note.textContent;
+}
+
+/** The pointer under Banned Phrases: bring the box into view. */
+function goToAutoReroll() {
+  const g = document.getElementById('card-auto-reroll-group');
+  if (!g) return;
+  try { g.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (e) { g.scrollIntoView(); }
+  const cb = document.getElementById('card-auto-reroll-enabled');
+  try { if (cb) cb.focus({ preventScroll: true }); } catch (e) {}
 }
 
 /* ================================================================
@@ -307,7 +595,7 @@ function makeStreamFeeder(assistantMsg, thread) {
       // draining spooled bytes between our cancel and the server's ack (and
       // replays drain terminal transcripts fully); none of that may append
       // past the cut.
-      if (assistantMsg.smartCapped) return;
+      if (assistantMsg.smartCapped || autoRerollFrozen(assistantMsg)) return;
       const text = decoder.decode(bytes, { stream: true });
       if (!text) return;
       if (!firstLogged) {
@@ -319,9 +607,16 @@ function makeStreamFeeder(assistantMsg, thread) {
       lineBuf = lines.pop() || '';
       for (const line of lines) {
         chunkCount++;
+        // Tool calls ride on the same lines as the text, in their own field.
+        mergeToolCallDeltas(assistantMsg, extractToolCallDeltas(line));
         const result = extractTokenFromLine(line);
         if (result) {
           processStreamDelta(assistantMsg, result.text, result.field);
+          // A group member's own name label comes off as it is written
+          // (1.8.0, js/29-groups.js), rather than sitting there until the end.
+          if (thread && thread.groupId && typeof groupLiveTrim === 'function') groupLiveTrim(assistantMsg, thread);
+          // An off-limits word stops the reply here, to be written again.
+          if (maybeAutoReroll(assistantMsg)) return;
           if (maybeApplySmartLimit(assistantMsg)) {
             // Content was truncated at the sentence end — repaint now so the
             // trimmed text (not the overshoot) is what stays on screen.
@@ -353,14 +648,15 @@ function makeStreamFeeder(assistantMsg, thread) {
     // final unterminated JSON line (non-stream responses, abrupt closes) still
     // deserves a parse attempt rather than a console shrug.
     flush() {
-      if (assistantMsg.smartCapped) { lineBuf = ''; return; }
+      if (assistantMsg.smartCapped || autoRerollFrozen(assistantMsg)) { lineBuf = ''; return; }
       const tail = (lineBuf + decoder.decode()).trim();
       lineBuf = '';
       if (tail) {
+        mergeToolCallDeltas(assistantMsg, extractToolCallDeltas(tail));
         const result = extractTokenFromLine(tail);
         if (result) {
           processStreamDelta(assistantMsg, result.text, result.field);
-          maybeApplySmartLimit(assistantMsg);
+          if (!maybeAutoReroll(assistantMsg)) maybeApplySmartLimit(assistantMsg);
         }
       }
     },
@@ -389,7 +685,7 @@ async function startGenerationJob(thread, requestBody) {
     });
     if (r.status === 404 || r.status === 405) {
       // Route doesn't exist: raw llama-server (file://) or a pre-jobs
-      // fileserver.ps1. Remember and stop probing.
+      // PowerShell server. Remember and stop probing.
       jobsAvailable = false;
       console.log('[jobs] /llm/jobs not available — using legacy direct streaming');
       return null;
@@ -533,7 +829,11 @@ async function runGenerationStream(thread, assistantMsg, requestBody, opts = {})
       body: JSON.stringify(requestBody),
       signal: abortController ? abortController.signal : undefined
     });
-    if (!resp.ok) throw new Error(`llama-server returned ${resp.status}: ${resp.statusText}`);
+    if (!resp.ok) {
+      const detail = await resp.text().catch(() => '');
+      throw new Error(`llama-server returned ${resp.status}: ${resp.statusText}` +
+                      (detail ? ' — ' + detail.slice(0, 400) : ''));
+    }
     const reader = resp.body.getReader();
     while (true) {
       const { done, value } = await reader.read();
@@ -556,6 +856,11 @@ async function runGenerationStream(thread, assistantMsg, requestBody, opts = {})
  * mid-stream failure shouldn't vaporize three paragraphs of good text.
  */
 function applyGenerationOutcome(assistantMsg, outcome, style) {
+  // runGenerationWithTools explains a fallback here (the engine refused the
+  // tools array). Stamped before any abort/error note, after the final text.
+  if (outcome.note) {
+    assistantMsg.content += `\n\n*(${outcome.note})*`;
+  }
   if (outcome.aborted) {
     if (assistantMsg.smartCapped) {
       // Smart token limit trim — expected behavior, not an interruption.
@@ -579,6 +884,13 @@ function applyGenerationOutcome(assistantMsg, outcome, style) {
     assistantMsg.content += `\n\n*(interrupted — ${outcome.errorMessage || 'generation failed'})*`;
     return;
   }
+  // The model did not load (1.8.0, #67): say why, in plain words, rather than
+  // the HTTP status the request got for it. attachLoadFailure read it from
+  // /swap-status when the request failed.
+  if (outcome.loadFailure) {
+    assistantMsg.content = loadFailureText(outcome.loadFailure);
+    return;
+  }
   if (style === 'diagnostic') {
     const err = outcome.errorObj || { name: 'Error', message: outcome.errorMessage || 'generation failed' };
     let diag = `**Connection Error**\n\n`;
@@ -594,6 +906,274 @@ function applyGenerationOutcome(assistantMsg, outcome, style) {
   } else {
     assistantMsg.content = `**Error:** ${outcome.errorMessage || 'generation failed'}`;
   }
+}
+
+
+/* A failed request, when the model itself failed to load (1.8.0, #67).
+   The request only says 502 or 503; /swap-status says why. Asked once,
+   after the failure, and only when the server runs the model here. */
+async function attachLoadFailure(outcome) {
+  if (!outcome || !outcome.errored || !IS_SERVED || (typeof _remoteMode !== 'undefined' && _remoteMode)) return outcome;
+  try {
+    const r = await fetch('/swap-status', { cache: 'no-store' });
+    if (r.ok) {
+      const s = await r.json();
+      if (s && s.phase === 'error' && (s.advice || s.message)) {
+        outcome.loadFailure = { cause: String(s.cause || ''), advice: String(s.advice || ''), line: String(s.message || ''),
+                                file: String(s.name || s.file || '') };
+      }
+    }
+  } catch (e) { /* the plain error stays */ }
+  return outcome;
+}
+
+/** The chat's words for a model that did not load. Markdown: the line is
+ *  inline code, so it is shown as text whatever it holds. */
+function loadFailureText(f) {
+  const line = String(f.line || '').replace(/`/g, "'").slice(0, 400);
+  const file = String(f.file || '').replace(/`/g, "'").slice(0, 255);
+  let out = '**The model did not load.**' + (file ? ' (`' + file + '`)' : '');
+  if (f.advice) out += ' ' + f.advice;
+  if (line) out += '\n\nThe engine said: `' + line + '`';
+  out += "\n\nThe engine's full log is llama-server.log in GobboNet's data folder; `gobbonet doctor` on the PC shows where.";
+  return out;
+}
+
+/* ================================================================
+   TOOL CALLS -- the loop around runGenerationStream
+
+   A card's code can offer the model functions (gobbo.tool, 23-card-code.js).
+   When the card's tools switch is on, the request carries them as the OpenAI
+   `tools` array and llama-server (run with --jinja) parses the model's calls
+   into `tool_calls` deltas, which makeStreamFeeder collects on the message as
+   _pendingToolCalls. This loop runs the calls in the page, appends the
+   assistant turn and one `tool` message per call to the request, and asks
+   again, for up to toolMaxRounds rounds of calls (cardToolLimit, a setting
+   since 1.8.0); one more request follows without `tools`, so the model has
+   to answer in text.
+
+   The extra messages are appended AFTER buildContextMessages: its
+   normalizer drops `tool` roles and `tool_calls`, and putting them at the
+   end also keeps the cached prompt prefix intact for llama-server.
+
+   Without tool definitions this is exactly one runGenerationStream call.
+================================================================ */
+// Tool results are appended after the built context, outside the context
+// budget. A reply's results together may add TOOL_RESULT_BUDGET_FACTOR times
+// one result's limit (toolResultMaxChars): past that, the next request goes
+// without `tools`, so the model has to answer with what it has instead of
+// pushing the prompt past the context window. 3 x 8,000 is PR #71's 24,000.
+const TOOL_RESULT_BUDGET_FACTOR = 3;
+
+/** Join streamed tool_calls deltas onto the message, keyed by call index. */
+function mergeToolCallDeltas(msg, delta) {
+  if (!delta) return;
+  if (delta.finishReason) msg._finishReason = delta.finishReason;
+  if (!Array.isArray(delta.toolCalls) || !delta.toolCalls.length) return;
+  const list = msg._pendingToolCalls || (msg._pendingToolCalls = []);
+  for (const d of delta.toolCalls) {
+    // llama-server tags every fragment with the call's index
+    // (tools/server/server-chat.cpp). Without one, match the id, or treat a
+    // fragment that names a function as a new call and anything else as a
+    // continuation of the last one, so a server that omits the index still
+    // cannot merge call 2's arguments into call 1.
+    let call = (d.index != null) ? list.find(c => c.index === d.index) : null;
+    if (!call && d.id) call = list.find(c => c.id === d.id);
+    if (!call && d.index == null && !d.name && list.length) call = list[list.length - 1];
+    if (!call) {
+      call = { index: (d.index != null) ? d.index : list.length, id: null, name: null, arguments: '' };
+      list.push(call);
+    }
+    if (d.id && !call.id) call.id = d.id;
+    if (d.name && !call.name) call.name = d.name;
+    if (d.arguments) call.arguments += d.arguments;
+  }
+}
+
+/** Remove and return the collected calls as [{ id, name, arguments }]. */
+function takePendingToolCalls(msg) {
+  const list = Array.isArray(msg._pendingToolCalls) ? msg._pendingToolCalls : [];
+  delete msg._pendingToolCalls;
+  delete msg._finishReason;
+  // Nine alphanumerics: the shape Mistral's v7 templates insist on, and one
+  // every other template accepts, for a server that sent no id.
+  const synth = () => (Math.random().toString(36).slice(2) + '000000000').replace(/[^a-z0-9]/g, '').slice(0, 9);
+  return list.filter(c => c && c.name).map((c) => ({
+    id: c.id || synth(),
+    name: c.name,
+    arguments: c.arguments || ''
+  }));
+}
+
+/** llama-server's refusal when the engine runs without --jinja:
+ *  "tools param requires --jinja flag" (tools/server/server-common.cpp),
+ *  wrapped by the jobs relay as "upstream HTTP 400: {...}". Matched on the
+ *  one phrase both refusals share, so an unrelated template error that
+ *  happens to mention tools and jinja is not mistaken for it. */
+function isNoJinjaError(message) {
+  return /requires --jinja/i.test(String(message || ''));
+}
+
+/** Stop pressed since the round began (either transport). */
+function toolLoopStopped() {
+  if (abortController && abortController.signal && abortController.signal.aborted) return true;
+  if (currentJob && currentJob.cancelSent) return true;
+  return false;
+}
+
+/** Append tool-call records to the message; they are stored with it. */
+function recordToolCalls(msg, recs) {
+  if (!recs || !recs.length) return;
+  if (!Array.isArray(msg.toolCalls)) msg.toolCalls = [];
+  for (const r of recs) msg.toolCalls.push(r);
+}
+
+/**
+ * Generate one reply, running the active card's tools as the model calls
+ * them. Same signature and result as runGenerationStream, plus `note` when
+ * the engine refused the tools array and the turn was retried without it.
+ *
+ * opts.card -- the card whose tools apply (default: the active card). The
+ * tools themselves always come from cardToolDefs(card): there is no way to
+ * hand this function a tools array, so the card's switch is the only gate.
+ *
+ * Consent is re-checked before every request and before any call runs. The
+ * card can change under a running reply (activateCard has no generation
+ * guard) and the box can be unticked mid-turn; either drops `tools` from the
+ * next request and stops calls from running, and runCardTool refuses a call
+ * whose card is no longer the one that owns the live registry.
+ *
+ * The text of completed rounds is kept on the message as `toolPrefix` while
+ * a later round runs, so finalizeJobIntoThread can replay a reload onto it
+ * instead of a blank message. It is removed when the loop ends.
+ */
+async function runGenerationWithTools(thread, assistantMsg, requestBody, opts = {}) {
+  opts = opts || {};
+  const card = opts.card || ((typeof getActiveCard === 'function') ? getActiveCard() : null);
+  const tools = cardToolDefs(card);
+  delete assistantMsg._pendingToolCalls;
+  delete assistantMsg._finishReason;
+  delete assistantMsg.toolPrefix;
+
+  if (!tools.length) {
+    const outcome = await runGenerationStream(thread, assistantMsg, requestBody, opts);
+    takePendingToolCalls(assistantMsg);   // nothing to run them with; drop any strays
+    return attachLoadFailure(outcome);
+  }
+
+  try {
+    return await attachLoadFailure(await _runToolRounds(thread, assistantMsg, requestBody, opts, card, tools));
+  } finally {
+    delete assistantMsg.toolPrefix;
+  }
+}
+
+async function _runToolRounds(thread, assistantMsg, requestBody, opts, card, tools) {
+  const body = Object.assign({}, requestBody, {
+    tools: tools,
+    messages: (requestBody.messages || []).slice()
+  });
+  const signal = abortController ? abortController.signal : undefined;
+  let outcome = null;
+  // Where this round's text begins in the message: earlier rounds' text stays
+  // on screen ahead of it, but only the round's own words are echoed back.
+  let contentFrom = (assistantMsg.content || '').length;
+  let reasoningFrom = (assistantMsg.reasoning || '').length;
+  // Consent, re-read every time it matters. False once the box is unticked,
+  // the code is switched off, or another card took over the registry.
+  const consented = () => cardToolDefs(card).length > 0;
+  let resultChars = 0;
+  // Read once per reply, at its start: a change in CONFIG applies to the next.
+  const requests = cardToolLimit('toolMaxRounds') + 1;
+  const budget = TOOL_RESULT_BUDGET_FACTOR * cardToolLimit('toolResultMaxChars');
+
+  for (let round = 1; round <= requests; round++) {
+    if (round === requests) delete body.tools;   // the last word has to be text
+    if (body.tools && resultChars > budget) {
+      console.warn('[card-tool] tool results passed ' + budget + ' chars; asking without tools');
+      delete body.tools;
+    }
+    if (body.tools && !consented()) {
+      console.warn('[card-tool] consent withdrawn mid-reply; asking without tools');
+      delete body.tools;
+    }
+    outcome = await runGenerationStream(thread, assistantMsg, body, opts);
+    const finish = assistantMsg._finishReason || null;
+    const calls = takePendingToolCalls(assistantMsg);
+
+    if (round === 1 && outcome.errored && isNoJinjaError(outcome.errorMessage)) {
+      console.warn('[card-tool] the engine refused the tools array (no --jinja); retrying without tools');
+      delete body.tools;
+      outcome = await runGenerationStream(thread, assistantMsg, body, opts);
+      takePendingToolCalls(assistantMsg);
+      return Object.assign({}, outcome, { note: "this model can't use tools: the engine runs it without --jinja" });
+    }
+    if (!body.tools) return outcome;   // none were offered this round; strays are dropped
+    if (!calls.length || outcome.errored || outcome.aborted || assistantMsg.smartCapped) return outcome;
+    if (toolLoopStopped()) return Object.assign({}, outcome, { aborted: true });
+    if (finish === 'length') {
+      // The reply was cut by the token limit, so the arguments may be too.
+      // Running a half-formed call is worse than the cut the user can see.
+      console.warn('[card-tool] reply cut by the token limit; not running ' + calls.length + ' unfinished call(s)');
+      return outcome;
+    }
+    if (!consented()) {
+      console.warn('[card-tool] consent withdrawn mid-reply; ' + calls.length + ' call(s) not run');
+      return outcome;
+    }
+
+    // Settle this round's parser state, so the text that came with the calls
+    // is final before it is echoed back and the next round parses cleanly.
+    finalizeStreamMessage(assistantMsg);
+    const fullText = assistantMsg.content || '';
+    const roundText = fullText.slice(Math.min(contentFrom, fullText.length)).trim();
+    const fullReasoning = assistantMsg.reasoning || '';
+    const roundReasoning = fullReasoning.slice(Math.min(reasoningFrom, fullReasoning.length)).trim();
+
+    const recs = [];
+    for (const c of calls) {
+      recs.push(await runCardTool(c.name, c.arguments, { signal: signal, cardId: card.id, thread: thread }));
+    }
+    recordToolCalls(assistantMsg, recs);
+    for (const r of recs) resultChars += (r.result || '').length;
+    if (toolLoopStopped()) return Object.assign({}, outcome, { aborted: true });
+
+    const turn = {
+      role: 'assistant',
+      content: roundText,
+      tool_calls: calls.map(c => ({ id: c.id, type: 'function',
+                                    function: { name: c.name, arguments: c.arguments } }))
+    };
+    // Harmony (gpt-oss) and Qwen3 templates read the reasoning that led to a
+    // tool call back from the assistant turn; templates that do not know the
+    // field ignore it. Only this round's reasoning, like the text.
+    if (roundReasoning) turn.reasoning_content = roundReasoning;
+    body.messages.push(turn);
+    calls.forEach((c, i) => {
+      body.messages.push({ role: 'tool', tool_call_id: c.id, content: recs[i].result });
+    });
+
+    // The round's text stays on screen; the next round's continues below it.
+    if (fullText) assistantMsg.content = fullText + '\n\n';
+    if (assistantMsg.reasoning) assistantMsg.reasoning = assistantMsg.reasoning + '\n\n';
+    contentFrom = (assistantMsg.content || '').length;
+    reasoningFrom = (assistantMsg.reasoning || '').length;
+    // What a reload mid-round replays onto (finalizeJobIntoThread), instead
+    // of a blank message: the next job's transcript holds only its own round.
+    assistantMsg.toolPrefix = { content: assistantMsg.content || '', reasoning: assistantMsg.reasoning || '' };
+    console.log('[card-tool] round ' + round + ': ran ' + calls.length + ' call(s), asking again');
+    try { saveState({ skipServerSchedule: true, thread: thread }); } catch (e) {}
+    // Same anchor dance as the end of sendMessage: the rebuild resets
+    // scrollTop, and a reader who scrolled up must not be yanked to the top.
+    try {
+      if (thread && state && thread.id === state.activeThreadId) {
+        const anchor = captureScrollAnchor();
+        renderMessages();
+        settleScrollAfterGeneration(anchor);
+      }
+    } catch (e) {}
+  }
+  return outcome;
 }
 
 /* ================================================================
@@ -688,7 +1268,13 @@ function processStreamDelta(msg, deltaText, field) {
       // 'content'   — buffering into msg.content
       // 'between'   — harmony only: between channels
       phase: (fmt === 'deepseek' || fmt === 'harmony' || fmt === 'gemma') ? 'pre' : 'content',
-      pending: ''
+      pending: '',
+      // Where this parse began. Both are 0 for a fresh reply; a later tool
+      // round (runGenerationWithTools) parses onto a message that already
+      // holds the earlier rounds' text, and finalizeStreamMessage's
+      // implicit-think give-up must judge only what this round added.
+      contentAtStart: (msg.content || '').length,
+      reasoningAtStart: (msg.reasoning || '').length
     };
   }
   const state = msg._parseState;
@@ -968,10 +1554,12 @@ function processGemmaStream(msg, state) {
 
        {"name": "print", "parameters": {"s": "Hello, friend!"}}
 
-   We never send a `tools` array on our requests, so llama-server has
-   no tool schema to bind this to; it leaves the JSON verbatim in
-   `content`, and it renders in the chat box as raw JSON. This unwraps
-   that envelope back to the human-facing text ("Hello, friend!").
+   A request carries a `tools` array only when the active card offers
+   tools (runGenerationWithTools); otherwise llama-server has no tool
+   schema to bind this to, leaves the JSON verbatim in `content`, and it
+   renders in the chat box as raw JSON. This unwraps that envelope back
+   to the human-facing text ("Hello, friend!"). It is separate from real
+   tool calls, which arrive parsed in `tool_calls` and never in content.
 
    It is deliberately strict: it only fires when the ENTIRE message is
    a single such envelope, so a normal reply that merely happens to
@@ -1086,9 +1674,11 @@ function finalizeStreamMessage(msg) {
     // tokens to reasoning provisionally. If we never saw the close marker
     // AND we never collected anything to content, treat this as a non-thinking
     // model and reparent reasoning -> content.
-    if ((fmt === 'deepseek' || fmt === 'gemma') && state.phase === 'pre' && !msg.content && msg.reasoning) {
-      msg.content = msg.reasoning;
-      msg.reasoning = '';
+    const cAt = state.contentAtStart || 0, rAt = state.reasoningAtStart || 0;
+    if ((fmt === 'deepseek' || fmt === 'gemma') && state.phase === 'pre' &&
+        (msg.content || '').length === cAt && (msg.reasoning || '').length > rAt) {
+      msg.content = (msg.content || '') + msg.reasoning.slice(rAt);
+      msg.reasoning = msg.reasoning.slice(0, rAt);
     }
   }
 

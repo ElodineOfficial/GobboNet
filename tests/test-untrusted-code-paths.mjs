@@ -58,6 +58,16 @@ ok(/applyImportedCardCode\(card,/.test(cardIO), 'card files (PNG / JSON / zip) g
 const cardCode = read('23-card-code.js');
 ok(/card\.customCodeEnabled = false;/.test(body(cardCode, 'applyImportedCardCode')),
    'applyImportedCardCode always clears customCodeEnabled');
+// 1.8.0 (roadmap #9, PR #71): the second switch, "Let the model call this
+// card's tools", goes off by the same two doors, so no way in can carry it.
+const imported = body(cardCode, 'applyImportedCardCode');
+ok((imported.match(/card\.toolsEnabled = false;/g) || []).length === 2,
+   'applyImportedCardCode clears toolsEnabled too, with code and without');
+const quarantine = body(cardCode, 'neutralizeUntrustedCode');
+ok(/card\.customCodeEnabled = false;\s*card\.toolsEnabled = false;/.test(quarantine),
+   'neutralizeUntrustedCode clears toolsEnabled beside customCodeEnabled, for every way in above');
+ok(/if \(card\.customCodeEnabled \|\| card\.toolsEnabled\) result\.cards\+\+;/.test(quarantine),
+   'and counts a card with only toolsEnabled set, so the cleared blob is written back');
 
 console.log('nothing else writes cards or extensions from outside');
 // The only places allowed to assign state.characterCards / state.extensions

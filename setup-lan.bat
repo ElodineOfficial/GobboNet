@@ -125,8 +125,8 @@ if exist "%~dp0gobbonet.exe" (
     )
 )
 
-:: Fallback for the launch.bat / fileserver.ps1 path, which has no gobbonet.exe
-:: to ask. .gobbonet-port records the port that was last actually bound.
+:: Fallback for when gobbonet.exe cannot answer -- missing, quarantined, or a
+:: config it cannot read. .gobbonet-port records the port last actually bound.
 if not defined WEB_PORT (
     if exist "%~dp0.gobbonet-port" (
         rem Digits only, matching launch.bat. If these two ever disagree about the
@@ -157,7 +157,7 @@ if defined GEMMA_LLM_PORT (
 ) else (
     set "LLM_PORT=11437"
 )
-:: No search port any more -- fileserver.ps1 serves /search itself, so
+:: No search port any more -- gobbonet.exe serves /search itself, so
 :: nothing binds 11435. The firewall rule and URL reservation for it are
 :: removed below rather than maintained.
 echo  [OK] llama.cpp port: !LLM_PORT!
@@ -192,7 +192,7 @@ if /i "%~1"=="/public" goto :profiles_public
 set "GN_NETCAT="
 for /f "usebackq delims=" %%C in (`powershell -NoProfile -Command "$ErrorActionPreference='SilentlyContinue'; if (@(Get-NetConnectionProfile).NetworkCategory -contains 'Public') { 'public' }" 2^>nul`) do set "GN_NETCAT=%%C"
 if /i not "!GN_NETCAT!"=="public" goto :profiles_done
-echo  [!] Windows has marked the network this PC is on as PUBLIC.
+echo  [*] Windows has marked the network this PC is on as PUBLIC.
 echo      GobboNet's firewall rules cover Private and work networks only,
 echo      so a phone on THIS network will not be able to connect yet.
 echo.
@@ -207,7 +207,7 @@ if errorlevel 1 goto :profiles_private_failed
 echo  [OK] This network is now Private. Phones on it can connect.
 goto :profiles_done
 :profiles_private_failed
-echo  [!] Windows would not change the network to Private. Do it by hand:
+echo  [*] Windows would not change the network to Private. Do it by hand:
 echo      Settings ^> Network ^& internet ^> your network ^> Private network.
 echo      Or run:  setup-lan.bat /public
 goto :profiles_done
@@ -218,7 +218,7 @@ goto :profiles_done
 :profiles_public
 set "GN_PROFILES=domain,private,public"
 set "GN_PROFILE_LIST=domain private public"
-echo  [!] Opening GobboNet on PUBLIC networks too ^(cafes, hotels, airports^).
+echo  [*] Opening GobboNet on PUBLIC networks too ^(cafes, hotels, airports^).
 echo      Still local subnet only and still behind your password, but the chat
 echo      is not encrypted. Anyone on such a network can see the traffic.
 :profiles_done
@@ -312,7 +312,7 @@ set "GN_BLOCKED="
 for /f "usebackq delims=" %%B in (`powershell -NoProfile -Command "$ErrorActionPreference='SilentlyContinue'; $n = 0; foreach ($r in @(Get-NetFirewallRule -Direction Inbound -Action Block)) { if ((Get-NetFirewallApplicationFilter -AssociatedNetFirewallRule $r).Program -like '*gobbonet.exe') { $n++ } }; $n" 2^>nul`) do set "GN_BLOCKED=%%B"
 if not defined GN_BLOCKED set "GN_BLOCKED=0"
 if !GN_BLOCKED! gtr 0 (
-    echo  [!] Found !GN_BLOCKED! rule^(s^) blocking gobbonet.exe. Removing them --
+    echo  [*] Found !GN_BLOCKED! rule^(s^) blocking gobbonet.exe. Removing them --
     echo      a Block rule overrides the allow rule above, which is why phone
     echo      access can fail on a machine where this script reported success.
     powershell -NoProfile -Command "$ErrorActionPreference='SilentlyContinue'; foreach ($r in @(Get-NetFirewallRule -Direction Inbound -Action Block)) { if ((Get-NetFirewallApplicationFilter -AssociatedNetFirewallRule $r).Program -like '*gobbonet.exe') { Remove-NetFirewallRule -InputObject $r } }" >nul 2>&1
@@ -409,107 +409,34 @@ set "GN_MDNS_OK="
 echo.
 
 :: ---------------------------------------------------------------
-:: URL ACL RESERVATIONS
-:: PowerShell's HttpListener needs permission to bind to non-
-:: localhost addresses. These one-time reservations grant that.
+:: URL RESERVATIONS -- removed, never added (1.8.0)
 ::
-:: GOTCHA: `netsh http show urlacl url=<x>` ALWAYS exits with code 0
-:: whether or not a reservation actually exists -- when nothing
-:: matches, it just prints the "URL Reservations:" header with no
-:: entries underneath. So we can't use `if errorlevel 1` to detect
-:: a missing ACL. Instead, pipe the output through findstr looking
-:: for the "Reserved URL" line that appears in real entries; that
-:: gives us a reliable signal we can branch on.
+:: An HTTP.SYS URL reservation (netsh http add urlacl) was only ever for
+:: the PowerShell server, which listened through HTTP.SYS. gobbonet.exe
+:: binds with Winsock and needs none, and that server was removed in
+:: 1.8.0. So this script adds no reservation, and it removes the ones
+:: older versions left behind:
 ::
-:: Background: an earlier version of this script used the errorlevel
-:: check, which silently always reported "already exists" and never
-:: actually added anything. If Windows Update (or System Restore, or
-:: a driver rollback) wipes UrlAclInfo from the registry, the script
-:: looked successful but did nothing. The new check actually works.
+::   * the web port's. Up to 1.7.8 it was granted to Everyone, and any
+::     account on this PC could use it to serve its own page -- a fake
+::     sign-in, say -- at the chat's address while GobboNet is stopped.
+::     A reservation with nothing behind it also makes Windows answer the
+::     port with 503 by itself. Nothing needs it now.
+::   * 11435, the old search proxy's, and 8080, the default before 1.5.5.
+::
+:: GOTCHA: `netsh http show urlacl url=<x>` ALWAYS exits 0, whether or not
+:: anything matched, so only findstr's result can be branched on. And it
+:: matches the URL, never netsh's header text: the header is translated
+:: on a localised Windows, the URL never is. Each removal is verified,
+:: because "it said OK" was once taken as proof of something that had not
+:: happened at all.
 :: ---------------------------------------------------------------
-echo  [..] Adding URL ACL reservations...
-
-
-:: ---------------------------------------------------------------
-:: LOCALE INDEPENDENCE -- read this before simplifying anything below.
-::
-:: The previous version stacked three English-only assumptions, and on a
-:: localised Windows they combined into a script that reported success
-:: while doing nothing at all:
-::
-::   1. findstr matched an ENGLISH netsh header. On a German or French
-::      Windows that header is translated, the match always failed, and
-::      the script always took the "add" branch.
-::   2. The account name in the add command is LOCALISED -- Jeder, Tout
-::      le monde, Todos, Wszyscy -- so the add failed with "no such
-::      account".
-::   3. >nul swallowed that error and nothing checked errorlevel, so it
-::      printed [OK] URL ACL added having added nothing.
-::
-:: Fixes: match on the URL itself, which is never translated; use the
-:: SDDL form, where WD is the well-known Everyone SID S-1-1-0 and is
-:: byte-identical on every locale; and VERIFY afterwards.
-::
-:: This matters more than it looks. "I ran setup-lan.bat and it said OK"
-:: was being treated as proof the ACL existed, which sent diagnosis of
-:: the web-port failures down the wrong path.
-:: ---------------------------------------------------------------
-
-:: WHO GETS THE RESERVATION (1.7.9, PR #7)
-::
-:: It used to be granted to Everyone (SID WD). That let ANY account on this
-:: PC claim the chat's address through HTTP.SYS and serve its own page there
-:: -- a fake sign-in page, say -- to every phone on the network. It is now
-:: granted to one account: the person signed in at this PC's console, which
-:: is who runs GobboNet. If this window was elevated with a different admin
-:: account, that admin is NOT who gets it -- which is the mistake the old
-:: printout could not show. If no console user can be found (a remote
-:: desktop session, say), the account running this script is used.
-::
-:: Who that is gets printed, so a wrong guess is visible. The SID form keeps
-:: the locale fix described above: no account name goes through netsh.
-::
-:: gobbonet.exe does not need the reservation at all: it binds with Winsock,
-:: not HTTP.SYS. Only the legacy PowerShell server (deprecated, gone in 1.8)
-:: uses it. So when no account can be determined the reservation is skipped
-:: rather than handed to Everyone again.
-set "GN_ACL_SID="
-set "GN_ACL_USER="
-for /f "usebackq delims=" %%S in (`powershell -NoProfile -Command "$ErrorActionPreference='SilentlyContinue'; $u = (Get-CimInstance Win32_ComputerSystem).UserName; if (-not $u) { $u = [Security.Principal.WindowsIdentity]::GetCurrent().Name }; (New-Object Security.Principal.NTAccount($u)).Translate([Security.Principal.SecurityIdentifier]).Value" 2^>nul`) do set "GN_ACL_SID=%%S"
-for /f "usebackq delims=" %%U in (`powershell -NoProfile -Command "$ErrorActionPreference='SilentlyContinue'; $u = (Get-CimInstance Win32_ComputerSystem).UserName; if (-not $u) { $u = [Security.Principal.WindowsIdentity]::GetCurrent().Name }; $u" 2^>nul`) do set "GN_ACL_USER=%%U"
-if defined GN_ACL_SID (
-    echo !GN_ACL_SID!| findstr /r "^S-1-[0-9][0-9-]*$" >nul 2>&1
-    if errorlevel 1 set "GN_ACL_SID="
-)
-if defined GN_ACL_SID (
-    echo  [OK] The reservation will belong to: !GN_ACL_USER!
-) else (
-    echo  [!] Could not work out which account runs GobboNet, so no URL
-    echo      reservation is made. gobbonet.exe does not need one; only the
-    echo      deprecated legacy PowerShell server does.
-)
-
-:: (no search proxy ACL -- nothing binds that port now)
-call :add_urlacl !WEB_PORT! "file server"
-
-:: Upgrade cleanup. Installs before 1.5.5 defaulted to 8080 and left a URL
-:: ACL behind for it. It is harmless but it is also a reservation on a port
-:: half the developer world wants, which is the exact rudeness that
-:: prompted the move. Drop it if we are no longer using it.
-:: Unconditional now: nothing binds 11435 in any configuration.
-netsh http show urlacl url=http://+:11435/ 2>nul | findstr /i ":11435/" >nul 2>&1
-if not errorlevel 1 (
-    netsh http delete urlacl url=http://+:11435/ >nul 2>&1
-    echo  [OK] Removed the old URL ACL for http://+:11435/ ^(no longer used^)
-)
-
-if not "!WEB_PORT!"=="8080" (
-    netsh http show urlacl url=http://+:8080/ 2>nul | findstr /i ":8080/" >nul 2>&1
-    if not errorlevel 1 (
-        netsh http delete urlacl url=http://+:8080/ >nul 2>&1
-        echo  [OK] Removed the old URL ACL for http://+:8080/ ^(no longer used^)
-    )
-)
+echo  [..] Removing URL reservations from older versions, if any...
+call :drop_urlacl !WEB_PORT!
+call :drop_urlacl 11435
+if not "!WEB_PORT!"=="8080" call :drop_urlacl 8080
+echo  [OK] No URL reservation is needed; gobbonet.exe does not use one.
+echo.
 
 :: ---------------------------------------------------------------
 :: RESERVED PORT RANGES -- the one failure this script cannot repair.
@@ -534,7 +461,7 @@ for /f "tokens=1,2" %%A in ('netsh interface ipv4 show excludedportrange protoco
     )
 )
 if defined PORT_RESERVED (
-    echo  [!] Port !WEB_PORT! is inside a RESERVED range ^(!PORT_RESERVED!^).
+    echo  [*] Port !WEB_PORT! is inside a RESERVED range ^(!PORT_RESERVED!^).
     echo      Windows will refuse the bind even though nothing is using
     echo      the port, and even for an Administrator. This script cannot
     echo      fix that. Pick one:
@@ -558,7 +485,7 @@ if defined PORT_RESERVED (
 
 echo.
 echo  ====================================================
-echo   All done! You can now run launch.bat normally.
+echo   All done. You can now run launch.bat normally.
 echo.
 echo   Your phone will be able to connect at:
 echo     http://%COMPUTERNAME%.local:!WEB_PORT!  [recommended]
@@ -568,62 +495,39 @@ echo   The .local URL is preferred -- it stays the same
 echo   even when your PC's IP rotates, so your phone's
 echo   bookmark and saved chats never break.
 echo.
-echo   launch.bat will show the exact URLs when it starts.
+echo   GobboNet shows the exact URLs when it starts.
 echo.
 echo   To UNDO these changes later, right-click this and
 echo   choose "Run as administrator":
 echo     teardown-lan.bat
 echo.
-echo   That matters more than it sounds. The URL reservation
-echo   made above lives in the Windows kernel, not in this
-echo   folder -- uninstalling, deleting the folder and
-echo   reinstalling all leave it in place, and a reservation
-echo   with nothing behind it makes Windows answer this port
-echo   with 503 by itself. teardown-lan.bat is what clears it.
+echo   That matters more than it sounds. The firewall rules
+echo   made above live in Windows, not in this folder --
+echo   uninstalling, deleting the folder and reinstalling all
+echo   leave them in place. teardown-lan.bat is what clears them.
 echo  ====================================================
 
 :: ===============================================================
-:: :add_urlacl <port> <label>
-:: Adds a URL ACL for http://+:<port>/ and confirms it landed.
-:: goto :eof above this guard stops the main flow falling into it.
+:: :drop_urlacl <port>
+:: Removes the URL reservation http://+:<port>/ if there is one, and
+:: checks that it went. goto :after_subs stops the main flow falling
+:: into it.
 :: ===============================================================
 goto :after_subs
 
-:add_urlacl
+:drop_urlacl
 setlocal EnableDelayedExpansion
 set "_PORT=%~1"
-set "_LABEL=%~2"
-
-if not defined GN_ACL_SID endlocal & goto :eof
-
-:: Match the URL, not the header. netsh translates its headers; it does
-:: not translate the reservation it is printing.
-::
-:: An existing reservation is REPLACED, not kept (1.7.9): one made by an
-:: older version of this script belongs to Everyone, and keeping it would
-:: keep the hole. Deleting and re-adding is idempotent for a reservation
-:: that is already right.
 netsh http show urlacl url=http://+:!_PORT!/ 2>nul | findstr /i ":!_PORT!/" >nul 2>&1
-if not errorlevel 1 (
-    netsh http delete urlacl url=http://+:!_PORT!/ >nul 2>&1
-    echo  [OK] Replacing the existing URL reservation for http://+:!_PORT!/
-)
-
-:: SDDL form, with the SID found above; GX is the generic-execute right
-:: HTTP.SYS checks when handing out a prefix reservation.
-netsh http add urlacl url=http://+:!_PORT!/ sddl=D:(A;;GX;;;!GN_ACL_SID!) >nul 2>&1
-
-:: Verify instead of assuming. This is the entire point of the rewrite.
+if errorlevel 1 endlocal & goto :eof
+netsh http delete urlacl url=http://+:!_PORT!/ >nul 2>&1
 netsh http show urlacl url=http://+:!_PORT!/ 2>nul | findstr /i ":!_PORT!/" >nul 2>&1
 if errorlevel 1 (
-    echo  [ERROR] Could not add a URL ACL for http://+:!_PORT!/ ^(!_LABEL!^)
-    echo          Run this by hand in this window and paste the output:
-    echo            netsh http add urlacl url=http://+:!_PORT!/ sddl=D:^(A;;GX;;;!GN_ACL_SID!^)
-    echo          gobbonet.exe does not need it. Only the deprecated legacy
-    echo          PowerShell server does, and without it that falls back to
-    echo          this PC only.
+    echo  [OK] Removed the old URL reservation for http://+:!_PORT!/ ^(nothing uses it^)
 ) else (
-    echo  [OK] URL reservation added: http://+:!_PORT!/ ^(!_LABEL!, for !GN_ACL_USER! only^)
+    echo  [*] Could not remove the URL reservation for http://+:!_PORT!/
+    echo      Remove it from an Administrator window with:
+    echo          netsh http delete urlacl url=http://+:!_PORT!/
 )
 endlocal & goto :eof
 

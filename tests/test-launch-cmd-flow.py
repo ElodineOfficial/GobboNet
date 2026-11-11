@@ -53,10 +53,9 @@ for marker, what in [
     (':: MODEL DOWNLOAD MENU', 'the model menu'),
     (':: HARDWARE-AWARE MODEL SUGGESTION', 'hardware-aware recommendation'),
     (':: INTEGRITY CHECK', 'downloaded-model checksum'),
-    (':: STEP 3: START LLAMA-SERVER', 'server start'),
-    (':: STEP 3c: EMBEDDING SERVER', 'the optional embedding server'),
-    (':: STEP 5: FILE SERVER', 'the web server step'),
-    (':: STEP 6: GET LAN IP + LAUNCH BROWSER', 'LAN address + browser'),
+    (':: STEP 3: LLAMA-SERVER (gobbonet.exe starts it)', 'the server step'),
+    (':: STEP 3c: EMBEDDING MODEL', 'the optional embedding model download'),
+    (':: STEP 5: HAND OVER TO gobbonet.exe', 'the hand-over'),
 ]:
     ok(at(marker) > 0, 'STEP present: %s' % what, 'missing marker: %s' % marker)
 
@@ -69,12 +68,12 @@ print('\n=== the steps are still in order ===')
 order = [
     (':: STEP 1: CHECK FOR LLAMA-SERVER', 'engine'),
     (':: STEP 2: CHECK FOR MODEL GGUF', 'model'),
-    (':: STEP 3: START LLAMA-SERVER', 'server'),
-    (':: STEP 5: FILE SERVER', 'web'),
+    (':: STEP 3: LLAMA-SERVER (gobbonet.exe starts it)', 'server'),
+    (':: STEP 5: HAND OVER TO gobbonet.exe', 'hand-over'),
 ]
 positions = [(at(m), name) for m, name in order]
 ok(all(p > 0 for p, _ in positions), 'every ordered step was found')
-ok(positions == sorted(positions), 'engine -> model -> server -> web, in that order',
+ok(positions == sorted(positions), 'engine -> model -> server -> hand-over, in that order',
    'got: %s' % [n for _, n in sorted(positions)])
 
 print('\n=== the handover happens AFTER the questions, not instead of them ===')
@@ -109,33 +108,44 @@ ok(re.search(r'config set\s+access_secret\s+"!ACCESS_SECRET!"', SRC) is not None
 print('\n=== gobbonet runs IN this window ===')
 
 tail = SRC[handover:]
-ok(re.search(r'^"!GN!" --open --model', tail, re.M) is not None,
+# !GN_OPEN! is --open unless open_browser = false (1.8.0, PR #58).
+ok(re.search(r'^"!GN!" !GN_OPEN! --model', tail, re.M) is not None,
    'started directly, not with start /min',
    'a minimised window is how the engine output became invisible in the first place')
-ok('start /min' not in tail.split(':launch_legacy')[0],
+ok('start /min' not in tail,
    'nothing in the handover block is minimised or detached')
 
 print('\n=== gobbonet owns llama-server, so stand-down can work ===')
 
-skip = at(':: WHO STARTS llama-server')
-ok(skip > 0, 'the script steps aside from starting llama-server itself')
-ok(skip < at(':start_server_legacy'),
-   'and the old start is still there, below, as the fallback')
-ok('goto :start_embed' in SRC,
-   'while still reaching the embedding server step',
-   'skipping too far would silently drop RAG')
+skip = at(':: STEP 3: LLAMA-SERVER (gobbonet.exe starts it)')
+ok(skip > 0, 'the script leaves starting llama-server to gobbonet.exe')
+code = '\n'.join(l for l in SRC.splitlines()
+                 if not l.strip().startswith('::') and not l.strip().lower().startswith('rem '))
+chat_start = [l for l in code.splitlines() if '!SERVER_EXE!' in l and '--model' in l and '--embeddings' not in l]
+ok(not chat_start, 'and writes no chat llama-server command line of its own', chat_start)
+ok(':start_embed' in SRC and SRC.find('\n:start_embed') < SRC.find('\n:launch'),
+   'while still reaching the embedding model step before the hand-over',
+   'skipping too far would leave a first run with no embedding model')
+ok(not any('--embeddings' in l or 'start /min' in l for l in code.splitlines()),
+   'and starts no embedding server: gobbonet.exe does (1.8.0, #15)')
 
-print('\n=== the old path is still reachable ===')
+print('\n=== the legacy server is gone (1.8.0) ===')
 
-ok('GOBBONET_LEGACY_SERVER' in SRC, 'an env var forces the legacy server')
-ok(SRC.count(':start_server_legacy') >= 2 and SRC.count(':launch_legacy') >= 2,
-   'both legacy labels are defined and jumped to')
-ok(at('start /min powershell') > 0, 'fileserver.ps1 is still started on that path')
-for label in ['start_server_legacy', 'launch_legacy']:
-    goto_at = SRC.find('goto :' + label)
-    label_at = SRC.find('\n:' + label)
-    ok(goto_at > 0 and label_at > goto_at,
-       ':%s is defined after the jump to it' % label)
+for gone in (':start_server_legacy', ':launch_legacy', ':monitor_loop', ':http_probe', ':llm_state',
+             'fileserver.ps1', 'start /min powershell'):
+    ok(gone not in SRC, 'no %s left' % gone)
+legacy_lines = [l.strip() for l in code.splitlines() if 'GOBBONET_LEGACY_SERVER' in l]
+ok(len(legacy_lines) == 2 and legacy_lines[0] == 'if defined GOBBONET_LEGACY_SERVER (' and
+   legacy_lines[1].startswith('echo') and 'ignored' in code[code.find(legacy_lines[1]):][:300],
+   'GOBBONET_LEGACY_SERVER only gets the note that it is ignored', legacy_lines)
+missing = at('if not exist "%~dp0gobbonet.exe" goto :no_gobbonet_exe')
+ok(0 < missing < at(':: SECURITY -- access password'),
+   'a missing gobbonet.exe stops the run before the password prompt',
+   'answering every question only to find nothing to hand them to is the 1.7.9 trap')
+ok(SRC.count('goto :no_gobbonet_exe') == 2,
+   'and is checked again right before the hand-over (antivirus can take it mid-run)')
+ok(SRC.find('\n:no_gobbonet_exe') > 0 and 'goto :fatal' in SRC[SRC.find('\n:no_gobbonet_exe'):SRC.find('\n:fatal')],
+   'the message ends at :fatal, so the window stays open to be read')
 
 print('\n=== the .bat files are still CRLF ===')
 
@@ -149,6 +159,26 @@ for bat in sorted(ROOT.glob('*.bat')):
     lone = raw.count(b'\n') - crlf
     ok(crlf > 0 and lone == 0, '%s uses CRLF throughout' % bat.name,
        'CRLF=%d lone LF=%d' % (crlf, lone))
+
+print('\n=== no literal ! in a delayed-expansion script ===')
+
+# With EnableDelayedExpansion on, cmd treats every ! as the edge of a variable.
+# "echo  [!] Found !N! rules" printed "[N rules", and "All done!" lost its !.
+# Only !NAME! (and !NAME:...!) forms are allowed in code lines.
+for bat in sorted(ROOT.glob('*.bat')):
+    text = bat.read_bytes().decode('latin-1')
+    if 'EnableDelayedExpansion' not in text:
+        continue
+    stray = []
+    for n, line in enumerate(text.split('\r\n'), 1):
+        t = line.strip()
+        if t.startswith('::') or t.lower().startswith('rem') or '!' not in t:
+            continue
+        rest = re.sub(r'![A-Za-z_][A-Za-z0-9_]*(:[^!]*)?!', '', t)
+        rest = re.sub(r'!GGUF_CHOICE_%[A-Za-z_]+%!', '', rest)
+        if '!' in rest:
+            stray.append('%d: %s' % (n, t[:70]))
+    ok(not stray, '%s has no literal ! that delayed expansion would eat' % bat.name, stray)
 
 if fails:
     print('\nFAILED: %d' % len(fails))

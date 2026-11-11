@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Check a built GobboNet RPM against what the Fedora package has to be.
 #
-#   ./check-rpm.sh dist/gobbonet-*.rpm
+#   bash ./check-rpm.sh dist/gobbonet-*.rpm
 #
 # build-rpm.sh runs this on every package it makes, and removes one that fails
 # from dist/. It also runs on its own, against any GobboNet .rpm, on any host

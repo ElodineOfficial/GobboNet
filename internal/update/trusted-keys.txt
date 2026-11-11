@@ -1,0 +1,22 @@
+# Public keys whose signature on gobbonet-update.json lets UPDATE NOW install
+# a release (ABOUT > CHECK FOR UPDATES). Built into the program.
+#
+# One per line:
+#
+#   ed25519 <base64 public key> <comment>
+#
+# Made with `gobbonet update keygen`, which prints the line to paste here and
+# writes the private key to a file that must never be committed, uploaded or
+# put in a release. docs/UPDATES.md has the whole procedure.
+#
+# With no key here a build can still say that a newer release exists, but it
+# installs nothing and points at the Releases page instead. A build only
+# trusts the keys it was built with, so a key has to be here BEFORE the build
+# that should be able to install updates is made.
+#
+# To replace a key, add the new one, release a build carrying both, and
+# remove the old one a release later: a build can only check a signature
+# against keys it already has.
+
+# The maintainer's key, from 1.8.0. Made 2026-11-10 with gobbonet update keygen.
+ed25519 ogc+Ci0O5/PyZMVGxEBFpuDU7Qxb1JP7SeliM2bj/zg= gobbonet-update 2026-11-10

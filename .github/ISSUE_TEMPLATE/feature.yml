@@ -1,0 +1,66 @@
+name: Feature request
+description: Something GobboNet could do, or do better.
+title: "[Idea] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        GobboNet stays private, offline and secure by default, and easy without reading a manual. A good idea fits all three, and the questions below help check that. Half-finished thoughts are welcome too, here or on the [GobboNet Discord](https://discord.gg/rcmN8uEbaa).
+
+  - type: textarea
+    id: goal
+    attributes:
+      label: What do you want to do?
+      description: The thing you are trying to get done, rather than the feature you imagine for it.
+    validations:
+      required: true
+
+  - type: textarea
+    id: tried
+    attributes:
+      label: What have you tried?
+      description: How you do it today, or what stopped you.
+    validations:
+      required: false
+
+  - type: dropdown
+    id: default
+    attributes:
+      label: On for everyone, or a setting?
+      options:
+        - "On by default for everyone"
+        - "A setting, on by default"
+        - "A setting, off by default"
+        - "Not sure"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: network
+    attributes:
+      label: Would it send anything off this PC?
+      description: GobboNet sends nothing unless the user asks for it. If the answer is yes, say what and where below.
+      options:
+        - "No"
+        - "Yes, when the user asks for it (say what and where below)"
+        - "Not sure"
+    validations:
+      required: true
+
+  - type: textarea
+    id: details
+    attributes:
+      label: Anything else
+      description: Examples, other apps that do it well, sketches, links.
+    validations:
+      required: false
+
+  - type: textarea
+    id: ai-assist
+    attributes:
+      label: Did an AI assistant help with this request? (optional)
+      description: |
+        Entirely optional, and never a gate. If one did, it helps to say which assistant, what a person checked, and which claims are still unverified.
+    validations:
+      required: false

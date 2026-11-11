@@ -1,13 +1,14 @@
 // Package supervisor owns the local llama-server process: starting it at boot,
 // restarting it when it dies, and hot-swapping the loaded GGUF on request.
 //
-// On Windows this logic lived in two places at once — launch.bat's monitor loop
-// and fileserver.ps1's swap handler — which is exactly the drift the Go port
-// exists to remove. Here it is one state machine in one process.
+// Up to 1.7.9 this logic could live in two places at once on Windows —
+// launch.bat's monitor loop and the PowerShell server's swap handler — which is
+// exactly the drift the Go port existed to remove. 1.8.0 removed both; it is one
+// state machine in one process.
 //
 // Only local mode uses this. In remote mode llama.cpp belongs to somebody else
-// and /swap-model answers 503, which is the same honest answer fileserver.ps1
-// gave whenever launch.bat had not handed it a server executable.
+// and /swap-model answers 503, which is the same honest answer the PowerShell
+// server gave whenever launch.bat had not handed it a server executable.
 package supervisor
 
 import (
@@ -20,10 +21,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/ElodineOfficial/GobboNet/internal/engine"
 	"github.com/ElodineOfficial/GobboNet/internal/models"
 )
 
@@ -106,6 +109,14 @@ type Options struct {
 	// Only set these when a model's embedded template is known-broken.
 	ChatTemplateName string
 	ChatTemplateFile string
+
+	// Device is the --device argument (1.8.0, #72): "" leaves the choice to
+	// llama.cpp, "none" is CPU only, otherwise device IDs. Already resolved
+	// against the engine's device list (engine.ResolveDevice); changed later
+	// through SetDevice, like Tuning.
+	Device string
+	// PrimeOffload sets engine.PrimeEnv on the engine process (Linux only).
+	PrimeOffload bool
 }
 
 // GPUConfirmed reports that the running engine said layers reached the GPU.
@@ -131,6 +142,17 @@ type Status struct {
 	// LoadTimeoutSeconds is how long this server lets a load run. The chat
 	// page waits that long plus a margin before it gives up on its own.
 	LoadTimeoutSeconds int `json:"load_timeout_seconds,omitempty"`
+	// Busy is true while a reply is being written for any device (1.8.0,
+	// #52). A page that wants to switch models on its own -- a chat that
+	// remembers another model -- waits for it rather than cutting a reply off.
+	Busy bool `json:"busy,omitempty"`
+	// When a load failed (1.8.0, #67): Cause is a key from cause.go, Advice
+	// the one plain sentence for it, and Log names the engine's own log. The
+	// raw line stays in Message, for a "details" toggle. Log is the file's
+	// name only: the folder is this PC's, and gobbonet doctor shows it there.
+	Cause  string `json:"cause,omitempty"`
+	Advice string `json:"advice,omitempty"`
+	Log    string `json:"log,omitempty"`
 }
 
 // Supervisor manages one llama-server process.
@@ -155,7 +177,10 @@ type Supervisor struct {
 	// tuning is opts.Tuning as it stands now. Guarded by mu because /perf
 	// rewrites it from a request goroutine while a swap may be reading it.
 	tuning Tuning
-	cmd    *exec.Cmd
+	// device and primeOffload: see Options.Device. Guarded by mu.
+	device       string
+	primeOffload bool
+	cmd          *exec.Cmd
 	// pgid is the process group captured at launch. Kept separately from cmd
 	// because it stays valid after the reaper has Wait()ed the child, which is
 	// precisely when surviving helpers still need killing.
@@ -174,8 +199,8 @@ type Supervisor struct {
 
 	// engine watches the output going past for the two facts a user needs out
 	// of it: whether layers reached the GPU, and whether VRAM is tight. Both
-	// were reported on screen by launch.bat's STEP 3b and by nothing at all on
-	// this path. Reset per launch, like the stderr ring beside it.
+	// were reported on screen by launch.bat's old STEP 3b (removed in 1.8.0)
+	// and by nothing at all on this path. Reset per launch, like the stderr ring beside it.
 	engine *engineWatch
 
 	// console is the prefixing writer for the running process, kept so the
@@ -197,6 +222,15 @@ type Supervisor struct {
 	// OnReady runs after a model finishes loading, so caches keyed on model
 	// identity can be dropped.
 	OnReady func()
+
+	// OnStandDown and OnWake run when idle stand-down unloads the model and
+	// when the next message brings it back (1.8.0, #15): the embedding server
+	// stands down and comes back with it. OnStandDown runs after the model is
+	// down, OnWake after it has loaded, so the chat model is fitted to the GPU
+	// first. Both run with this supervisor's transition lock held, so they must
+	// not call back into it.
+	OnStandDown func()
+	OnWake      func()
 }
 
 // New builds a Supervisor. The llm_url must point at the loopback port this
@@ -216,15 +250,17 @@ func New(opts Options) (*Supervisor, error) {
 	}
 
 	return &Supervisor{
-		opts:     opts,
-		shutdown: make(chan struct{}),
-		tuning:   opts.Tuning,
-		host:     host,
-		port:     port,
-		stderr:   newRingBuffer(stderrRingSize),
-		engine:   newEngineWatch(),
-		client:   &http.Client{Timeout: 3 * time.Second},
-		status:   Status{Phase: PhaseIdle},
+		opts:         opts,
+		shutdown:     make(chan struct{}),
+		tuning:       opts.Tuning,
+		device:       opts.Device,
+		primeOffload: opts.PrimeOffload,
+		host:         host,
+		port:         port,
+		stderr:       newRingBuffer(stderrRingSize),
+		engine:       newEngineWatch(),
+		client:       &http.Client{Timeout: 3 * time.Second},
+		status:       Status{Phase: PhaseIdle},
 	}, nil
 }
 
@@ -245,6 +281,22 @@ func (s *Supervisor) SetTuning(t Tuning) {
 	s.tuning = t
 }
 
+// Device is the --device argument the next start will use ("" = automatic),
+// and whether the PRIME pair goes with it.
+func (s *Supervisor) Device() (string, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.device, s.primeOffload
+}
+
+// SetDevice changes the GPU the NEXT llama-server start uses, as SetTuning
+// does: the page then restarts the model through the swap path.
+func (s *Supervisor) SetDevice(arg string, prime bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.device, s.primeOffload = arg, prime
+}
+
 // CurrentFile is the GGUF basename currently loaded, or "".
 func (s *Supervisor) CurrentFile() string {
 	s.mu.Lock()
@@ -258,6 +310,7 @@ func (s *Supervisor) Status() Status {
 	defer s.mu.Unlock()
 	st := s.status
 	st.LoadTimeoutSeconds = int(s.loadTimeout() / time.Second)
+	st.Busy = s.inFlight > 0
 	return st
 }
 
@@ -282,17 +335,28 @@ func (s *Supervisor) setStatus(phase, file, name, message string, startedAt int6
 	}
 }
 
+// setFailure publishes a failed load: the error phase with message as the
+// reason, plus the cause err carries, if any, and its plain sentence.
+func (s *Supervisor) setFailure(file, name, message string, startedAt int64, err error) {
+	s.setStatus(PhaseError, file, name, message, startedAt)
+	cause := causeOf(err)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.status.Cause = cause
+	s.status.Advice = CauseAdvice(cause)
+	if s.opts.LogFile != "" {
+		s.status.Log = filepath.Base(s.opts.LogFile)
+	}
+}
+
 // --- Command construction --------------------------------------------------
 
 // BuildArgs assembles the llama-server command line for a model record.
 //
-// This is the ONLY builder on the Go path, so the .deb and the Windows
-// installer start llama-server identically. launch.bat's :start_server block
-// and Build-LaunchScript are the legacy batch/PowerShell equivalents; those two
-// used to exist separately and could disagree, whereas here the record comes
-// from the same classifier in both cases.
-//
-// It matches launch.bat flag for flag, including -lv.
+// This is the ONLY builder, so every package starts llama-server identically.
+// Up to 1.7.9 launch.bat's :start_server block and the PowerShell server's
+// Build-LaunchScript were batch/PowerShell equivalents that could disagree with
+// it; 1.8.0 removed both, and launch.bat now starts only the embedding server.
 //
 // -lv was left off until 1.7.5, on the reasoning that launch.bat only raised
 // llama.cpp's verbosity so its STEP 3b could grep the log for
@@ -371,6 +435,7 @@ func (s *Supervisor) BuildArgs(rec models.Record, modelPath string) []string {
 	// Read the tuning once, so a /perf write landing mid-assembly cannot put
 	// one model's context size next to another's KV cache type.
 	tune := s.Tuning()
+	device, _ := s.Device()
 
 	gpuLayers := itoaInt(tune.GPULayers)
 	if tune.GPULayers == -1 {
@@ -391,6 +456,11 @@ func (s *Supervisor) BuildArgs(rec models.Record, modelPath string) []string {
 	}
 	if tune.GPULayers == -1 {
 		args = append(args, "--fit", "on", "--fit-target", itoaInt(s.fitTargetMiB(rec)), "--fit-ctx", itoaInt(tune.CtxSize))
+	}
+	// gpu_device (1.8.0, #72): one argument, already checked against the
+	// engine's own device list. Absent means llama.cpp chooses.
+	if device != "" {
+		args = append(args, "--device", device)
 	}
 	// A built-in template NAME only means something to llama.cpp's legacy
 	// (non-Jinja) formatter. With Jinja on, llama-server takes the
@@ -463,15 +533,13 @@ func (s *Supervisor) start(file string) error {
 	if blocked {
 		return fmt.Errorf("previous engine has not been released, or server is shutting down")
 	}
-	conn, err := net.DialTimeout("tcp", net.JoinHostPort(s.host, s.port), 200*time.Millisecond)
-	if err == nil {
-		conn.Close()
+	if addrInUse(net.JoinHostPort(s.host, s.port)) {
 		return fmt.Errorf("engine port is already occupied; stop the existing server first")
 	}
 
 	modelPath := filepath.Join(s.opts.ModelDir, file)
 	if _, err := os.Stat(modelPath); err != nil {
-		return fmt.Errorf("model %s not found in %s", file, s.opts.ModelDir)
+		return &LoadError{Cause: CauseFileNotFound, Line: fmt.Sprintf("model %s not found in %s", file, s.opts.ModelDir)}
 	}
 
 	rec := models.IdentifyFile(modelPath)
@@ -481,7 +549,10 @@ func (s *Supervisor) start(file string) error {
 	}
 
 	cmd := exec.Command(s.opts.ServerExe, args...)
-	configureProcessGroup(cmd)
+	// gpu_prime_offload (1.8.0, #72): the fixed pair, on this process only.
+	if _, prime := s.Device(); prime && runtime.GOOS == "linux" {
+		cmd.Env = append(os.Environ(), engine.PrimeEnv...)
+	}
 
 	s.stderr.Reset()
 	s.engine.Reset()
@@ -511,6 +582,9 @@ func (s *Supervisor) start(file string) error {
 		logFile = f
 		errSinks = append(errSinks, logFile)
 		outSinks = append(outSinks, logFile)
+		// Where this run begins, so gobbonet doctor can read the last load
+		// alone out of a log that keeps every run (1.8.0, #67).
+		fmt.Fprintf(logFile, "\n%s%s at %s ===\n", logRunMarker, file, time.Now().Format(time.RFC3339))
 	}
 	if console != nil {
 		errSinks = append(errSinks, console)
@@ -533,30 +607,22 @@ func (s *Supervisor) start(file string) error {
 	if s.opts.EngineOutputFull {
 		log.Printf("[swap] command: %s %s", s.opts.ServerExe, strings.Join(args, " "))
 	}
-	if err := cmd.Start(); err != nil {
+	// Its own process group, tied to this process's lifetime so a kill that
+	// runs no Go code here does not leave llama-server holding VRAM and the
+	// port (managed.go, shared with the embedding server).
+	pgid, err := spawnTree(cmd, "[swap]", "llama-server")
+	if err != nil {
 		if logFile != nil {
 			logFile.Close()
 		}
-		return fmt.Errorf("could not start llama-server: %w", err)
+		return err
 	}
 
 	exited := make(chan struct{})
 
-	// Tie the child's tree to this process's lifetime, so a kill that runs no
-	// Go code here does not leave llama-server holding VRAM and the port. A
-	// no-op on Unix; see killjob_unix.go for why.
-	//
-	// Failure is logged rather than fatal: this is a backstop for abnormal
-	// exits, and losing it does not stop a model from running. Every explicit
-	// cleanup path is unaffected.
-	if err := superviseTree(cmd); err != nil {
-		log.Printf("[swap] could not tie llama-server to this process's lifetime: %v", err)
-		log.Printf("[swap] it will still be stopped normally; a forced kill of gobbonet may leave it running")
-	}
-
 	s.mu.Lock()
 	s.cmd = cmd
-	s.pgid = processGroupID(cmd)
+	s.pgid = pgid
 	s.current = file
 	s.exited = exited
 	s.mu.Unlock()
@@ -627,24 +693,14 @@ func (s *Supervisor) restartAfterCrash(file string) {
 // was selecting a model by hand. Choosing a model at any point still takes
 // over immediately (Swap ends this loop through `swapping`).
 func (s *Supervisor) restartGeneration(file string, generation uint64) {
-	backoff := s.opts.RecoveryBackoff
-	if backoff <= 0 {
-		backoff = time.Second
-	}
-	const maxBackoff = 2 * time.Minute
-	for attempt := 1; ; attempt++ {
-		select {
-		case <-s.shutdown:
-			return
-		case <-time.After(backoff):
-		}
+	recoveryLoop(s.opts.RecoveryBackoff, s.shutdown, func(attempt int) bool {
 		s.opMu.Lock()
 		s.mu.Lock()
 		busy := s.closed || s.swapping || s.stopping || s.stoodDown || s.generation != generation
 		s.mu.Unlock()
 		if busy {
 			s.opMu.Unlock()
-			return
+			return true
 		}
 		log.Printf("[swap] restart attempt %d for %s", attempt, file)
 		err := s.stop()
@@ -659,7 +715,7 @@ func (s *Supervisor) restartGeneration(file string, generation uint64) {
 			// The reason goes to the console as well as /swap-status: this loop
 			// can run for a long time, and "attempt 7" with no cause is noise.
 			log.Printf("[swap] restart failed: %v", err)
-			s.setStatus(PhaseError, file, file, err.Error(), time.Now().Unix())
+			s.setFailure(file, file, err.Error(), time.Now().Unix(), err)
 		} else {
 			log.Printf("[swap] llama-server recovered")
 			s.setStatus(PhaseReady, file, file, "Ready", time.Now().Unix())
@@ -668,13 +724,8 @@ func (s *Supervisor) restartGeneration(file string, generation uint64) {
 			}
 		}
 		s.opMu.Unlock()
-		if err == nil {
-			return
-		}
-		if backoff *= 2; backoff > maxBackoff {
-			backoff = maxBackoff
-		}
-	}
+		return err == nil
+	})
 }
 
 // load owns cleanup even if the child stays alive but never becomes healthy.
@@ -735,105 +786,18 @@ func (s *Supervisor) stop() error {
 	if (cmd == nil || cmd.Process == nil) && pgid == 0 {
 		return nil
 	}
-	if cmd == nil || cmd.Process == nil {
-		// No leader handle, but possibly still an owned group of helpers.
-		if err := s.reapGroup(pgid); err != nil {
-			return err
-		}
-		return s.waitPortFree()
-	}
 
-	// Has the process we launched already gone? That is the normal case on the
-	// rollback path — the model we were asked to load failed and died before we
-	// got here — so its exit is not worth reporting as a failure.
-	//
-	// It is emphatically NOT a reason to stop here. The leader exiting says
-	// nothing about the rest of its group: llama-server's helpers get reparented
-	// to init and keep running, still holding VRAM. Returning early at this point
-	// is what leaves the next model unable to allocate a backend buffer. Whatever
-	// the leader did, the group still has to be swept.
-	leaderGone := false
-	select {
-	case <-exited:
-		leaderGone = true
-	default:
-	}
-
-	if !leaderGone {
-		if err := terminateGroup(pgid, false); err != nil {
-			log.Printf("[swap] SIGTERM to process group failed: %v", err)
-		}
-		select {
-		case <-exited:
-		case <-time.After(gracePeriod):
-			log.Printf("[swap] llama-server did not exit in %s; forcing", gracePeriod)
-		}
-	}
-
-	if err := s.reapGroup(pgid); err != nil {
+	// No leader handle means possibly still an owned group of helpers: sweep
+	// it. Otherwise the whole sequence, including when the leader has already
+	// gone -- the normal case on the rollback path, where the model we were
+	// asked to load failed and died before we got here. Its helpers can still
+	// be holding VRAM; returning early is what leaves the next model unable to
+	// allocate a backend buffer (managed.go, endTree).
+	haveLeader := cmd != nil && cmd.Process != nil
+	if err := endTree(pgid, exited, haveLeader, "[swap]", "llama-server"); err != nil {
 		return err
 	}
-	return s.waitPortFree()
-}
-
-// reapGroup ensures nothing from the launched process group is left running.
-//
-// Membership, not the leader's exit status, is the completion condition — a
-// helper that ignored SIGTERM, or one orphaned when llama-server crashed, is
-// invisible to cmd.Wait() and to any walk of our own descendants, but it still
-// holds the GPU memory the next model needs.
-func (s *Supervisor) reapGroup(pgid int) error {
-	if pgid <= 0 || !groupAlive(pgid) {
-		return nil
-	}
-
-	// The leader may already have taken the polite signal; members still here
-	// have either ignored it or never received one.
-	if err := terminateGroup(pgid, false); err != nil {
-		log.Printf("[swap] SIGTERM to process group failed: %v", err)
-	}
-	if waitGroupGone(pgid, gracePeriod) {
-		return nil
-	}
-
-	log.Printf("[swap] process group %d outlived SIGTERM; forcing", pgid)
-	if err := terminateGroup(pgid, true); err != nil {
-		log.Printf("[swap] SIGKILL to process group failed: %v", err)
-	}
-	if !waitGroupGone(pgid, gracePeriod) {
-		// Worth shouting about: this is the state in which a swap will fail to
-		// allocate VRAM, and the cause is not something the next error message
-		// will explain.
-		return fmt.Errorf("process group %d survived termination; refusing to load another model", pgid)
-	}
-	return nil
-}
-
-// waitGroupGone polls until the group is empty or the deadline passes.
-func waitGroupGone(pgid int, within time.Duration) bool {
-	deadline := time.Now().Add(within)
-	for time.Now().Before(deadline) {
-		if !groupAlive(pgid) {
-			return true
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	return !groupAlive(pgid)
-}
-
-// waitPortFree blocks until nothing accepts on the upstream port.
-func (s *Supervisor) waitPortFree() error {
-	deadline := time.Now().Add(portFreeTimeout)
-	address := net.JoinHostPort(s.host, s.port)
-	for time.Now().Before(deadline) {
-		conn, err := net.DialTimeout("tcp", address, 200*time.Millisecond)
-		if err != nil {
-			return nil
-		}
-		conn.Close()
-		time.Sleep(250 * time.Millisecond)
-	}
-	return fmt.Errorf("port %s is still occupied; refusing to start another engine", address)
+	return waitAddrFree(net.JoinHostPort(s.host, s.port))
 }
 
 // waitHealthy polls the upstream's /health until it answers 200.
@@ -851,8 +815,8 @@ func (s *Supervisor) waitHealthy(deadline time.Time) error {
 		// now turns a 3-minute wait into an immediate, accurate error.
 		select {
 		case <-exited:
-			if msg := s.stderr.LastError(); msg != "" {
-				return fmt.Errorf("%s", msg)
+			if f := s.stderr.failure(); f != nil {
+				return f
 			}
 			return fmt.Errorf("llama-server exited during startup")
 		default:
@@ -871,8 +835,8 @@ func (s *Supervisor) waitHealthy(deadline time.Time) error {
 		case <-time.After(healthProbeInterval):
 		}
 	}
-	if msg := s.stderr.LastError(); msg != "" {
-		return fmt.Errorf("%s", msg)
+	if f := s.stderr.failure(); f != nil {
+		return f
 	}
 	// The configured timeout, not the default: the message has to name the
 	// number the user can change, and where.
@@ -907,7 +871,7 @@ func (s *Supervisor) Boot(preferred string) error {
 
 	log.Printf("[swap] LOADING %s", file)
 	if err := s.load(file); err != nil {
-		s.setStatus(PhaseError, file, file, err.Error(), startedAt)
+		s.setFailure(file, file, err.Error(), startedAt, err)
 		return err
 	}
 
@@ -930,19 +894,54 @@ func (s *Supervisor) Boot(preferred string) error {
 // ErrSwapInFlight means a swap is already running.
 var ErrSwapInFlight = fmt.Errorf("a swap is already in progress")
 
+// ErrBusy is SwapAuto's answer while a reply is being written (1.8.0, #52).
+// One engine serves every device, and a swap stops it, so a switch nobody
+// clicked must never end someone's reply -- on this device or another.
+var ErrBusy = fmt.Errorf("a reply is being written right now, so the model was not switched")
+
 // Swap changes the loaded model. It returns as soon as the swap is dispatched;
 // the client polls /swap-status for the outcome.
-func (s *Supervisor) Swap(file string) error {
+//
+// file is a name in the models folder and nothing else (1.8.0). It arrives
+// from any signed-in device, and from cards and synced chats once a character
+// can name its model (#52). Until 1.8.0 it was joined onto the folder
+// unchecked, so "../elsewhere/x.gguf" was started from outside it. Links inside
+// the folder still work: USE IT puts found models there that way.
+//
+// Neither error names the models folder's path. The answer goes to whichever
+// device asked, and where models live on this PC is not its business; the
+// server's own log has the path.
+func (s *Supervisor) Swap(file string) error { return s.swap(file, false) }
+
+// SwapAuto is Swap for a switch the page makes on its own: opening a chat
+// that remembers another model, or a character linked to one (1.8.0, #52).
+// It is refused with ErrBusy while any request is in flight, checked under the
+// same lock that starts the swap, so no reply can begin in between. A swap
+// someone picked from the model menu is Swap, and behaves as it always has.
+func (s *Supervisor) SwapAuto(file string) error { return s.swap(file, true) }
+
+func (s *Supervisor) swap(file string, auto bool) error {
+	if err := models.CheckFileName(file); err != nil {
+		log.Printf("[swap] refused %q: %v", truncate(file, 200), err)
+		return fmt.Errorf("not a model file name: send just the file's name in the models folder, ending in .gguf")
+	}
 	modelPath := filepath.Join(s.opts.ModelDir, file)
 	info, err := os.Stat(modelPath)
 	if err != nil || !info.Mode().IsRegular() {
-		return fmt.Errorf("model %q not found in %s", file, s.opts.ModelDir)
+		log.Printf("[swap] %s: not a model file in %s", file, s.opts.ModelDir)
+		return fmt.Errorf("model %q not found in the models folder", file)
 	}
 
 	s.mu.Lock()
 	if s.swapping || s.closed {
 		s.mu.Unlock()
 		return ErrSwapInFlight
+	}
+	if auto && s.inFlight > 0 {
+		n := s.inFlight
+		s.mu.Unlock()
+		log.Printf("[swap] automatic switch to %s refused: %d request(s) in flight", file, n)
+		return ErrBusy
 	}
 	s.swapping = true
 	previous := s.current
@@ -977,7 +976,7 @@ func (s *Supervisor) runSwap(file, name, previous string, startedAt int64) {
 	began := time.Now()
 	log.Printf("[swap] LOADING %s", file)
 	if err := s.load(file); err != nil {
-		s.rollback(previous, file, name, startedAt, err.Error())
+		s.rollback(previous, file, name, startedAt, err)
 		return
 	}
 
@@ -998,22 +997,26 @@ func (s *Supervisor) runSwap(file, name, previous string, startedAt int64) {
 // server at all — every subsequent request 502s and the only way back is a
 // restart. Returning to the model that was working thirty seconds ago is almost
 // always what they want.
-func (s *Supervisor) rollback(previous, failedFile, failedName string, startedAt int64, reason string) {
+func (s *Supervisor) rollback(previous, failedFile, failedName string, startedAt int64, loadErr error) {
+	reason := loadErr.Error()
 	log.Printf("[swap] %s failed to load: %s", failedFile, reason)
+	if advice := CauseAdvice(causeOf(loadErr)); advice != "" {
+		log.Printf("[swap] %s", advice)
+	}
 	if err := s.stop(); err != nil {
-		s.setStatus(PhaseError, failedFile, failedName, reason+"; "+err.Error(), startedAt)
+		s.setFailure(failedFile, failedName, reason+"; "+err.Error(), startedAt, loadErr)
 		return
 	}
 
 	if previous == "" || previous == failedFile {
-		s.setStatus(PhaseError, failedFile, failedName, reason, startedAt)
+		s.setFailure(failedFile, failedName, reason, startedAt, loadErr)
 		return
 	}
 
 	log.Printf("[swap] rolling back to %s", previous)
 	if err := s.load(previous); err != nil {
-		s.setStatus(PhaseError, failedFile, failedName,
-			fmt.Sprintf("%s (rollback to %s also failed: %v)", reason, previous, err), startedAt)
+		s.setFailure(failedFile, failedName,
+			fmt.Sprintf("%s (rollback to %s also failed: %v)", reason, previous, err), startedAt, loadErr)
 		return
 	}
 
@@ -1023,8 +1026,8 @@ func (s *Supervisor) rollback(previous, failedFile, failedName string, startedAt
 	// The phase is 'error' because the swap the user asked for did not happen,
 	// but the message says the server is still usable — which is the part they
 	// need to know before deciding what to do next.
-	s.setStatus(PhaseError, failedFile, failedName,
-		fmt.Sprintf("%s — rolled back to %s, which is still running.", reason, previous), startedAt)
+	s.setFailure(failedFile, failedName,
+		fmt.Sprintf("%s — rolled back to %s, which is still running.", reason, previous), startedAt, loadErr)
 }
 
 // Shutdown stops the managed process.

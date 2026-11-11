@@ -15,6 +15,8 @@
  *      case-insensitive names, $ in macro text taken literally.
  *   D. Defaults and reserved names; seeding onto existing installs.
  *   E. The editor's hint and preview.
+ *   F. Names typed with braces (1.8.0, issue #69, PR #73): {{skip}} saves as
+ *      skip instead of being refused; what is still wrong is still refused.
  */
 import fs from 'fs';
 import vm from 'vm';
@@ -45,7 +47,7 @@ function load(macros) {
     slice(STATE, 'const DEFAULT_MACROS', '\n];') + '\n];\nthis.DEFAULT_MACROS = DEFAULT_MACROS; this.RESERVED_MACROS = RESERVED_MACROS;', ctx);
   vm.runInContext('const AUTO_CONTINUE_TEXT = "[auto]";\n' + slice(PERS, 'function getCurrentDateTimeString()', 'function applyActiveCardBackground()'), ctx);
   const M = read('js/20-macros.js');
-  vm.runInContext(slice(M, 'function updateMacroPreview()', '\nfunction editMacro('), ctx);
+  vm.runInContext(slice(M, 'function normaliseTrigger(', '\nfunction editMacro('), ctx);
   return ctx;
 }
 const defaults = () => load(null).DEFAULT_MACROS.map(m => ({ ...m }));
@@ -126,6 +128,103 @@ console.log('\n=== E. the editor ===');
   const html = read('chat.html');
   ok(/oninput="updateMacroPreview\(\)"/.test(html) && /id="macro-preview"/.test(html), 'the preview updates as you type');
   ok(/<code>\{\{SYSTEM: Foo bar\}\}<\/code>, or <code>\{\{SYSTEM:\}\} Foo bar<\/code>/.test(html) && /<code>\{\{input1\}\}<\/code>/.test(html), 'the "?" note explains both forms and the placeholders');
+}
+
+console.log('\n=== F. names typed with braces (issue #69) ===');
+{
+  // The real saveMacroEdit()/cancelMacroEdit(), with the page's globals stubbed.
+  const M = read('js/20-macros.js');
+  const editor = macros => {
+    const c = load(macros);
+    c.alerts = []; c.saves = 0;
+    c.alert = m => c.alerts.push(String(m));
+    c.saveState = () => { c.saves++; };
+    c.renderMacroList = () => {};
+    c.els['macro-editor'] = { style: {} };
+    c.els['macro-add-btn'] = { style: {} };
+    vm.runInContext('let _editingMacroTrigger = null;\n' + slice(M, 'function saveMacroEdit()', '\nfunction deleteMacro('), c);
+    return c;
+  };
+  const type = (c, typed, text = 'Skip ahead.') => {
+    c.els['macro-trigger'] = { value: typed, readOnly: false };
+    c.els['macro-text'] = { value: text };
+    c.els['macro-trigger-note'] = { textContent: '', hidden: true };
+    c.els['macro-preview'] = { textContent: '' };
+    return c;
+  };
+  const save = (macros, typed, text) => { const c = type(editor(macros), typed, text); c.saveMacroEdit(); return c; };
+  const names = c => (c.state.macros || []).map(m => m.trigger);
+
+  const n = load([]).normaliseTrigger;
+  const table = [['{{skip}}', 'skip'], ['{{ skip }}', 'skip'], ['  {{skip}}  ', 'skip'], ['skip:', 'skip'],
+    ['{{SYSTEM:}}', 'SYSTEM'], ['{{SYSTEM: }}', 'SYSTEM'], ['{{skip', 'skip'], ['skip}}', 'skip'],
+    ['skip', 'skip'], ['{{{{skip}}}}', '{{skip}}'], ['{{a b}}', 'a b'], ['', ''], [null, '']];
+  const wrong = table.filter(([raw, want]) => n(raw) !== want);
+  ok(wrong.length === 0, 'normaliseTrigger takes off one pair of braces and a trailing colon, and trims', wrong.map(([raw]) => [raw, n(raw)]));
+
+  for (const typed of ['{{skip}}', '{{ skip }}', 'skip:', '{{skip:}}']) {
+    const c = save([], typed);
+    ok(names(c).join() === 'skip' && c.alerts.length === 0 && c.saves === 1,
+       `"${typed}" saves as the macro skip, with no alert (1.7.9 refused it)`, { names: names(c), alerts: c.alerts });
+  }
+  {
+    const c = save([], '{{SYSTEM:}}');
+    ok(names(c).join() === 'SYSTEM' && c.alerts.length === 0, '{{SYSTEM:}}, copied from the 1.7.9 notes, saves as SYSTEM', c.alerts);
+  }
+  {
+    const c = save([], 'skip');
+    ok(names(c).join() === 'skip' && c.saves === 1, 'a bare name saves exactly as before');
+  }
+  {
+    const c = save([], '{{a b}}');
+    ok(names(c).length === 0 && c.saves === 0, '{{a b}} is still refused: a space is not allowed');
+    ok(/letters, numbers, and underscores\. Enter the name without braces\.\nExample: rosebud becomes \{\{rosebud\}\}/.test(c.alerts.join()), 'with PR #73\'s wording and the rosebud example', c.alerts);
+    ok(c.els['macro-trigger'].value === 'a b', 'and the box shows the name that was checked, without the braces', c.els['macro-trigger'].value);
+  }
+  for (const [typed, what] of [['{{char}}', 'a built-in name'], ['{{ USER }}', 'a built-in name in any case'], ['{{input1}}', 'a placeholder name']]) {
+    const c = save([], typed);
+    ok(names(c).length === 0 && /built-in macro and cannot be overridden/.test(c.alerts.join()), `${typed}, ${what}, is still refused`, c.alerts);
+  }
+  {
+    const c = save([], '{{{{skip}}}}');
+    ok(names(c).length === 0 && c.alerts.length === 1, 'only one pair comes off: {{{{skip}}}} is refused');
+  }
+  {
+    const c = save(defaults(), '{{system:}}');
+    ok(names(c).filter(t => t.toLowerCase() === 'system').length === 1 && /already exists/.test(c.alerts.join()),
+       'a braced name that matches an existing macro is refused as a duplicate, not added twice', c.alerts);
+  }
+  {
+    const c = editor([{ trigger: 'skip', text: 'old' }]);
+    type(c, 'skip', 'new text');
+    c.els['macro-trigger'].readOnly = true;
+    vm.runInContext('_editingMacroTrigger = "skip";', c);
+    c.saveMacroEdit();
+    ok(c.state.macros.length === 1 && c.state.macros[0].text === 'new text', 'editing an existing macro still updates its text');
+  }
+
+  // The note under the field, and the preview.
+  {
+    const c = type(load([]), '{{skip}}');
+    c.updateMacroPreview();
+    ok(c.els['macro-trigger-note'].hidden === false && c.els['macro-trigger-note'].textContent === 'Saves as {{skip}}. Type the word only; the braces are added for you.',
+       'typing {{skip}} shows one line saying it saves as {{skip}}', c.els['macro-trigger-note']);
+    ok(c.els['macro-preview'].textContent.startsWith('Preview — {{skip: your text here}} becomes:') && !/\{\{\{\{/.test(c.els['macro-preview'].textContent),
+       'and the preview uses the bare name, never {{{{skip}}: ...}}', c.els['macro-preview'].textContent);
+    type(c, 'skip'); c.updateMacroPreview();
+    ok(c.els['macro-trigger-note'].hidden === true && c.els['macro-trigger-note'].textContent === '', 'a bare name shows no note');
+    type(c, '{{a b}}'); c.updateMacroPreview();
+    ok(c.els['macro-trigger-note'].hidden === true, 'nor does a name that would be refused anyway');
+  }
+  {
+    const c = editor([]);
+    type(c, '{{skip}}'); c.updateMacroPreview(); c.cancelMacroEdit();
+    ok(c.els['macro-trigger-note'].hidden === true && c.els['macro-trigger-note'].textContent === '', 'Cancel clears the note');
+  }
+
+  const html = read('chat.html');
+  ok(/Enter the name without braces; for example, <code>rosebud<\/code> becomes <code>\{\{rosebud\}\}<\/code> when saved\./.test(html), 'the editor keeps PR #73\'s hint, with the rosebud example');
+  ok(/<input type="text" id="macro-trigger"[^>]*>\s*<div class="form-hint" id="macro-trigger-note" aria-live="polite" hidden><\/div>/.test(html), 'the note sits under the name field, hidden until needed, and is read out when it appears');
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

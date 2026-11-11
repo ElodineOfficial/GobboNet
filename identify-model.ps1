@@ -40,9 +40,9 @@ function ConvertTo-BatchSafe([string]$s) {
 # model living under a folder like 'Models & Templates', or a user whose account
 # name contains '!', comes out the other side pointing at a file that does not
 # exist -- and the symptom is llama-server refusing a template that is plainly
-# sitting there. Reported by John McCardle against fileserver.ps1's twin of this
-# function; fileserver.ps1 grew ConvertTo-CmdPathSafe to fix it and this file
-# never got the matching half.
+# sitting there. Reported by John McCardle against the twin of this function in
+# the 1.7 PowerShell server (removed in 1.8.0), which grew ConvertTo-CmdPathSafe
+# to fix it while this file never got the matching half.
 #
 # The security requirement is unchanged and is fully met by less. These values
 # land inside `set "VAR=..."` in a generated .cmd that launch.bat CALLs, so what

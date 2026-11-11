@@ -1,6 +1,6 @@
 // Package mods keeps the chat page's mods: named units of CSS and JavaScript,
-// each a folder on the PC running GobboNet, each with its own switch (1.7.9,
-// F1).
+// each a folder on the PC running GobboNet, with switches for the mod and its
+// individual files (1.7.9, F1).
 //
 // # Layout
 //
@@ -15,8 +15,8 @@
 // # Who may do what
 //
 // Mods are code that runs in every browser that opens this GobboNet. So
-// anything that can make code run -- writing a mod, switching one on,
-// reordering, removing, importing -- is for a browser on this PC only, which
+// anything that can make code run -- writing a mod, switching it or an editor
+// entry on, reordering, removing, importing -- is for a browser on this PC only, which
 // the server checks (internal/server/mods.go). Any signed-in device may read
 // the list and switch a mod OFF. A folder dropped in by hand starts off.
 //
@@ -66,11 +66,13 @@ func ValidID(id string) bool { return idRe.MatchString(id) && !strings.Contains(
 // FileRef is one thing a mod loads or ships: a file in its folder, or (for
 // the old extensions' URL entries) an address.
 type FileRef struct {
-	Path string `json:"path,omitempty"`
-	URL  string `json:"url,omitempty"`
-	Type string `json:"type,omitempty"` // "css", "js", or "asset" (served, not loaded)
-	Name string `json:"name,omitempty"`
-	Size int64  `json:"size,omitempty"`
+	Path       string `json:"path,omitempty"`
+	URL        string `json:"url,omitempty"`
+	Type       string `json:"type,omitempty"` // "css", "js", or "asset" (served, not loaded)
+	Name       string `json:"name,omitempty"`
+	Size       int64  `json:"size,omitempty"`
+	EntryIndex *int   `json:"entryIndex,omitempty"`
+	Enabled    *bool  `json:"enabled,omitempty"` // populated in /mods responses, not stored in mod.json
 }
 
 // UnmarshalJSON takes "style.css" as shorthand for {"path": "style.css"}.
@@ -109,7 +111,7 @@ type Manifest struct {
 	Source string `json:"source,omitempty"`
 }
 
-// Mod is a manifest as found on disk, with its switch.
+// Mod is a manifest as found on disk, with its switches.
 type Mod struct {
 	Manifest
 	Enabled  bool   `json:"enabled"`
@@ -121,10 +123,18 @@ type Mod struct {
 
 // Entry is one stylesheet or script in the editor's shape -- the old
 // extensions' shape, so the editor and the migration share it.
+//
+// Enabled is the entry's own switch (1.8.0): absent means on. Index is where
+// the entry is saved, which Source reports so the editor can switch a saved
+// entry by the number the server knows it by; it is ignored on the way in.
+// An entry with neither a URL nor text writes no file and is not read back,
+// so the saved numbers can have gaps and a position in the list is not one.
 type Entry struct {
-	Name string `json:"name"`
-	URL  string `json:"url"`
-	Raw  string `json:"raw"`
+	Name    string `json:"name"`
+	URL     string `json:"url"`
+	Raw     string `json:"raw"`
+	Enabled *bool  `json:"enabled,omitempty"`
+	Index   *int   `json:"index,omitempty"`
 }
 
 // Source is an editor-managed mod's content.
@@ -135,8 +145,9 @@ type Source struct {
 }
 
 type stateFile struct {
-	Enabled map[string]bool `json:"enabled"`
-	Order   []string        `json:"order,omitempty"`
+	Enabled      map[string]bool            `json:"enabled"`
+	EntryEnabled map[string]map[string]bool `json:"entryEnabled,omitempty"`
+	Order        []string                   `json:"order,omitempty"`
 }
 
 // Store is the mods folder.
@@ -167,6 +178,9 @@ func (s *Store) readState() stateFile {
 	}
 	if st.Enabled == nil {
 		st.Enabled = map[string]bool{}
+	}
+	if st.EntryEnabled == nil {
+		st.EntryEnabled = map[string]map[string]bool{}
 	}
 	return st
 }
@@ -199,6 +213,24 @@ func (s *Store) listLocked() []Mod {
 		}
 		m := s.load(e.Name())
 		m.Enabled = m.Error == "" && st.Enabled[m.ID]
+		legacyIndexes := map[string]int{}
+		for i := range m.Files {
+			f := &m.Files[i]
+			if (m.Origin == "editor" || m.Origin == "legacy") && (f.Type == "css" || f.Type == "js") {
+				if f.EntryIndex == nil {
+					index := legacyIndexes[f.Type]
+					legacyIndexes[f.Type]++
+					f.EntryIndex = &index
+				} else if *f.EntryIndex >= legacyIndexes[f.Type] {
+					legacyIndexes[f.Type] = *f.EntryIndex + 1
+				}
+				on, ok := st.EntryEnabled[m.ID][entryKey(f.Type, *f.EntryIndex)]
+				if !ok {
+					on = true
+				}
+				f.Enabled = &on
+			}
+		}
 		out = append(out, m)
 	}
 	pos := map[string]int{}
@@ -385,6 +417,41 @@ func (s *Store) SetEnabled(id string, on bool) error {
 	return s.writeState(st)
 }
 
+// SetEntryEnabled flips one editor entry, including its URL and inline file.
+// An absent saved value means the entry is on.
+func (s *Store) SetEntryEnabled(id, kind string, index int, on bool) error {
+	if kind != "css" && kind != "js" || index < 0 {
+		return ErrNotFound
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	list := s.listLocked()
+	for _, m := range list {
+		if m.ID != id {
+			continue
+		}
+		if m.Error != "" || (m.Origin != "editor" && m.Origin != "legacy") {
+			return ErrNotFound
+		}
+		for _, f := range m.Files {
+			if f.Type == kind && f.EntryIndex != nil && *f.EntryIndex == index {
+				st := s.readState()
+				if st.EntryEnabled[id] == nil {
+					st.EntryEnabled[id] = map[string]bool{}
+				}
+				st.EntryEnabled[id][entryKey(kind, index)] = on
+				return s.writeState(st)
+			}
+		}
+		return ErrNotFound
+	}
+	return ErrNotFound
+}
+
+func entryKey(kind string, index int) string {
+	return fmt.Sprintf("%s:%d", kind, index)
+}
+
 // Move shifts a mod earlier (delta < 0) or later in the load order.
 func (s *Store) Move(id string, delta int) error {
 	s.mu.Lock()
@@ -426,8 +493,34 @@ func (s *Store) Source(id string) (Source, error) {
 		return Source{}, err
 	}
 	src := Source{Name: m.Name, Styles: []Entry{}, Scripts: []Entry{}}
+	entries := map[string]map[int]*Entry{"css": {}, "js": {}}
+	order := map[string][]int{"css": {}, "js": {}}
+	nextIndex := map[string]int{"css": 0, "js": 0}
 	for _, f := range m.Files {
-		e := Entry{Name: f.Name, URL: f.URL}
+		if f.Type != "css" && f.Type != "js" {
+			continue
+		}
+		index := nextIndex[f.Type]
+		if f.EntryIndex != nil {
+			index = *f.EntryIndex
+		}
+		if index >= nextIndex[f.Type] {
+			nextIndex[f.Type] = index + 1
+		}
+		e := entries[f.Type][index]
+		if e == nil {
+			on := f.Enabled == nil || *f.Enabled
+			at := index
+			e = &Entry{Name: f.Name, Enabled: &on, Index: &at}
+			entries[f.Type][index] = e
+			order[f.Type] = append(order[f.Type], index)
+		}
+		if e.Name == "" {
+			e.Name = f.Name
+		}
+		if f.URL != "" {
+			e.URL = f.URL
+		}
 		if f.Path != "" {
 			b, err := os.ReadFile(filepath.Join(m.dir, filepath.FromSlash(f.Path)))
 			if err != nil {
@@ -435,11 +528,15 @@ func (s *Store) Source(id string) (Source, error) {
 			}
 			e.Raw = string(b)
 		}
-		switch f.Type {
-		case "css":
-			src.Styles = append(src.Styles, e)
-		case "js":
-			src.Scripts = append(src.Scripts, e)
+	}
+	for _, kind := range []string{"css", "js"} {
+		sort.Ints(order[kind])
+		for _, index := range order[kind] {
+			if kind == "css" {
+				src.Styles = append(src.Styles, *entries[kind][index])
+			} else {
+				src.Scripts = append(src.Scripts, *entries[kind][index])
+			}
 		}
 	}
 	return src, nil
@@ -473,14 +570,17 @@ func (s *Store) WriteSource(id string, src Source, origin string, enable *bool) 
 		man.Origin = "editor"
 	}
 	keep := map[string]bool{manifestName: true}
+	stEntryEnabled := map[string]bool{}
 	add := func(kind string, i int, e Entry) error {
 		name := strings.TrimSpace(e.Name)
 		url := strings.TrimSpace(e.URL)
+		entryIndex := i
+		enabled := e.Enabled == nil || *e.Enabled
 		if url != "" {
 			if !strings.HasPrefix(url, "https://") && !strings.HasPrefix(url, "http://") {
 				return fmt.Errorf("%q: a URL must start with http:// or https://", url)
 			}
-			man.Files = append(man.Files, FileRef{URL: url, Type: kind, Name: name})
+			man.Files = append(man.Files, FileRef{URL: url, Type: kind, Name: name, EntryIndex: &entryIndex})
 		}
 		if strings.TrimSpace(e.Raw) != "" {
 			if len(e.Raw) > maxFileBytes {
@@ -492,8 +592,9 @@ func (s *Store) WriteSource(id string, src Source, origin string, enable *bool) 
 				return err
 			}
 			keep[file] = true
-			man.Files = append(man.Files, FileRef{Path: file, Type: kind, Name: name})
+			man.Files = append(man.Files, FileRef{Path: file, Type: kind, Name: name, EntryIndex: &entryIndex})
 		}
+		stEntryEnabled[entryKey(kind, i)] = enabled
 		return nil
 	}
 	for i, e := range src.Styles {
@@ -522,12 +623,12 @@ func (s *Store) WriteSource(id string, src Source, origin string, enable *bool) 
 			}
 		}
 	}
+	st := s.readState()
+	st.EntryEnabled[id] = stEntryEnabled
 	if enable != nil {
-		st := s.readState()
 		st.Enabled[id] = *enable
-		return s.writeState(st)
 	}
-	return nil
+	return s.writeState(st)
 }
 
 func nameOr(name, kind string) string {
@@ -542,14 +643,20 @@ func nameOr(name, kind string) string {
 // something different. Importing the same content twice is a no-op. Returns
 // the id it landed in.
 func (s *Store) ImportLegacy(src Source, enabled bool) (string, bool, error) {
+	// norm is what makes two sets "the same import": content, not switches
+	// or saved numbers. It works on copies -- the slices are shared with the
+	// caller's, and clearing Enabled in place lost every entry's switch when
+	// the set then had to be written under a new id.
 	norm := func(x Source) []byte {
 		x.Name = ""
-		for _, l := range [][]Entry{x.Styles, x.Scripts} {
-			for i := range l {
-				l[i].Name = strings.TrimSpace(l[i].Name)
-				l[i].URL = strings.TrimSpace(l[i].URL)
+		clean := func(l []Entry) []Entry {
+			out := make([]Entry, len(l))
+			for i, e := range l {
+				out[i] = Entry{Name: strings.TrimSpace(e.Name), URL: strings.TrimSpace(e.URL), Raw: e.Raw}
 			}
+			return out
 		}
+		x.Styles, x.Scripts = clean(x.Styles), clean(x.Scripts)
 		b, _ := json.Marshal(x)
 		return b
 	}
@@ -653,6 +760,12 @@ func (s *Store) PurgeRemoved() {
 	for id := range st.Enabled {
 		if !exists(id) {
 			delete(st.Enabled, id)
+			changed = true
+		}
+	}
+	for id := range st.EntryEnabled {
+		if !exists(id) {
+			delete(st.EntryEnabled, id)
 			changed = true
 		}
 	}

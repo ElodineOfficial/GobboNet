@@ -2,10 +2,10 @@ package server
 
 // GET/POST /perf — the settings panel's performance section.
 //
-// Port of fileserver.ps1's Handle-Perf. The wire shape is upstream's, verbatim
-// and camelCase, because js/02-model.js reads p.current.ctxSize, p.auto,
-// p.overridden and p.modelMaxCtx by name and the same file has to drive both
-// servers.
+// Port of the 1.7 PowerShell server's Handle-Perf. The wire shape is upstream's,
+// verbatim and camelCase, because js/02-model.js reads p.current.ctxSize,
+// p.auto, p.overridden and p.modelMaxCtx by name, and the same file drove both
+// servers until 1.8.0.
 //
 // What this endpoint does NOT do is restart llama-server. The client saves
 // here and then posts the model it already has to /swap-model, so the change

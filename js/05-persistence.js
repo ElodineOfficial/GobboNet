@@ -331,6 +331,11 @@ function applyLoadedState(saved) {
         delete state.settings.userDialogColor;
       }
 
+      // Group chats (1.8.0). Absent in anything saved before them. Every
+      // group is read through normalizeGroup (js/04-state.js), like one from
+      // an imported file: this blob may have come from another device.
+      state.groups = (typeof normalizeGroups === 'function') ? normalizeGroups(saved.groups) : [];
+
       state.schedules = saved.schedules || [];
       state.searchEnabled = saved.searchEnabled || false;
       state.folders = saved.folders || [];
@@ -709,10 +714,14 @@ function isQuotaError(e) {
 // fingerprint counted a field the cleaner strips, every thread with a live
 // parser state would look permanently dirty and re-upload forever.
 //
-//   _reasoningDone  legacy v1 parser flag
-//   _parseState     current parser state
-//   _smartLimitAt   smart-limit crossing marker
-const RUNTIME_MESSAGE_FIELDS = ['_reasoningDone', '_parseState', '_smartLimitAt'];
+//   _reasoningDone     legacy v1 parser flag
+//   _parseState        current parser state
+//   _smartLimitAt      smart-limit crossing marker
+//   _pendingToolCalls  tool_calls deltas collected so far this round
+//   _finishReason      the round's finish_reason, read once by the tool loop
+// (toolPrefix is NOT here: a reload between tool rounds replays onto it.)
+const RUNTIME_MESSAGE_FIELDS = ['_reasoningDone', '_parseState', '_smartLimitAt',
+                                '_pendingToolCalls', '_finishReason'];
 
 // Strip the runtime-only message fields (never persisted) from one thread.
 // Single source of truth reused by buildStateBlob and the streaming-tick
@@ -766,6 +775,7 @@ function buildStateMeta() {
     activeCardId: state.activeCardId,
     personaCards: state.personaCards,
     activePersonaId: state.activePersonaId,
+    groups: state.groups || [],
     schedules: state.schedules,
     sidebarOpen: state.sidebarOpen,
     searchEnabled: state.searchEnabled,

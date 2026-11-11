@@ -31,6 +31,15 @@ People who opened pull requests.
   for gpt-oss on 12 GB cards. PR #39.
 - wizzense - LAN bind fallback, so local chat stays available when a
   network-facing bind is denied. PR #10.
+- Aaron K. Clark (@CryptoJones) - Clearer macro trigger guidance in the editor,
+  the wording 1.8.0 keeps. PR #73. Tool calling for card-code tools, its
+  review and its 127-check suite, which 1.8.0 ships. Issue #70 and PR #71.
+- orcmaul - Asked for a way to start GobboNet without opening a browser tab,
+  which became the open_browser setting in 1.8.0. PR #58. Restarted the
+  embedding server when it died, which became GobboNet supervising it in
+  1.8.0. PR #56.
+- Larck Drakengold - A switch for each stylesheet and script in My extensions,
+  so one can be turned off without the rest, which 1.8.0 ships. Commit 4db2469.
 
 ## Security
 
@@ -51,7 +60,9 @@ saved considerably more time than the patch that followed them.
   correction. Issue #20.
 - @norflic and @aexiel - Character identity and avatar behavior across
   conversations. Issue #19.
-- @nephitejnf - Missing remote model lists on Linux. Issue #47.
+- @nephitejnf - Missing remote model lists on Linux. Issue #47. Asked for a
+  model per character and per chat, which became model links in 1.8.0.
+  Issue #52.
 - @KMaheshBhat - Connecting GobboNet to an independently managed llama.cpp
   server. Issue #48.
 - @joeypent69 - Ollama integration feedback and clarification of
@@ -67,6 +78,22 @@ saved considerably more time than the patch that followed them.
 - larckdrakengold - Found the home-screen character list snapping back to the
   top on its own, traced it to the five-second re-render, and shared the
   working fix. 1.7.7.
+- @EternalBlueFlame - Asked for classifier-free guidance and described the
+  two-sequence method; the request led to Banned Phrases (1.7.8). Issue #51.
+- @5Kwords - Macro trigger names typed with braces were refused with a message
+  that never mentioned braces. Issue #69. Pointed setup at an existing model
+  collection and got an empty models folder inside it, which led to separate
+  data and models folders (1.8.0). Issue #68. Helped triage #67.
+- @Solteris-Dev - Asked for issue and PR templates, with an opt-in section for
+  saying how an AI assistant helped. Issue #62.
+- @Metallonality - Reported a model load that showed only llama.cpp's
+  sign-off line, which led to GobboNet saying why a load failed, and CHECK
+  FILE (1.8.0). Issue #67.
+- @NeoArte - Reported a hybrid laptop whose NVIDIA card went unused, which led
+  to the GPU menu, the GPU section in gobbonet doctor and PRIME offload
+  (1.8.0). Issue #72.
+- Zindaar - Asked for MCP servers as tools a character can use, which became
+  MCP servers in 1.8.0. Issue #42.
 
 Thanks also to the GobboNet Discord community, whose testing and reports
 shaped fixes across the 1.5 and 1.6 releases.

@@ -209,7 +209,9 @@ function updateStorybookReadout() {
     parts.push(`${named} named entr${named === 1 ? 'y' : 'ies'}: ${shown}`);
   }
   if (c.plainEntries) parts.push(`${c.plainEntries} plain-text entr${c.plainEntries === 1 ? 'y' : 'ies'}`);
-  el.textContent = 'read as \u2192 ' + (parts.join(' \u00b7 ') || 'nothing yet');
+  // Whether anything close in meaning can match too (1.8.0, #15).
+  const meaning = (typeof embedStateText === 'function' && typeof _embedHealth !== 'undefined') ? embedStateText(_embedHealth).short : '';
+  el.textContent = 'read as \u2192 ' + (parts.join(' \u00b7 ') || 'nothing yet') + (meaning ? ' \u00b7 ' + meaning : '');
 }
 
 
@@ -826,7 +828,10 @@ async function summarizeForLore(existingLore, messagesToSummarize, authoredLore,
   }
 
   function _loreChunk(m, clipTokens) {
-    const role = m.role === 'user' ? 'User' : 'Assistant';
+    // A group chat names its speakers (loreSpeaker, set by groupPromptContext
+    // in js/29-groups.js): "Assistant" for three different characters would
+    // leave the summary unable to say who did what.
+    const role = m.loreSpeaker || (m.role === 'user' ? 'User' : 'Assistant');
     const text = clipTokens ? _loreClipTail(m.content || '', clipTokens) : (m.content || '');
     let chunk = role + ': ' + text + '\n';
     // Search results are a repetition source in their own right: web

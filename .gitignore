@@ -5,6 +5,10 @@
 
 # Models and engine (way over GitHub's 100MB limit)
 models/
+# ...but not the Go package of that name. Without this, every NEW file in
+# internal/models/ was ignored, and a release committed with `git add -A` lost
+# it (fb9d56c, "Restore missing internal/models source files"). 1.8.0.
+!internal/models/
 llama.cpp/
 llama/
 *.gguf
@@ -29,9 +33,9 @@ active-model.json
 .embed-launch.cmd
 # The web-UI port, chosen at install time. Per-machine, like the secret.
 .gobbonet-port
-# Generation job spool — holds model reply transcripts
-# (written by fileserver.ps1 only; the Go server keeps job spools in memory,
-# so the ignore is for the PowerShell server and stays needed either way)
+# Generation job spool — holds model reply transcripts. Written only by the
+# PowerShell server that 1.8.0 removed (the Go server keeps job spools in
+# memory); still ignored, because a folder updated from 1.7 can hold one.
 .jobs/
 # hardware-probe.ps1 writes these next to itself; they describe the machine
 # that ran it and mean nothing on any other one.

@@ -116,6 +116,7 @@ console.log('\n=== A. a box that cannot work says why ===');
   };
   await cannot(build({ served: false }), 'opened from a file', /from a file/i);
   await cannot(build({ health: { status: 'ok', server: 'fileserver.ps1' } }), 'PowerShell server', /fileserver\.ps1/);
+  await cannot(build({ health: { status: 'ok', server: 'fileserver.ps1' } }), 'PowerShell server: what to do (1.8.0)', /run stop-gobbonet\.bat/i);
   await cannot(build({ health: { status: 'ok', pid: 1 } }), 'PowerShell server from before it named itself', /fileserver\.ps1/);
   await cannot(build({ lanStatus: 404, lan: {} }), 'an older program file', /arrived in 1\.7\.7\. This one is 1\.7\.7\./);
   await cannot(build({ lanStatus: 500, lan: {} }), 'a server error', /error 500/);

@@ -1,5 +1,5 @@
 // Package static serves the web root. Port of Resolve-StaticPath and the static
-// fallthrough branch of fileserver.ps1's dispatcher.
+// fallthrough branch of the 1.7 PowerShell server's dispatcher.
 //
 // It takes an fs.FS rather than a directory path, because since 1.7.5 the
 // frontend normally lives inside the binary (see internal/webui) and a disk

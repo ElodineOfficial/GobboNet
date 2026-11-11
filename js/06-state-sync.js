@@ -831,7 +831,7 @@ function validateServerSnapshot(snapshot) {
   if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) throw new Error('Malformed server state');
   if (!['threads', 'characterCards', 'personaCards', 'settings'].some(key => Object.prototype.hasOwnProperty.call(snapshot, key))) throw new Error('Malformed server state: missing state fields');
   if (snapshot.threads === undefined) snapshot.threads = [];
-  for (const key of ['threads', 'characterCards', 'personaCards', 'folders', 'macros', 'schedules']) {
+  for (const key of ['threads', 'characterCards', 'personaCards', 'groups', 'folders', 'macros', 'schedules']) {
     if (snapshot[key] !== undefined && (!Array.isArray(snapshot[key]) || snapshot[key].some(x => !x || typeof x !== 'object' || Array.isArray(x)))) {
       throw new Error('Malformed server state: ' + key);
     }
@@ -1197,7 +1197,8 @@ async function gobboDiag() {
   // 2) What exact prompt does the current conversation produce?
   try {
     const thread = getActiveThread();
-    const card   = getActiveCard();
+    // In a group chat, the prompt of whoever would reply next (js/29-groups.js).
+    const card   = (thread && typeof replyCardForThread === 'function') ? replyCardForThread(thread) : getActiveCard();
     if (thread) {
       const { apiMessages } = await buildContextMessages(thread, card, { diag: true });
       const r = await fetch(LLAMA_URL + '/apply-template', {
@@ -1590,6 +1591,8 @@ function applySamplerPreset(name) {
   // top-k and repeat-last-n are number inputs with no separate label
   const tk = document.getElementById('card-top-k');           if (tk) tk.value = p.topK;
   const rn = document.getElementById('card-repeat-last-n');   if (rn) rn.value = p.repeatLastN;
+  // Auto Reroll's note depends on the temperature (1.8.0).
+  if (typeof updateAutoRerollNote === 'function') updateAutoRerollNote();
 }
 
 

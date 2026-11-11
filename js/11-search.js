@@ -202,6 +202,8 @@ async function checkConnection() {
       serverConnected = true;
       serverOfflineReason = '';
       serverOfflinePhase = '';
+      serverOfflineCause = '';
+      serverOfflineAdvice = '';
       dot.classList.add('connected');
       // llama.cpp /health returns {"status":"ok"} when model is loaded
       const ready = data.status === 'ok';
@@ -243,6 +245,8 @@ async function checkConnection() {
 async function refreshOfflineReason() {
   serverOfflineReason = '';
   serverOfflinePhase = '';
+  serverOfflineCause = '';
+  serverOfflineAdvice = '';
   if (!IS_SERVED) return;
   try {
     const r = await fetch('/swap-status', { cache: 'no-store' });
@@ -254,6 +258,9 @@ async function refreshOfflineReason() {
     // rather than print a contradiction.
     if (s.phase === 'error') {
       serverOfflineReason = String(s.message || '');
+      // The plain sentence for a known cause (1.8.0, #67).
+      serverOfflineCause = String(s.cause || '');
+      serverOfflineAdvice = String(s.advice || '');
     } else if (s.phase === 'starting') {
       // Mid-load the message is just "Loading model", which the pill already
       // says. The filename is the part the user does not know.

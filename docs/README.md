@@ -8,11 +8,12 @@ GobboNet — see the [README](../README.md) at the repo root for that.
 | File | What it covers |
 |---|---|
 | [INDEX.md](INDEX.md) | Frontend module map. Translates a pre-v1.5 `chat.html` line number into the `js/` module that now holds it. |
-| [GO_SERVER.md](GO_SERVER.md) | The Go server: what it does, how it supervises llama.cpp, what replaced the PowerShell file server. Also shipped as the README inside release bundles. |
+| [GO_SERVER.md](GO_SERVER.md) | The Go server: what it does, how it supervises llama.cpp, what replaced the PowerShell file server (removed in 1.8.0). Also shipped as the README inside release bundles. |
 | [archive/GO_CONFIG_SPLIT.md](archive/GO_CONFIG_SPLIT.md) | How configuration is divided between `config.toml`, `perf.toml` and runtime state. |
 | [archive/GO_MIGRATION_INVENTORY.md](archive/GO_MIGRATION_INVENTORY.md) | What moved from PowerShell to Go, and what deliberately did not. |
 | [RAG_INFO.md](RAG_INFO.md) | The retrieval pipeline — embedding server, chunking, how lore is selected. |
 | [PURGE.md](PURGE.md) | What deleting data actually deletes, and where copies can survive. |
+| [UPDATES.md](UPDATES.md) | The update button in ABOUT (1.8.0): what it checks and trusts, and how the maintainer signs a release so it can be installed from there. |
 
 Kept at the repo root instead, because something points at them by name:
 

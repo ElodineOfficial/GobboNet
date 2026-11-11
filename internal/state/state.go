@@ -1,5 +1,5 @@
 // Package state implements cross-device chat state sync. Port of Handle-State
-// from fileserver.ps1.
+// from the 1.7 PowerShell server.
 //
 // chat.html mirrors its state here so a phone landing on a fresh origin (new IP,
 // new device, cleared cache) can be offered its threads back instead of showing

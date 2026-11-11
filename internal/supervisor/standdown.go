@@ -198,6 +198,9 @@ func (s *Supervisor) standDown() error {
 	s.standFile = file
 	s.mu.Unlock()
 	s.setStatus(PhaseStoodDown, file, name, "Model unloaded to free VRAM. It will reload on the next message.", 0)
+	if s.OnStandDown != nil {
+		s.OnStandDown()
+	}
 	return nil
 }
 
@@ -254,7 +257,7 @@ func (s *Supervisor) wake(file string) error {
 	s.setStatus(PhaseStarting, file, file, "Reloading model after idle stand-down", startedAt)
 
 	if err := s.load(file); err != nil {
-		s.setStatus(PhaseError, file, file, err.Error(), startedAt)
+		s.setFailure(file, file, err.Error(), startedAt, err)
 		return err
 	}
 	s.announceLoad("standdown", "reloaded", file, began)
@@ -269,6 +272,9 @@ func (s *Supervisor) wake(file string) error {
 	s.setStatus(PhaseReady, file, file, "Ready", startedAt)
 	if s.OnReady != nil {
 		s.OnReady()
+	}
+	if s.OnWake != nil {
+		s.OnWake()
 	}
 	return nil
 }

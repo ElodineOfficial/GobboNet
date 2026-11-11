@@ -243,7 +243,7 @@ func (i *Info) ActiveModelPayload(defaultCtx int) map[string]any {
 
 // ModelsListPayload is the models-list.json body backing the header dropdown.
 //
-// This replaces the static file that launch.bat wrote and fileserver.ps1 mutated
+// This replaces the static file that launch.bat wrote and the 1.7 PowerShell server mutated
 // on every swap — the exact drift risk that motivated this migration. The
 // directory is scanned on demand and the result cached against its mtime, so
 // dropping a GGUF into models/ makes it appear on the next request with no

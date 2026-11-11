@@ -329,7 +329,11 @@ function translateTemplates(text, charName, userName, forDisplay) {
 }
 
 function applyActiveCardBackground() {
-  const card = getActiveCard();
+  // A group chat wears its first member's background (1.8.0): one that
+  // changed with every speaker would flicker through a round.
+  const _group = (typeof threadGroup === 'function' && typeof getActiveThread === 'function')
+    ? threadGroup(getActiveThread()) : null;
+  const card = (_group && typeof groupHostCard === 'function' && groupHostCard(_group)) || getActiveCard();
   const msgArea = document.getElementById('messages');
   if (!msgArea) return;
   // Same gate as avatars and thumbnails. safeImageUrl drops file: and

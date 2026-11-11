@@ -134,9 +134,10 @@ console.log('\n=== A. visibility ===');
        'old program file: and why the page cannot do it alone', t);
   }
 
-  // THE CASE THE OLD WORDING GOT WRONG. GobboNet started from launch.bat on
-  // Windows is served by fileserver.ps1, which has no /standdown and no
-  // version. The old panel read the 404 and told the reader their binary was
+  // THE CASE THE OLD WORDING GOT WRONG. Up to 1.7.9, GobboNet started from
+  // launch.bat on Windows could be served by fileserver.ps1, which has no
+  // /standdown and no version. 1.8.0 removed it; a copy left running from
+  // before an update is the only way to meet it now. The old panel read the 404 and told the reader their binary was
   // old and to replace it beside web/ -- an install made from the source ZIP
   // has neither of those things, so the advice could not be followed.
   for (const [label, PS_HEALTH] of [
@@ -153,8 +154,10 @@ console.log('\n=== A. visibility ===');
     const t = h.els['standdown-status'].textContent;
     ok(/fileserver\.ps1/.test(t),
        'PowerShell: names the program that is actually serving the page', t);
-    ok(/start GobboNet with the gobbonet program file/i.test(t),
-       'PowerShell: and the action that gets the feature', t);
+    ok(/run stop-gobbonet\.bat/i.test(t) && /then start GobboNet again/i.test(t),
+       'PowerShell: and the action that gets the feature (1.8.0: stop the leftover, start again)', t);
+    ok(!/instead of launch\.bat/i.test(t),
+       'PowerShell: and no longer says launch.bat starts the other server (it cannot since 1.8.0)', t);
     ok(!/older than these web files/i.test(t),
        'PowerShell: and does not claim the server is merely out of date', t);
     ok(!/replace both together/i.test(t),

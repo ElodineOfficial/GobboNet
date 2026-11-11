@@ -65,7 +65,9 @@ function legacyExtLive(ext) { return !!ext && extEntryCount(ext) > 0; }
 async function migrateLegacyExtensions() {
   if (!IS_SERVED || !legacyExtLive(state.extensions)) return false;
   const ext = state.extensions;
-  const pick = l => (Array.isArray(l) ? l : []).map(e => ({ name: e.name || '', url: e.url || '', raw: e.raw || '' }));
+  const pick = l => (Array.isArray(l) ? l : []).map(e => ({
+    name: e.name || '', url: e.url || '', raw: e.raw || '', enabled: e.enabled !== false
+  }));
   try {
     const r = await fetch('/mods/import-legacy', {
       method: 'POST',
@@ -123,6 +125,7 @@ async function applyMods() {
     if (!m || !m.enabled || m.error) continue;
     for (const f of (m.files || [])) {
       if (f.type !== 'css' && f.type !== 'js') continue;
+      if (f.enabled === false) continue;
       const src = f.path ? modFileURL(m, f) : String(f.url || '').trim();
       if (!src) continue;
       want.push({ key: 'mod:' + m.id + ':' + src, kind: f.type, src, name: m.name + (f.name ? ': ' + f.name : ''), mod: m.id, remote: !f.path });
@@ -182,6 +185,7 @@ function injectLegacyExtensions(ext) {
 
   // ── Stylesheets (in order). Each entry: URL <link> then inline <style>. ──
   styles.forEach((entry, i) => {
+    if (entry.enabled === false) return;
     const label = entry.name || ('stylesheet ' + (i + 1));
     if (entry.url && entry.url.trim()) {
       const link = document.createElement('link');
@@ -208,6 +212,7 @@ function injectLegacyExtensions(ext) {
 
   // ── Scripts (in order). URL <script src defer> then inline <script>. ──
   scripts.forEach((entry, i) => {
+    if (entry.enabled === false) return;
     const label = entry.name || ('script ' + (i + 1));
     if (entry.url && entry.url.trim()) {
       const script = document.createElement('script');
@@ -261,10 +266,18 @@ let _extDraft = { styles: [], scripts: [] };
 let _extDraftTouched = false;
 const MY_EXT_ID = 'my-extensions';
 
+// Each entry has its own switch (1.8.0, from Larck Drakengold's 4db2469).
+// A saved entry is switched on the server by the number it was saved under,
+// which the server reports as `index`; an entry with no URL and no text is
+// saved as nothing, so that number is not always the entry's position here.
+// An entry not saved yet keeps its switch in the draft until SAVE.
 function _draftFrom(src) {
   const mk = (l, kind) => (Array.isArray(l) ? l : []).map((e, i) => ({
     id: e.id || ('ext_' + kind + '_' + i + '_' + Date.now().toString(36)),
-    name: e.name || '', url: e.url || '', raw: e.raw || ''
+    name: e.name || '', url: e.url || '', raw: e.raw || '',
+    enabled: e.enabled !== false,
+    persisted: e.enabled !== undefined,
+    persistedIndex: e.enabled === undefined ? null : (Number.isInteger(e.index) ? e.index : i)
   }));
   return { styles: mk(src && src.styles, 'css'), scripts: mk(src && src.scripts, 'js') };
 }
@@ -352,7 +365,8 @@ async function saveExtensions() {
     id:   e.id || generateId(),
     name: (e.name || '').trim(),
     url:  (e.url || '').trim(),
-    raw:  e.raw || ''
+    raw:  e.raw || '',
+    enabled: e.enabled !== false
   });
   const live = e => e.url.trim() || e.raw.trim() || e.name;
   const draft = {
@@ -373,7 +387,7 @@ async function saveExtensions() {
     _extNote('My extensions can only be changed from GobboNet on the PC it runs on.', true);
     return false;
   }
-  const strip = l => l.map(e => ({ name: e.name, url: e.url, raw: e.raw }));
+  const strip = l => l.map(e => ({ name: e.name, url: e.url, raw: e.raw, enabled: e.enabled }));
   try {
     const r = await fetch('/mods/' + MY_EXT_ID + '/source', {
       method: 'PUT',
@@ -826,9 +840,11 @@ function syncExtDraftFromDOM() {
       const nameEl = card.querySelector('.ext-entry-name');
       const urlEl  = card.querySelector('.ext-entry-url');
       const rawEl  = card.querySelector('.ext-entry-raw');
+      const enabledEl = card.querySelector('.ext-entry-enabled');
       if (nameEl) entry.name = nameEl.value;
       if (urlEl)  entry.url  = urlEl.value;
       if (rawEl)  entry.raw  = rawEl.value;
+      if (enabledEl) entry.enabled = enabledEl.checked;
     });
   });
 }
@@ -836,7 +852,7 @@ function syncExtDraftFromDOM() {
 function addExtEntry(kind) {
   _extDraftTouched = true;
   syncExtDraftFromDOM();
-  _extDraft[kind].push({ id: generateId(), name: '', url: '', raw: '' });
+  _extDraft[kind].push({ id: generateId(), name: '', url: '', raw: '', enabled: true, persisted: false, persistedIndex: null });
   renderExtEntries();
 }
 
@@ -857,6 +873,58 @@ function removeExtEntry(kind, id) {
       renderExtEntries();
     },
   });
+}
+
+/** An entry's own switch. It acts on the SAVED entry at once, like the mod
+ *  switches beside it, and leaves the rest of the draft alone: other edits
+ *  still wait for SAVE. An entry not saved yet keeps its switch in the draft. */
+async function setExtEntryEnabled(kind, id, on) {
+  const previous = !on;
+  syncExtDraftFromDOM();
+  const entry = _extDraft[kind].find(e => e.id === id);
+  if (!entry) return;
+  entry.enabled = !!on;
+  _extDraftTouched = true;
+  const offNote = () => {
+    if (!on && kind === 'scripts') {
+      _extNote('This script entry is off. Anything it already did stays until the page reloads.', false);
+    } else {
+      _extNote('');
+    }
+  };
+  const notSaved = () => {
+    _extNote('This entry is not saved yet. Its switch is kept when you press SAVE.', false);
+    renderExtEntries();
+  };
+  if (!IS_SERVED || _mods.legacyHere) {
+    // This browser's copy (file://, or a device still running its old blob).
+    const saved = ((state.extensions || {})[kind] || []).find(e => e && e.id === id);
+    if (!saved) { notSaved(); return; }
+    saved.enabled = !!on;
+    saveState();
+    await applyExtensions();
+    offNote();
+    return;
+  }
+  if (!entry.persisted) {
+    notSaved();
+    return;
+  }
+  try {
+    await _modPost('/mods/' + MY_EXT_ID + '/entry-enable', {
+      kind: kind === 'styles' ? 'css' : 'js',
+      index: entry.persistedIndex,
+      enabled: !!on
+    });
+    await loadMods();
+    await _refreshMyExt();
+    await applyExtensions();
+    offNote();
+  } catch (e) {
+    entry.enabled = previous;
+    _extNote('Could not switch this entry: ' + e.message, true);
+    renderExtEntries();
+  }
 }
 
 /** In-place field update (used by file loader, which then re-renders). */
@@ -910,6 +978,13 @@ function renderExtEntryList(kind) {
     <div class="ext-entry ${isStyle ? '' : 'ext-entry-script'}" data-ext-entry="${escapeHtml(e.id)}">
       <div class="ext-entry-head">
         <input type="text" class="ext-entry-name" placeholder="${isStyle ? 'Stylesheet' : 'Script'} ${i + 1} name (optional)" value="${escapeHtml(e.name || '')}">
+        <label class="ext-entry-enabled-wrap">
+          <input type="checkbox" class="ext-entry-enabled" ${e.enabled !== false ? 'checked' : ''}
+            ${e.enabled === false && IS_SERVED && !_mods.canManage && !_mods.legacyHere ? 'disabled' : ''}
+            aria-label="Enable ${isStyle ? 'stylesheet' : 'script'} ${i + 1}"
+            onchange="setExtEntryEnabled('${escapeJsAttr(kind)}','${escapeJsAttr(e.id)}',this.checked)">
+          <span>Enabled</span>
+        </label>
         <button class="btn btn-sm btn-danger" onclick="removeExtEntry('${escapeJsAttr(kind)}','${escapeJsAttr(e.id)}')">Remove</button>
       </div>
       <input type="text" class="ext-entry-url" placeholder="${urlPh}" value="${escapeHtml(e.url || '')}">
@@ -924,4 +999,3 @@ function renderExtEntryList(kind) {
     </div>
   `).join('');
 }
-

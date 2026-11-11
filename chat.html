@@ -35,6 +35,8 @@
   <link rel="stylesheet" href="css/17-markdown.css">
   <link rel="stylesheet" href="css/18-config-sections.css">
   <link rel="stylesheet" href="css/19-tour.css">
+  <link rel="stylesheet" href="css/20-files-panel.css">
+  <link rel="stylesheet" href="css/21-groups.css">
 </head>
 <body>
 <div id="app">
@@ -45,9 +47,13 @@
         <h1>GOBBONET</h1>
         <button class="sidebar-close-btn" onclick="toggleSidebar()" title="Close sidebar">&times;</button>
       </div>
-      <div style="display:flex;gap:6px;margin-bottom:8px;">
-        <button class="btn btn-sm" style="flex:1;" onclick="goHome()" title="Home / Dashboard">&#8962; HOME</button>
-        <button class="btn btn-fill btn-sm" style="flex:2;" onclick="createThread()" data-tour="new-chat">+ NEW_THREAD</button>
+      <!-- + NEW_THREAD was one button until 1.8.0. It is two now: a chat with
+           the active character, and a chat with a group of characters
+           (js/29-groups.js). The two share the space the one had. -->
+      <div class="sidebar-new-row">
+        <button class="btn btn-sm" onclick="goHome()" title="Home / Dashboard">&#8962; HOME</button>
+        <button class="btn btn-fill btn-sm" onclick="createThread()" data-tour="new-chat" title="New chat with the active character">+ THREAD</button>
+        <button class="btn btn-fill btn-sm" id="new-group-btn" onclick="openGroupPicker(event)" title="New group chat: several characters in one conversation">+ GROUP</button>
       </div>
       <div class="thread-search-wrap">
         <span class="thread-search-icon">&#128269;</span>
@@ -88,6 +94,8 @@
       <span class="lore-chip" id="lore-chip" style="display:none" role="button" tabindex="0"
             onclick="openLoreInspector()"
             onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openLoreInspector();}"></span>
+      <!-- The Files panel (1.8.0, js/27-files-panel.js): this chat's files. -->
+      <button class="files-toggle" id="files-toggle" type="button" title="Files in this chat" aria-controls="files-panel" aria-expanded="false">&#128196;<span class="files-count" id="files-count"></span></button>
       <span class="status-label" id="status-label">Checking...</span>
       <span class="status-dot" id="status-dot"></span>
       <span class="privacy-badge" id="privacy-badge" title="llama.cpp — fully offline, zero telemetry">&#128274;</span>
@@ -121,6 +129,13 @@
          something to say. The visible styling lives on the child that
          updateCastMismatch() creates, not here. -->
     <div class="cast-mismatch-live" id="cast-mismatch" role="status"></div>
+    <!-- Model links (1.8.0, #52): "This chat used ... Switch?", written by
+         showModelFollowBar() in js/02-model.js; empty, it has no height. -->
+    <div class="cast-mismatch-live" id="model-follow" role="status"></div>
+    <!-- Group chats (1.8.0): who is in this chat, who is next, mute and
+         "reply now" per member, NEXT and AUTO. Built by renderGroupBar() in
+         js/29-groups.js; hidden in a chat with one character. -->
+    <div class="group-bar" id="group-bar" role="group" aria-label="Group chat" style="display:none;"></div>
     <div class="context-info" id="context-info"></div>
     <div class="auto-continue-bar" id="auto-continue-indicator" style="display:none;"></div>
     <div class="attach-tray" id="attach-tray" style="display:none;"></div>
@@ -154,6 +169,21 @@
       </div>
     </div>
   </main>
+
+  <!-- FILES PANEL (1.8.0, js/27-files-panel.js; css/20-files-panel.css).
+       The conversation's files, beside it: every ```file:name block, text
+       files attached to messages, and html or svg code blocks. Built with
+       textContent; previews run in a sandboxed frame that can reach nothing. -->
+  <aside id="files-panel" class="files-panel" aria-label="Files in this chat" hidden>
+    <div class="files-resize" id="files-resize" role="separator" aria-orientation="vertical" aria-label="Resize the Files panel (arrow keys; double-click resets)" tabindex="0"></div>
+    <div class="files-head">
+      <button class="files-back" id="files-back" type="button" hidden>&lsaquo; FILES</button>
+      <span class="files-title" id="files-title">Files</span>
+      <button class="files-close" id="files-close" type="button" aria-label="Close the Files panel" title="Close">&times;</button>
+    </div>
+    <div class="files-body" id="files-body"></div>
+    <div class="files-status" id="files-status" role="status" aria-live="polite"></div>
+  </aside>
 </div>
 
 <!-- SETTINGS MODAL -->
@@ -215,6 +245,17 @@
       </div>
     </div>
 
+    <div class="form-group" id="open-browser-group" style="margin-top:12px; padding:12px; border:1px solid rgba(0,243,255,0.18); border-radius:var(--radius); background:rgba(0,243,255,0.02);">
+      <label for="set-open-browser">&#127760; When GobboNet Starts</label>
+      <div class="form-hint" style="margin-top:2px;margin-bottom:10px;">Open the chat in a browser tab on the PC each time GobboNet starts.<button type="button" class="tip-btn" aria-label="More about When GobboNet Starts" aria-describedby="tip-open-browser" aria-expanded="false">?</button></div>
+      <div class="tip-body" id="tip-open-browser" hidden>Turn this off if you keep a tab open, or use GobboNet from your phone: the PC then starts it without opening a new tab, and GobboNet's window still shows the address. It covers every way of starting GobboNet, Setup or add a model included. It is saved on the PC (<code>open_browser</code> in <code>config.toml</code>), so every device sees the same setting, and it takes effect the next time GobboNet starts.</div>
+      <label class="code-enable-row">
+        <input type="checkbox" id="set-open-browser" onchange="applyOpenBrowser(this.checked)">
+        <span>Open the browser when GobboNet starts</span>
+      </label>
+      <div class="standdown-status" id="open-browser-status" aria-live="polite"></div>
+    </div>
+
     <div class="form-group" style="margin-top:4px; padding:10px 12px; border:1px dashed rgba(0,243,255,0.15); border-radius:var(--radius); background:rgba(0,243,255,0.02);">
       <div class="form-hint" style="margin:0;">Your name, avatar and colours are on your persona card, under Characters.<button type="button" class="tip-btn" aria-label="More about Personas" aria-describedby="tip-personas-moved" aria-expanded="false">?</button></div>
       <div class="tip-body" id="tip-personas-moved" hidden>Your name, avatar, and text colors moved to <strong>Personas</strong> &mdash;
@@ -260,6 +301,82 @@
           <input type="number" id="set-auto-continue-max" min="1" step="1" value="50" style="width:62px;text-align:center;font-size:13px;">
         </div>
       </div>
+    </div>
+
+    <!-- 1.8.0, roadmap #9 (PR #71). The tool loop's limits, which PR #71 had
+         as constants; the defaults are its values. Saved by SAVE like
+         Auto-Continue, read through cardToolLimit() (js/23-card-code.js),
+         which holds each to its floor and ceiling. Nothing here turns tools
+         on: that is each character's own box, under its custom code. -->
+    <!-- Model links (1.8.0, #52). state.settings.modelFollow, saved by SAVE;
+         read through modelFollowMode() in js/02-model.js. Radio rows copied
+         from Reply Delivery's "follow" choice. -->
+    <div class="form-group" id="model-follow-group" style="margin-top:12px; padding:12px; border:1px solid rgba(0,243,255,0.18); border-radius:var(--radius); background:rgba(0,243,255,0.02);">
+      <label>&#128260; Model Switching</label>
+      <div class="form-hint" style="margin-top:2px;margin-bottom:10px;">What to do when a chat, or its character, uses a different model from the one loaded.<button type="button" class="tip-btn" aria-label="More about Model Switching" aria-describedby="tip-model-follow" aria-expanded="false">?</button></div>
+      <div class="tip-body" id="tip-model-follow" hidden>A chat remembers the model that wrote its last reply, and a character can be linked to a model in the character editor. Opening the chat, or starting one with that character, can bring the model back. Switching reloads the model, which takes a while, so by default GobboNet asks first. It never switches while a reply is being written, on this device or another: it offers to switch once that reply is done. Only models in your models folder count, and only when GobboNet runs them on this PC. The model menu at the top still switches at once.</div>
+      <div class="scroll-mode-rows">
+        <label class="scroll-mode-row">
+          <input type="radio" name="set-model-follow" value="ask">
+          <span><strong>Ask first</strong> &mdash; a one-line bar offers the switch <em>(default)</em></span>
+        </label>
+        <label class="scroll-mode-row">
+          <input type="radio" name="set-model-follow" value="auto">
+          <span><strong>Switch automatically</strong> &mdash; when nothing else is being written</span>
+        </label>
+        <label class="scroll-mode-row">
+          <input type="radio" name="set-model-follow" value="off">
+          <span><strong>Don't switch</strong> &mdash; the loaded model answers every chat</span>
+        </label>
+      </div>
+    </div>
+
+    <div class="form-group" id="card-tools-group" style="margin-top:12px; padding:12px; border:1px solid rgba(0,243,255,0.18); border-radius:var(--radius); background:rgba(0,243,255,0.02);">
+      <label>&#128295; Card Tools</label>
+      <div class="form-hint" style="margin-top:2px;margin-bottom:10px;">Limits for characters whose code offers the model tools; nothing here turns tools on.<button type="button" class="tip-btn" aria-label="More about Card Tools" aria-describedby="tip-card-tools-limits" aria-expanded="false">?</button></div>
+      <div class="tip-body" id="tip-card-tools-limits" hidden>A character's custom code can offer the model tools with <code>gobbo.tool(...)</code>; they are used only while that character's own &ldquo;Let the model call this card's tools&rdquo; box is ticked, and imported characters arrive with it off. These limits apply to every such character. <b>Rounds</b>: how many times in one reply the model may call tools before it has to answer in text (1 to 20). <b>Time per call</b>: a call still running after this is answered with a timeout (1 to 3600 s). <b>Result size</b>: the most one result sends back to the model (500 to 100,000 characters); a reply's results together may send three times this. <b>Arguments</b>: a call that brings more than this is refused (1 to 1024 KB). GobboNet itself sends nothing anywhere for a tool: a tool that reaches the web is the character's code doing so.</div>
+      <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
+        <div style="display:flex;align-items:center;gap:8px;">
+          <span style="font-size:12px;color:rgba(255,255,255,0.5);">Rounds per reply:</span>
+          <input type="number" id="set-tool-max-rounds" min="1" max="20" step="1" value="4" style="width:62px;text-align:center;font-size:13px;">
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <span style="font-size:12px;color:rgba(255,255,255,0.5);">Time per call:</span>
+          <input type="number" id="set-tool-timeout" min="1" max="3600" step="1" value="30" style="width:62px;text-align:center;font-size:13px;">
+          <span style="font-size:12px;color:rgba(255,255,255,0.5);">s</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <span style="font-size:12px;color:rgba(255,255,255,0.5);">Result size:</span>
+          <input type="number" id="set-tool-result-max" min="500" max="100000" step="500" value="8000" style="width:78px;text-align:center;font-size:13px;">
+          <span style="font-size:12px;color:rgba(255,255,255,0.5);">chars</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <span style="font-size:12px;color:rgba(255,255,255,0.5);">Arguments:</span>
+          <input type="number" id="set-tool-args-max" min="1" max="1024" step="1" value="64" style="width:62px;text-align:center;font-size:13px;">
+          <span style="font-size:12px;color:rgba(255,255,255,0.5);">KB</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- The Files panel (1.8.0, js/27-files-panel.js). Saved with CONFIG's
+         SAVE, per device like the rest of this section. -->
+    <div class="form-group" id="files-panel-group" style="margin-top:12px; padding:12px; border:1px solid rgba(0,243,255,0.18); border-radius:var(--radius); background:rgba(0,243,255,0.02);">
+      <label>&#128196; Files Panel</label>
+      <div class="form-hint" style="margin-top:2px;margin-bottom:10px;">The &#128196; button at the top opens a panel with every file in the chat, whole, with its versions.<button type="button" class="tip-btn" aria-label="More about the Files panel" aria-describedby="tip-files-panel" aria-expanded="false">?</button></div>
+      <div class="tip-body" id="tip-files-panel" hidden>A file is anything a character writes as a <code>```file:name</code> block, a text file you attach, or a web page or picture written as an <code>html</code> or <code>svg</code> code block. Writing the same name again makes a new version; the arrows step through them. Markdown, CSV and TSV are shown rendered, and HTML and SVG as a preview that cannot reach the internet or GobboNet. <strong>EDIT</strong> lets you change a file and send your version with your next message, and <strong>ASK ABOUT THE SELECTION</strong> quotes the part you selected into the message box. Nothing in the panel is sent anywhere.</div>
+      <label class="code-enable-row">
+        <input type="checkbox" id="set-files-auto-open">
+        <span>Open the panel when a reply writes a file (on a wide screen)</span>
+      </label>
+      <label class="code-enable-row">
+        <input type="checkbox" id="set-files-fold">
+        <span>Fold long files in the chat (the panel shows them whole)</span>
+      </label>
+      <label class="code-enable-row">
+        <input type="checkbox" id="set-files-run-scripts">
+        <span>Run scripts in previews without asking</span>
+      </label>
+      <div class="form-hint">Off, an HTML preview waits for <strong>RUN SCRIPTS</strong>; either way it cannot reach the internet or GobboNet.</div>
     </div>
 
     <div class="form-group">
@@ -310,6 +427,31 @@
       <div class="form-hint" id="add-model-unavailable" style="display:none;margin-top:8px;"></div>
     </div>
 
+    <!-- 1.8.0, issue #68. model_dir, model_dirs and scan_hf_cache, which only
+         the Config File editor could change before. A server setting like Idle
+         Stand-Down: filled from /model-folders when CONFIG opens, saved on its
+         own button, never by SAVE, and saved for the next start. This PC only
+         (internal/server/modelfolders.go); another device is told so. -->
+    <div class="form-group" id="model-folders-group" style="margin-top:12px; padding:12px; border:1px solid rgba(0,243,255,0.18); border-radius:var(--radius); background:rgba(0,243,255,0.02);">
+      <label>&#128193; Model Folders</label>
+      <div class="form-hint" style="margin-top:2px;margin-bottom:10px;">Where your models live, and where else to look for them.<button type="button" class="tip-btn" aria-label="More about Model Folders" aria-describedby="tip-model-folders" aria-expanded="false">?</button></div>
+      <div class="tip-body" id="tip-model-folders" hidden>The <strong>models folder</strong> is what the model menu lists, and where downloads go. The <strong>extra folders</strong>, and the HuggingFace cache when ticked, are read only when Add a Model opens: what they hold is offered under Found on this computer, and a model picked there is linked into the models folder, never copied. Point an extra folder at LM Studio's models, another app's, or a second drive. These are <code>model_dir</code>, <code>model_dirs</code> and <code>scan_hf_cache</code> in <code>config.toml</code>. They can be changed only on the PC GobboNet runs on, and take effect the next time it starts.</div>
+      <div id="model-folders-fields">
+        <label for="set-model-dir">Models folder</label>
+        <input type="text" id="set-model-dir" spellcheck="false" autocomplete="off">
+        <label for="set-model-dirs" style="margin-top:10px;">Extra folders to look in, one per line</label>
+        <textarea id="set-model-dirs" rows="3" spellcheck="false" autocomplete="off" placeholder="/home/you/.lmstudio/models"></textarea>
+        <label class="code-enable-row" style="margin-top:8px;">
+          <input type="checkbox" id="set-scan-hf-cache">
+          <span>Also look in the HuggingFace cache</span>
+        </label>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px;">
+          <button class="btn btn-sm" id="model-folders-save" type="button" onclick="saveModelFolders()">SAVE FOR NEXT START</button>
+        </div>
+      </div>
+      <div class="standdown-status" id="model-folders-status" aria-live="polite"></div>
+    </div>
+
     <div class="form-group" style="margin-top:12px; padding:12px; border:1px solid rgba(255,149,0,0.22); border-radius:var(--radius); background:rgba(255,149,0,0.03);">
       <label>&#9889; Performance &mdash; llama.cpp tuning</label>
       <div class="form-hint" style="margin-top:2px;margin-bottom:12px;">Picked automatically for your GPU and model; <strong>changing these restarts the model</strong>.<button type="button" class="tip-btn" aria-label="More about Performance" aria-describedby="tip-performance" aria-expanded="false">?</button></div>
@@ -340,6 +482,24 @@
           <option value="q4_0">q4_0 &mdash; least VRAM, some quality loss</option>
         </select>
         <div class="form-hint">Quantising the cache roughly halves its VRAM cost per step down. Longest lever for fitting a big context.</div>
+      </div>
+
+      <!-- 1.8.0, #72: which GPU. Filled from /gpu (the engine's own device
+           list, cached) by loadGpuChoice() in js/02-model.js; saved with the
+           buttons below, so the model restarts on it like the rest of this box.
+           Hidden in remote mode. -->
+      <div class="form-group" id="perf-device-group">
+        <label for="perf-device">GPU</label>
+        <select id="perf-device" onchange="updateGpuNote()">
+          <option value="auto">Automatic (prefers a dedicated GPU)</option>
+        </select>
+        <div class="form-hint" id="perf-device-hint">Which graphics card runs the model, from the list the engine itself sees.<button type="button" class="tip-btn" aria-label="More about choosing a GPU" aria-describedby="tip-perf-device" aria-expanded="false">?</button></div>
+        <div class="tip-body" id="tip-perf-device" hidden>Automatic lets llama.cpp choose: every dedicated card, and the integrated one only when there is no dedicated card. Pick a card to use that one alone, or None to run everything on the processor. A card that is no longer there falls back to Automatic, so a missing card never stops GobboNet starting. A laptop whose NVIDIA card is missing from this list may need its driver, or on Linux the PRIME offload switch below when it appears. <code>gobbonet doctor</code> shows the same list. This is <code>gpu_device</code> in <code>config.toml</code>.</div>
+        <div class="form-hint" id="perf-device-note" style="display:none;color:var(--amber,#ffaa00);margin-top:6px;"></div>
+        <label class="code-enable-row" id="perf-prime-row" style="display:none;margin-top:8px;">
+          <input type="checkbox" id="perf-prime">
+          <span>Use the NVIDIA GPU through PRIME offload</span>
+        </label>
       </div>
 
       <div class="carousel-counter" id="perf-status" style="min-height:16px;"></div>
@@ -473,6 +633,48 @@
       </div>
     </div>
 
+    <!-- MCP servers (1.8.0, #16; js/26-mcp.js; internal/server/mcp.go).
+         Saved on its own buttons, never by CONFIG's SAVE. Adding, changing
+         and switching on only on the PC GobboNet runs on; any device may
+         switch one off. Built with textContent: nothing here is HTML. -->
+    <div class="form-group" id="mcp-group" style="margin-top:12px; padding:12px; border:1px solid rgba(0,243,255,0.18); border-radius:var(--radius); background:rgba(0,243,255,0.02);">
+      <label>&#128295; MCP Servers &mdash; tools from other programs</label>
+      <div class="form-hint" style="margin-top:2px;margin-bottom:10px;">Give characters tools from programs on this PC, like reading a folder or searching your notes.<button type="button" class="tip-btn" aria-label="More about MCP servers" aria-describedby="tip-mcp" aria-expanded="false">?</button></div>
+      <div class="tip-body" id="tip-mcp" hidden>An MCP server is a separate program that offers tools. GobboNet starts it on this PC the first time a character needs it and talks to it directly, never over the network. It runs with your permissions and can do anything you can, so add only programs you trust. A character can only use the tools ticked for it in its card, and by default you are asked before every call. Adding, changing or switching on a server works only in a browser on the PC GobboNet runs on, because it decides which programs run there; any device can switch one off. Each server's error output goes to <code>mcp-&lt;name&gt;.log</code> beside <code>llama-server.log</code>. The servers are <code>[[mcp_server]]</code> tables in <code>config.toml</code>, and a change made here or there applies at once.</div>
+      <div class="mcp-note" id="mcp-note"></div>
+      <div class="mcp-list" id="mcp-list"></div>
+      <button class="btn btn-sm" id="mcp-add" type="button" style="display:none;">+ ADD SERVER</button>
+      <div class="mcp-form" id="mcp-form" hidden>
+        <div class="mcp-warn">&#9888; Runs on this PC with your permissions. Add only programs you trust.</div>
+        <button class="btn btn-sm mcp-paste-toggle" id="mcp-f-paste" type="button" aria-expanded="false" aria-controls="mcp-paste">PASTE A SETUP (JSON)</button>
+        <div class="mcp-paste" id="mcp-paste" hidden>
+          <div class="form-hint">Most servers give their setup as a block of JSON for other apps; paste it here to fill in the fields below.</div>
+          <textarea id="mcp-f-json" rows="5" spellcheck="false" autocapitalize="off" autocomplete="off" placeholder='{ "mcpServers": { "files": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "/home/me/Documents"] } } }'></textarea>
+          <button class="btn btn-sm" id="mcp-f-json-fill" type="button">FILL IN FROM THIS</button>
+        </div>
+        <label for="mcp-f-name">Name</label>
+        <input type="text" id="mcp-f-name" maxlength="32" spellcheck="false" autocapitalize="off" autocomplete="off" placeholder="files">
+        <div class="form-hint">Lowercase letters, digits, - and _.</div>
+        <label for="mcp-f-command">Program</label>
+        <input type="text" id="mcp-f-command" spellcheck="false" autocapitalize="off" autocomplete="off" placeholder="npx">
+        <div class="form-hint">By name if it is on PATH, or its full path.</div>
+        <label for="mcp-f-args">Arguments, one per line</label>
+        <textarea id="mcp-f-args" rows="3" spellcheck="false" autocapitalize="off" autocomplete="off" wrap="off" placeholder="-y&#10;@modelcontextprotocol/server-filesystem&#10;/home/me/Documents"></textarea>
+        <div class="form-hint">No shell reads them, so quotes, *, $ and | are passed as they are.</div>
+        <label for="mcp-f-env">Environment variables, one NAME=value per line</label>
+        <textarea id="mcp-f-env" rows="2" spellcheck="false" autocapitalize="off" autocomplete="off" wrap="off" placeholder="API_TOKEN=..."></textarea>
+        <label class="code-enable-row">
+          <input type="checkbox" id="mcp-f-enabled">
+          <span>Switched on</span>
+        </label>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px;">
+          <button class="btn btn-sm btn-fill" id="mcp-f-save" type="button">SAVE SERVER</button>
+          <button class="btn btn-sm" id="mcp-f-cancel" type="button">CANCEL</button>
+        </div>
+      </div>
+      <div class="standdown-status" id="mcp-status" role="status" aria-live="polite"></div>
+    </div>
+
     <!-- config.toml, the server's settings file (js/15-cards.js CONFIG FILE
          PANEL; internal/server/configfile.go). Saved on its own buttons, like
          Network access above, never by CONFIG's SAVE. Opens only on the PC
@@ -480,7 +682,7 @@
     <div class="form-group" id="config-file-group" style="margin-top:12px; padding:12px; border:1px solid rgba(0,243,255,0.18); border-radius:var(--radius); background:rgba(0,243,255,0.02);">
       <label for="config-file-text">&#128196; Config File &mdash; config.toml</label>
       <div class="form-hint" style="margin-top:2px;margin-bottom:10px;">Edit the server's settings file here instead of hunting for it on disk.<button type="button" class="tip-btn" aria-label="More about the config file" aria-describedby="tip-config-file" aria-expanded="false">?</button></div>
-      <div class="tip-body" id="tip-config-file" hidden><code>config.toml</code> holds the server's own settings: its address and port, the engine and its folders, the model list, and the <code>[ui]</code> presets for every device. The comments in it explain each setting. A save is checked first, and anything that would stop GobboNet from starting is refused with the reason. The version it replaces is kept, and <strong>UNDO LAST SAVE</strong> puts it back. Changes apply the next time GobboNet starts. The password hash and the upstream API key never leave the server: they show as <code>(hidden)</code>, and the password is changed with <code>gobbonet set-password</code>. The file opens only in a browser on the PC GobboNet runs on, because it decides which programs GobboNet starts.</div>
+      <div class="tip-body" id="tip-config-file" hidden><code>config.toml</code> holds the server's own settings: its address and port, the engine and its folders, the model list, and the <code>[ui]</code> presets for every device. The comments in it explain each setting. A save is checked first, and anything that would stop GobboNet from starting is refused with the reason. The version it replaces is kept, and <strong>UNDO LAST SAVE</strong> puts it back. Changes apply the next time GobboNet starts, except to MCP servers, which apply at once. The password hash and the upstream API key never leave the server: they show as <code>(hidden)</code>, and the password is changed with <code>gobbonet set-password</code>. The file opens only in a browser on the PC GobboNet runs on, because it decides which programs GobboNet starts.</div>
       <div class="config-file-path" id="config-file-path"></div>
       <button class="btn btn-sm" id="config-file-open" type="button" onclick="openConfigFileEditor()" style="display:none;">OPEN EDITOR</button>
       <div id="config-file-editor" style="display:none;">
@@ -498,14 +700,20 @@
 
     <div class="form-group" style="margin-top:12px; padding:12px; border:1px solid var(--green-dim); border-radius:var(--radius); background:rgba(0,255,65,0.03);">
       <label style="color:var(--green-neon);">&#128274; Privacy Status</label>
-      <div class="form-hint" style="color:var(--green-dim);">Your chats and models stay on this machine; only web search and the model and mod lists go online, and all are optional.<button type="button" class="tip-btn" aria-label="More about Privacy Status" aria-describedby="tip-privacy" aria-expanded="false">?</button></div>
+      <div class="form-hint" style="color:var(--green-dim);">Your chats and models stay on this machine; only web search, model and mod lists, and update checks go online, all optional.<button type="button" class="tip-btn" aria-label="More about Privacy Status" aria-describedby="tip-privacy" aria-expanded="false">?</button></div>
       <div class="tip-body" id="tip-privacy" hidden>llama.cpp runs 100% offline &mdash; no accounts, no telemetry, no tracking.
         Your model and conversations never leave your machine.
         Two things can reach the internet, both optional and both listed here:
         the web search proxy, which you control with the search toggle, and the
         model catalogue above, which is a plain download of a public list with
         nothing about you or your hardware attached. Turn it off in
-        <code>config.toml</code> with <code>model_catalog_remote = false</code>.</div>
+        <code>config.toml</code> with <code>model_catalog_remote = false</code>.
+        CHECK FOR UPDATES in ABOUT asks GitHub for the list of GobboNet releases,
+        only when you press it and with nothing about you attached;
+        <code>update_releases_url = ""</code> switches it off.
+        The embedding server that lets the RAG Storybook match by meaning runs on
+        this PC too; the line below says whether it is running.</div>
+      <div class="form-hint" id="privacy-embed" role="status" aria-live="polite" style="display:none;"></div>
     </div>
 
     <div class="modal-actions">
@@ -607,6 +815,17 @@
         &#8593; IMPORT CARD
         <input type="file" accept=".png,.jpg,.jpeg,.zip,.json,.charx,image/png,image/jpeg,application/zip,application/json" style="display:none" onchange="importCharacterCard(this)">
       </label>
+
+      <div class="cast-divider"></div>
+
+      <!-- Groups (1.8.0): several characters in one chat. The list and the
+           editor below are filled by js/29-groups.js. -->
+      <div class="cast-section-header cast-section-header-group">
+        <span class="cast-section-title">&#128101; GROUPS</span>
+        <span class="cast-section-sub">several characters in one chat</span>
+      </div>
+      <div class="card-grid card-grid-group" id="group-grid"></div>
+      <button class="btn btn-fill btn-block btn-group" onclick="createGroup()" style="margin-bottom:20px;">+ NEW GROUP</button>
 
       <div class="cast-divider"></div>
 
@@ -744,6 +963,18 @@
         <div class="form-hint">When enabled, messages beyond the last 40 are compressed into a running summary that persists across the conversation.</div>
       </div>
 
+      <!-- Model links (1.8.0, #52). Filled by populatePreferredModelSelect()
+           from models-list.json; hidden in remote mode, which has no swap. -->
+      <div class="form-group" id="card-preferred-model-group">
+        <label for="card-preferred-model">Model for this character</label>
+        <select id="card-preferred-model" onchange="updatePreferredModelNote()">
+          <option value="">Whatever is loaded (default)</option>
+        </select>
+        <div class="form-hint">A new chat with this character offers to switch to this model.<button type="button" class="tip-btn" aria-label="More about the model for this character" aria-describedby="tip-preferred-model" aria-expanded="false">?</button></div>
+        <div class="tip-body" id="tip-preferred-model" hidden>Pick one of the models in your models folder and a new chat with this character offers to load it, or loads it, as CONFIG &gt; Characters &amp; Chat &gt; Model Switching says. A chat you have already had remembers the model that wrote its last reply instead. Only the file name is saved with the character, never where it is, and a character you share or import carries it only as a suggestion: it never downloads anything, and a model that is not installed is simply not used.</div>
+        <div class="form-hint" id="card-preferred-model-note" style="display:none;color:var(--amber,#ffaa00);margin-top:6px;"></div>
+      </div>
+
       <div class="form-group">
         <label for="card-lore-model">Compression Model <span style="opacity:0.5;font-weight:400;font-size:11px;">&mdash; advanced; leave as-is unless you want this</span></label>
         <select id="card-lore-model">
@@ -830,6 +1061,12 @@
 // gobbo.on(&#39;activate&#39;,   () =&gt; ...)
 // gobbo.on(&#39;deactivate&#39;, () =&gt; ...)
 //
+// TOOLS (offered to the model only while &quot;Let the model call this card&#39;s tools&quot; is on)
+// gobbo.tool(name, { description, parameters }, (args, ctx) =&gt; result)
+//   parameters is a JSON Schema object; return a string or any JSON value
+//   args is whatever the model sent, parsed but NOT checked against the
+//   schema: validate it before doing anything with side effects
+//
 // ACTIONS
 // await gobbo.ask(prompt, { system, maxTokens, temperature })  -&gt; string
 // gobbo.note(text, { label, open })   collapsed note; model never sees it
@@ -854,12 +1091,36 @@ gobbo.every(5, async () =&gt; {
   });
 
   if (plot) gobbo.note(plot, { label: &#39;Plot tracker&#39; });
+});
+
+// Example - dice the model can roll (needs the tools box below ticked):
+gobbo.tool(&#39;roll_dice&#39;, {
+  description: &#39;Roll dice and return each die and the total&#39;,
+  parameters: { type: &#39;object&#39;, properties: {
+    count: { type: &#39;integer&#39;, description: &#39;how many dice&#39; },
+    sides: { type: &#39;integer&#39;, description: &#39;faces per die&#39; } },
+    required: [&#39;sides&#39;] }
+}, (args) =&gt; {
+  // args is what the model sent: check it before trusting it
+  const n = Math.max(1, Math.min(20, Number(args.count) || 1));
+  const sides = Math.max(2, Math.min(1000, Number(args.sides) || 6));
+  const rolls = Array.from({ length: n }, () =&gt; 1 + Math.floor(Math.random() * sides));
+  return { rolls, total: rolls.reduce((a, b) =&gt; a + b, 0) };
 });"></textarea>
         <div class="form-hint">Runs with full page access, and <strong>imported cards arrive with it switched off</strong>.<button type="button" class="tip-btn" aria-label="More about custom code" aria-describedby="tip-card-code" aria-expanded="false">?</button></div>
         <div class="tip-body" id="tip-card-code" hidden><b>Writing this with an AI?</b> Paste the comment block above into it &mdash; that is the whole API, and a model that has not seen it will invent methods that do not exist.<br>
           Runs with full page access &mdash; it is your machine and your code, so there is no sandbox pretending otherwise.
           What it <em>cannot</em> do is break the app: a hook that throws is switched off and logged, and the character keeps working.
           <strong>Cards imported from elsewhere always arrive with their code disabled</strong>, however the file was saved. Read it before you switch it on.</div>
+        <!-- Tool calling. Off by default and read as `=== true`
+             (cardToolDefs in js/23-card-code.js); the loop that runs the
+             calls is runGenerationWithTools in js/03-generation.js. -->
+        <label class="code-enable-row">
+          <input type="checkbox" id="card-tools-enabled">
+          <span>Let the model call this card's tools</span>
+        </label>
+        <div class="form-hint">Needs a model with tool support, and <strong>tools run with full page access</strong>.<button type="button" class="tip-btn" aria-label="More about card tools" aria-describedby="tip-card-tools" aria-expanded="false">?</button></div>
+        <div class="tip-body" id="tip-card-tools" hidden>On, and with the code box above also on, the functions this code registers with <code>gobbo.tool(...)</code> are sent with every request, and the model may call them; each call runs here, in this page, with the same access as the rest of the code, and its result goes back to the model. The arguments are the model's, parsed but not checked against your schema: validate them in the tool before acting on them. The model decides when a tool runs, and text it reads (web search results, the storybook, memory files) can steer that, so a tool that reaches the network or changes state is yours to guard. The calls show in the reply as a collapsed block. Needs a model trained for tool use (Qwen3, Llama 3.x, GLM-4.5 and the like) run with the engine's Jinja templates; a model run without them gets one plain reply and a note instead. GobboNet itself sends nothing anywhere for a tool: a tool that reaches the web is this code doing so. How many rounds a reply may take, how long a call may run and how much it may send are under CONFIG &gt; Characters &amp; Chat &gt; Card Tools. Imported cards arrive with this off.</div>
         <div class="carousel-counter" id="card-code-status"></div>
       </div>
 
@@ -937,7 +1198,7 @@ gobbo.every(5, async () =&gt; {
         <div class="form-row">
           <div class="form-group" style="flex:1;">
             <label for="card-temperature">Temperature</label>
-            <input type="range" id="card-temperature" min="0" max="2" step="0.05" value="0.7" oninput="document.getElementById('card-temp-val').textContent=this.value">
+            <input type="range" id="card-temperature" min="0" max="2" step="0.05" value="0.7" oninput="document.getElementById('card-temp-val').textContent=this.value;updateAutoRerollNote()">
             <div class="form-hint" style="display:flex;justify-content:space-between;"><span>Precise 0</span><span id="card-temp-val">0.7</span><span>2 Creative</span></div>
           </div>
           <div class="form-group" style="flex:1;">
@@ -1004,9 +1265,13 @@ gobbo.every(5, async () =&gt; {
           <label for="card-banned-phrases">Banned Phrases <span style="font-weight:400;color:var(--cyan-dim);font-size:11px;">(one per line)</span></label>
           <textarea id="card-banned-phrases" rows="4" placeholder="e.g.&#10;suddenly&#10;chuckle&#10;nodded&#10;smirked" style="font-size:12px;resize:vertical;"></textarea>
           <div class="form-hint">Words this character should stop using; single words work best, and <strong>CHECK</strong> shows what gets banned.<button type="button" class="tip-btn" aria-label="More about Banned Phrases" aria-describedby="tip-banned" aria-expanded="false">?</button></div>
-          <div class="tip-body" id="tip-banned" hidden>Words this character should stop using, pushed down through logit bias. It works on the model's tokens, so <strong>single words work best</strong>. A phrase is stopped at its rarest word that can be banned &mdash; &ldquo;a mix of&rdquo; at <em>mix</em> &mdash; and that word is then banned everywhere, not only in the phrase. Very common words (<em>the, of, her</em>) in a phrase are never banned, and a form of a word that splits into pieces too small to ban safely is left alone. <strong>CHECK</strong> shows exactly what gets banned with the model that is loaded.</div>
+          <div class="tip-body" id="tip-banned" hidden>Words this character should stop using, pushed down through logit bias. It works on the model's tokens, so <strong>single words work best</strong>. A phrase is stopped at its rarest word that can be banned &mdash; &ldquo;a mix of&rdquo; at <em>mix</em> &mdash; and that word is then banned everywhere, not only in the phrase. Very common words (<em>the, of, her</em>) in a phrase are never banned, and a form of a word that splits into pieces too small to ban safely is left alone. <strong>CHECK</strong> shows exactly what gets banned with the model that is loaded. Because it works on tokens, a word can still get through: in another form, split into other pieces, or under a mild strength. Until logit bias catches every word, <strong>Auto Reroll</strong> is the best supplement: it reads the reply itself and writes it again when one appears. <strong>ADD MY BANNED PHRASES</strong> there copies this list across.</div>
           <div style="margin-top:6px;"><button class="btn btn-sm" type="button" onclick="checkBannedPhrases()" title="Ask the loaded model how these words split into tokens, and show what will be banned">CHECK</button></div>
           <div class="form-hint" id="banned-phrases-readout" style="white-space:pre-wrap;margin-top:6px;"></div>
+          <!-- 1.8.0: logit bias works on tokens and still lets words through;
+               Auto Reroll, below the samplers, reads the reply itself. -->
+          <div class="form-hint banned-reroll-pointer" id="banned-reroll-pointer">Logit bias does not stop every word yet, so <strong>Auto Reroll</strong> is its best supplement: it writes again any reply that still uses one.
+            <button class="btn btn-sm" type="button" onclick="goToAutoReroll()" title="Go to Auto Reroll, below the sampler presets">GO TO AUTO REROLL</button></div>
         </div>
 
         <div class="form-group" style="margin-top:4px;">
@@ -1022,6 +1287,31 @@ gobbo.every(5, async () =&gt; {
           <button class="btn btn-sm" type="button" onclick="applySamplerPreset('creative')" title="High variety with XTC + DRY enabled. Best for fiction / RP.">Creative</button>
           <button class="btn btn-sm" type="button" onclick="resetSamplerDefaults()" title="Reset to factory defaults (matches the Precise preset).">Reset</button>
         </div>
+      </div>
+
+      <!-- Auto Reroll (1.8.0). card.autoRerollEnabled (read as === true),
+           autoRerollWords and autoRerollMax; the loop is
+           runGenerationWithReroll in js/03-generation.js. Banned Phrases
+           above points here. -->
+      <div class="form-group" id="card-auto-reroll-group" style="margin-top:12px; padding:12px; border:1px solid rgba(255,255,255,0.08); border-radius:var(--radius); background:rgba(255,255,255,0.02);">
+        <label for="card-auto-reroll-words">&#8635; Auto Reroll
+          <span style="opacity:0.5;font-weight:400;font-size:11px;">&mdash; per character</span>
+        </label>
+        <label class="code-enable-row">
+          <input type="checkbox" id="card-auto-reroll-enabled" onchange="updateAutoRerollNote()">
+          <span>Write a reply again if it uses an off-limits word</span>
+        </label>
+        <div class="form-hint">The reply is stopped the moment a word appears and written again from the start; its thinking is never checked.<button type="button" class="tip-btn" aria-label="More about Auto Reroll" aria-describedby="tip-auto-reroll" aria-expanded="false">?</button></div>
+        <div class="tip-body" id="tip-auto-reroll" hidden>As the reply streams, the part you read is checked against this list; the model's thinking, and the text of earlier messages, are not. When an off-limits word appears, the reply stops there and is generated again, up to <strong>Tries</strong> more times. The last try always runs to its end: if it still uses a word, it is kept whole and its header shows <strong>&#8635; kept</strong>, and a reply that was written again shows <strong>&#8635;</strong> with how many times. Each try is a new generation, so it costs time; Banned Phrases above makes a hit rarer, and the two work best together. A reply that has run one of the card's tools is never written again, since that would run the tool again. With Temperature at 0 every try is the same reply, so replies are only checked and marked. A reply that finishes while GobboNet's page is closed is not checked.</div>
+        <label for="card-auto-reroll-words" style="margin-top:10px;">Off-limits words <span style="font-weight:400;color:var(--cyan-dim);font-size:11px;">(one per line)</span></label>
+        <textarea id="card-auto-reroll-words" rows="4" placeholder="e.g.&#10;chuckl*&#10;smirk*&#10;a mix of&#10;&mdash;" style="font-size:12px;resize:vertical;" oninput="updateAutoRerollNote()"></textarea>
+        <div class="form-hint">Whole words in any case; <code>*</code> at the end matches any ending, as in <code>chuckl*</code>, and a line of punctuation such as <code>&mdash;</code> matches it anywhere.</div>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px;">
+          <button class="btn btn-sm" type="button" onclick="addBannedToAutoReroll()" title="Add the Banned Phrases above to this list">ADD MY BANNED PHRASES</button>
+          <label for="card-auto-reroll-max" style="margin:0 0 0 auto;font-size:12px;">Tries</label>
+          <input type="number" id="card-auto-reroll-max" min="1" max="10" step="1" value="3" style="width:56px;text-align:center;font-size:13px;" oninput="updateAutoRerollNote()">
+        </div>
+        <div class="form-hint" id="card-auto-reroll-note" role="status" aria-live="polite"></div>
       </div>
 
       <div class="modal-actions">
@@ -1097,6 +1387,134 @@ gobbo.every(5, async () =&gt; {
         <button class="btn btn-danger btn-sm" onclick="deletePersona()" id="persona-delete-btn" style="margin-right:auto;">DELETE</button>
         <button class="btn" onclick="cancelPersonaEdit()">Cancel</button>
         <button class="btn btn-fill" onclick="savePersona()">SAVE</button>
+      </div>
+    </div>
+
+    <!-- GROUP EDITOR (1.8.0, js/29-groups.js). A group is edited like a
+         character: nothing changes until SAVE. The member list is drawn by
+         renderGroupMemberList(); group-members-json mirrors it so that the
+         unsaved-changes check, which reads every field here, sees a member
+         added, moved or muted. -->
+    <div id="group-editor" style="display:none;">
+      <div class="persona-editor-header group-editor-header">
+        <span class="persona-editor-tag">&#128101; GROUP</span>
+        <span class="persona-editor-tag-sub">several characters in one chat</span>
+      </div>
+
+      <div class="form-group">
+        <label for="group-name">Group Name</label>
+        <input type="text" id="group-name" maxlength="80" placeholder="e.g. The Party, Writers' Room, Crew of the Larkspur...">
+      </div>
+
+      <div class="form-group">
+        <label>Picture</label>
+        <div class="avatar-picker">
+          <div class="avatar-preview" id="group-avatar-preview">--</div>
+          <div class="avatar-picker-controls">
+            <input type="text" id="group-avatar" placeholder="Paste image URL..." oninput="previewAvatar('group-avatar','group-avatar-preview')">
+            <label class="avatar-file-btn">
+              Browse file...
+              <input type="file" accept="image/*" style="display:none" onchange="handleAvatarFile(this,'group-avatar','group-avatar-preview')">
+            </label>
+          </div>
+        </div>
+        <div class="form-hint">Optional: left empty, the group shows its members' faces.</div>
+      </div>
+
+      <div class="form-group">
+        <label>Members &amp; Turn Order</label>
+        <div class="form-hint" style="margin-top:0;margin-bottom:8px;">Top to bottom is the order they speak in; the arrows move a row.<button type="button" class="tip-btn" aria-label="More about members and turn order" aria-describedby="tip-group-members" aria-expanded="false">?</button></div>
+        <div class="tip-body" id="tip-group-members" hidden>Each member is one of your characters, with everything on its own card: prompt, samplers, banned phrases, storybook, memory, custom code. A character can be in any number of groups, and editing it changes it in all of them. A muted member stays in the chat and can still be made to speak from the chat, but is not picked to reply. With you in the turn order, the round stops at your row and waits for you; without, every member replies and then it is your turn, and NEXT or AUTO in the chat lets them carry on without you.</div>
+        <div class="group-member-list" id="group-member-list"></div>
+        <div class="group-add-row">
+          <select id="group-add-select" aria-label="Character to add"></select>
+          <button class="btn btn-sm" type="button" onclick="groupEditorAddMember()">+ ADD</button>
+          <button class="btn btn-sm" type="button" onclick="groupEditorAddAll()" title="Add every character that is not in the group yet">ADD ALL</button>
+        </div>
+        <label class="code-enable-row" style="margin-top:10px;">
+          <input type="checkbox" id="group-user-in-order" onchange="groupEditorToggleUser()">
+          <span>Give me a place in the turn order (the round stops there and waits for me)</span>
+        </label>
+        <input type="hidden" id="group-members-json" value="">
+      </div>
+
+      <div class="form-group">
+        <label for="group-order">Who Speaks Next</label>
+        <select id="group-order" onchange="groupEditorOrderChanged()">
+          <option value="list">Turn order &mdash; the members in turn, top to bottom</option>
+          <option value="natural">Natural &mdash; whoever is named, then whoever is talkative</option>
+          <option value="shuffle">Shuffle &mdash; everyone once per round, in a random order</option>
+          <option value="dm">DM decides &mdash; the model is asked who is best to respond</option>
+          <option value="manual">Manual &mdash; nobody, until I pick someone</option>
+        </select>
+        <div class="form-hint" id="group-order-hint"></div>
+      </div>
+
+      <div class="form-group" id="group-dm-wrap" style="display:none;">
+        <label for="group-dm-instructions">How The DM Should Choose</label>
+        <textarea id="group-dm-instructions" rows="3" maxlength="4000" placeholder="Optional. e.g. Keep a fight in initiative order. Let Pip interrupt often. Come back to me whenever a decision is mine to make."></textarea>
+        <div class="form-hint">The DM only picks who speaks: it writes nothing in the chat.<button type="button" class="tip-btn" aria-label="More about the DM" aria-describedby="tip-group-dm" aria-expanded="false">?</button></div>
+        <div class="tip-body" id="tip-group-dm" hidden>Before each reply GobboNet asks the model, in a short request of its own, who is best to respond next. It is shown who is in the group, the scene, the last few messages and what you write here, and it answers with one name. With you in the turn order it can also choose you, which ends the round. If its answer names nobody in the group, or the request fails, the turn order is used for that reply and the chat says so. It costs one short extra request per reply. For a narrator who also speaks, add a narrator character to the group; the DM can pick it like anyone else.</div>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group" id="group-replies-wrap">
+          <label for="group-max-replies">Replies Per Round</label>
+          <input type="number" id="group-max-replies" min="0" max="48" step="1" value="0">
+          <div class="form-hint">How many members reply before it is your turn; 0 is everyone once.</div>
+        </div>
+        <div class="form-group" id="group-auto-wrap">
+          <label for="group-auto-delay">AUTO Pause (seconds)</label>
+          <input type="number" id="group-auto-delay" min="0" max="600" step="1" value="5">
+          <div class="form-hint">The pause between rounds while AUTO is on in the chat.</div>
+        </div>
+      </div>
+
+      <label class="code-enable-row" id="group-self-wrap">
+        <input type="checkbox" id="group-allow-self">
+        <span>The same character may speak twice in a row</span>
+      </label>
+
+      <div class="form-group">
+        <label for="group-scenario">Scene</label>
+        <textarea id="group-scenario" rows="4" maxlength="20000" placeholder="Optional. Where they are and what is going on, given to every member. &#123;&#123;char&#125;&#125; is whoever is speaking, &#123;&#123;user&#125;&#125; is you."></textarea>
+        <div class="form-hint">Sent to every member with each reply, on top of that character's own card.</div>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label for="group-introduce">Members Know Each Other By</label>
+          <select id="group-introduce">
+            <option value="names">Names only</option>
+            <option value="short">Names and a few lines each</option>
+            <option value="full">Names and whole personalities</option>
+          </select>
+          <div class="form-hint">Taken from each character's Personality; more costs more context.</div>
+        </div>
+        <div class="form-group">
+          <label for="group-greetings">A New Chat Opens With</label>
+          <select id="group-greetings">
+            <option value="all">Every member's greeting</option>
+            <option value="first">The first member's greeting</option>
+            <option value="none">Nothing</option>
+          </select>
+          <div class="form-hint">A member with no greeting on its card adds nothing.</div>
+        </div>
+      </div>
+
+      <label class="code-enable-row">
+        <input type="checkbox" id="group-stop-on-others">
+        <span>End a reply where it starts writing another member's lines</span>
+      </label>
+      <div class="form-hint">One model plays everyone, so a reply can run on as someone else.<button type="button" class="tip-btn" aria-label="More about ending a reply" aria-describedby="tip-group-stop" aria-expanded="false">?</button></div>
+      <div class="tip-body" id="tip-group-stop" hidden>One model writes every member, one at a time, so a reply sometimes carries on as the next speaker ("Mira: ..." on a new line). With this on, the reply ends there and that part is dropped, and a member's own name at the very start of its reply is removed. Switch it off for a narrator or script-style group whose replies are meant to contain lines labelled with other members' names.</div>
+
+      <div class="form-hint" id="group-editor-note" role="status" aria-live="polite" style="color:var(--amber,#ffaa00);min-height:1.2em;"></div>
+
+      <div class="modal-actions">
+        <button class="btn btn-danger btn-sm" onclick="deleteGroup()" id="group-delete-btn" style="margin-right:auto;">DELETE</button>
+        <button class="btn" onclick="cancelGroupEdit()">Cancel</button>
+        <button class="btn btn-fill" onclick="saveGroup()">SAVE</button>
       </div>
     </div>
 
@@ -1263,7 +1681,9 @@ gobbo.every(5, async () =&gt; {
         <div id="macro-editor" style="display:none;margin-top:10px;padding:12px;border:1px solid var(--border);border-radius:var(--radius);background:rgba(0,243,255,0.02);">
           <div class="form-group" style="margin-bottom:8px;">
             <label for="macro-trigger" style="font-size:11px;">Trigger name <span class="form-hint" style="display:inline;margin:0;">(letters, numbers, underscores — no spaces)</span></label>
+            <div class="form-hint">Enter the name without braces; for example, <code>rosebud</code> becomes <code>{{rosebud}}</code> when saved.</div>
             <input type="text" id="macro-trigger" placeholder="e.g. continue" autocomplete="off" spellcheck="false" style="font-family:var(--font);letter-spacing:0.5px;" oninput="updateMacroPreview()">
+            <div class="form-hint" id="macro-trigger-note" aria-live="polite" hidden></div>
           </div>
           <div class="form-group" style="margin-bottom:10px;">
             <label for="macro-text" style="font-size:11px;">Expansion text</label>
@@ -1516,12 +1936,37 @@ gobbo.every(5, async () =&gt; {
             <div class="about-build-row"><span>Version</span><b id="about-version">&hellip;</b></div>
           </div>
           <div class="about-build-warn" id="about-version-warn" hidden></div>
-          <button class="btn btn-sm" id="about-copy-btn" onclick="copyAboutDiagnostics(this)" title="Copy a short summary of this build to paste into a bug report">COPY BUILD INFO</button>
+          <div class="about-build-actions">
+            <button class="btn btn-sm" id="about-copy-btn" onclick="copyAboutDiagnostics(this)" title="Copy a short summary of this build to paste into a bug report">COPY BUILD INFO</button>
+            <button class="btn btn-sm" type="button" id="about-update-btn" onclick="checkForUpdates(this)" title="Ask GitHub whether a newer GobboNet is out">CHECK FOR UPDATES</button>
+          </div>
+          <!-- The update button (1.8.0): js/28-update.js, internal/update.
+               Nothing here touches the network until CHECK FOR UPDATES is
+               pressed, and then only this server does, which asks GitHub. The
+               area below is filled by the page with textContent. -->
+          <div class="about-update" id="about-update" hidden>
+            <div class="about-update-line" id="about-update-line" role="status" aria-live="polite"></div>
+            <div class="about-update-notes" id="about-update-notes" hidden></div>
+            <div class="dl-bar" id="about-update-bar-wrap" hidden><i id="about-update-bar"></i></div>
+            <div class="about-update-actions" id="about-update-actions"></div>
+          </div>
+          <div class="form-hint" id="about-update-hint">GitHub is asked only when you press CHECK FOR UPDATES, and only releases the maintainer signed are installed.<button type="button" class="tip-btn" aria-label="More about updates" aria-describedby="tip-update" aria-expanded="false">?</button></div>
+          <div class="tip-body" id="tip-update" hidden>CHECK FOR UPDATES asks GitHub for the list of GobboNet releases. Nothing about
+            you or this install is sent; the comparison happens here. UPDATE NOW asks
+            first, then downloads the release, checks it against an update file signed
+            with the GobboNet maintainer's key, which is built into this program, and
+            replaces the gobbonet program file. Nothing older than the version you have
+            is ever installed; a later build of the same version, a fix, is. Your
+            chats, characters, models and settings are not touched. Updates are
+            installed from the PC GobboNet runs on; a phone can check. A copy installed
+            from a .deb or .rpm package is updated with the new package instead.
+            <code>update_releases_url</code> in <code>config.toml</code> points the check
+            elsewhere, or empty switches it off.</div>
         </div>
 
         <div style="padding:10px 12px;border:1px solid rgba(0,255,65,0.15);border-radius:var(--radius);background:rgba(0,255,65,0.03);">
           <div style="color:var(--green-neon);font-size:11px;font-weight:700;letter-spacing:1px;margin-bottom:6px;">&#128274; PRIVATE BY DESIGN</div>
-          <div style="color:rgba(255,255,255,0.55);line-height:1.6;">No accounts, no telemetry, no cloud round-trips. Two downloads get you set up &mdash; llama.cpp and whichever model you pick &mdash; and after that you can unplug the internet and it keeps working. The only network calls left are ones you ask for: the optional web-search proxy, and reaching the chat from another device on your own network.</div>
+          <div style="color:rgba(255,255,255,0.55);line-height:1.6;">No accounts, no telemetry, no cloud round-trips. Two downloads get you set up &mdash; llama.cpp and whichever model you pick &mdash; and after that you can unplug the internet and it keeps working. The only network calls left are ones you ask for: the optional web-search proxy, CHECK FOR UPDATES when you press it, and reaching the chat from another device on your own network.</div>
         </div>
 
         <div style="padding:12px 14px;border:1px solid rgba(0,243,255,0.12);border-radius:var(--radius);background:rgba(0,243,255,0.02);">
@@ -1530,7 +1975,7 @@ gobbo.every(5, async () =&gt; {
             <div><span style="color:var(--cyan-bright);font-weight:700;">&#128172; Conversations</span> &mdash; branch &amp; fork any message into parallel timelines, reroll replies and step back through every variant, follow the model's reasoning in collapsible chain-of-thought, attach files, and schedule prompts to fire on their own.</div>
             <div><span style="color:var(--cyan-bright);font-weight:700;">&#127917; Characters &amp; memory</span> &mdash; build character cards or import them from SillyTavern / TavernAI (V1&ndash;V3), swap personas per chat, and keep long stories coherent with a running plot log that records one short beat per compression pass. Open it any time to see exactly what was recorded and when.</div>
             <div><span style="color:var(--cyan-bright);font-weight:700;">&#128269; Retrieval</span> &mdash; give a character a storybook of entities and lore, and the right entry is pulled in when it becomes relevant &mdash; by weighted tags, and by meaning via a local embedding model, so a mention that never uses your exact keyword still finds it.</div>
-            <div><span style="color:var(--cyan-bright);font-weight:700;">&#127899; Fine control</span> &mdash; per-character samplers (temperature, min-p, top-p, repeat penalty, XTC, DRY), logit bias to nudge or ban specific tokens, carousel system prompts, and {{macros}} that expand before they reach the model.</div>
+            <div><span style="color:var(--cyan-bright);font-weight:700;">&#127899; Fine control</span> &mdash; per-character samplers (temperature, min-p, top-p, repeat penalty, XTC, DRY), logit bias to nudge or ban specific tokens, Auto Reroll to write a reply again when it uses an off-limits word, carousel system prompts, and {{macros}} that expand before they reach the model.</div>
             <div><span style="color:var(--cyan-bright);font-weight:700;">&#129513; Extend &amp; own it</span> &mdash; attach JavaScript to a single character to give it behaviour of its own, inject site-wide CSS and JS, hot-swap models without restarting, reach it from any device on your LAN behind a password, and export everything as portable JSON.</div>
           </div>
         </div>
@@ -1565,19 +2010,18 @@ gobbo.every(5, async () =&gt; {
              a new tab with noopener, so the page it opens cannot reach back
              into this one.
 
-             CHECK FOR UPDATES is a placeholder and does nothing. It is
-             disabled exactly the way Add a Model's NOT WORKING YET is, with the
-             reason written underneath. When the real check is built it must be
-             user-triggered or opt-in, or the privacy box has to change. -->
+             CHECK FOR UPDATES was a placeholder here until 1.8.0. It is real
+             now and lives under THIS BUILD, where the version it compares
+             against is; it is user-triggered, which is what the privacy box
+             above promises. -->
         <div style="padding:10px 12px;border:1px solid rgba(255,255,255,0.06);border-radius:var(--radius);background:rgba(255,255,255,0.02);">
           <div style="color:rgba(255,255,255,0.4);font-size:11px;font-weight:700;letter-spacing:1px;margin-bottom:6px;">&#128279; LINKS</div>
           <div style="color:rgba(255,255,255,0.4);line-height:1.6;font-size:12px;">Mods, extras and the community live outside the app. Each opens in a new tab, and nothing is contacted until you click it.</div>
           <div style="display:flex;flex-wrap:wrap;gap:12px;margin-top:12px;">
             <button class="btn btn-sm" type="button" id="about-mods-btn" onclick="openAboutLink('https://goblincorps.com/gobbonet_extras')" title="goblincorps.com/gobbonet_extras">MODS</button>
             <button class="btn btn-sm" type="button" id="about-discord-btn" onclick="openAboutLink('https://discord.gg/rcmN8uEbaa')" title="discord.gg/rcmN8uEbaa">DISCORD</button>
-            <button class="btn btn-sm" type="button" id="about-update-btn" disabled title="Coming in a later version">CHECK FOR UPDATES</button>
           </div>
-          <div style="color:rgba(255,255,255,0.4);line-height:1.6;font-size:12px;margin-top:8px;">Update checks are coming in a later version. New releases are announced in the Discord.</div>
+          <div style="color:rgba(255,255,255,0.4);line-height:1.6;font-size:12px;margin-top:8px;">New releases are announced in the Discord.</div>
         </div>
 
       </div>
@@ -1613,5 +2057,9 @@ gobbo.every(5, async () =&gt; {
 <script src="js/23-card-code.js"></script>
 <script src="js/24-boot.js"></script>
 <script src="js/25-tutorial.js"></script>
+<script src="js/26-mcp.js"></script>
+<script src="js/27-files-panel.js"></script>
+<script src="js/28-update.js"></script>
+<script src="js/29-groups.js"></script>
 </body>
 </html>

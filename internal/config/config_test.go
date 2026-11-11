@@ -338,7 +338,7 @@ func TestEnvOverridesFile(t *testing.T) {
 	}
 }
 
-// The GEMMA_* names fileserver.ps1 read still work, so an existing Windows-side
+// The GEMMA_* names the 1.7 PowerShell server read still work, so an existing Windows-side
 // setup carries over without being re-entered.
 func TestLegacyEnvNamesStillWork(t *testing.T) {
 	path := writeConfig(t, "llm_url = \"http://from-file:1\"\n")

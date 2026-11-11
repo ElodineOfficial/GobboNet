@@ -1,5 +1,5 @@
 // Package httpx holds the response helpers and the header policy every route
-// shares. Port of fileserver.ps1's Write-Json / Write-Text / Add-CommonHeaders /
+// shares. Port of the 1.7 PowerShell server's Write-Json / Write-Text / Add-CommonHeaders /
 // Get-MimeType helpers.
 package httpx
 

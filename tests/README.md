@@ -13,18 +13,28 @@ node tests/test-markdown-render.mjs     # one suite
 for f in tests/*.mjs; do node "$f" || echo "FAILED: $f"; done   # all of them
 ```
 
-`test-engine-args.py` pins the llama-server command line across the two launch
-paths — `launch.bat`'s `:start_server` block and `Supervisor.BuildArgs`, the
-latter being what the `.deb` and the Windows installer both use. Every flag
-present on one side and not the other has to be listed as a known, reasoned
-difference or the test fails. It also holds the `-lv` / offload-detection
-pairing from #33: if GPU-offload confirmation is ever added to the Go path,
-`-lv` must arrive with it, because llama.cpp files those log lines above the
-default verbosity threshold.
+`test-engine-args.py` pins the llama-server command line. Up to 1.7.9 there
+were two, `launch.bat`'s `:start_server` block and `Supervisor.BuildArgs`, and
+it checked they did not drift; since 1.8.0 `BuildArgs` is the only one for the
+chat model and `EmbedArgs` the only one for the embedding server, and
+`launch.bat` starts no llama-server at all, so it checks that stays true and
+that both keep their flags. `test-embed-supervisor.py` pins the rest of #15:
+neither launcher starts the embedding server, `launch.bat` still downloads its
+model, and its pin, file name and address are the same in every place they are
+written. It also holds
+the `-lv` / offload-detection pairing from #33: the Go path confirms GPU
+offload, so `-lv` must be on its command line, because llama.cpp files those
+log lines above the default verbosity threshold.
 
 ```sh
 python3 tests/test-engine-args.py
 ```
+
+`test-mcp-config.mjs` covers CONFIG > Advanced > MCP Servers (1.8.0, #16).
+The MCP servers themselves are tested in Go (`go test ./internal/mcp/
+./internal/server/`) against a fake MCP server built into the test binary,
+`internal/mcp/mcptest`, which a real `Manager` starts as it would start any
+server.
 
 `test-stop-script.py` checks that `stop-gobbonet.bat` stops only the install it
 belongs to. Its second half runs the script's real PowerShell routine against a
@@ -236,6 +246,39 @@ card with no field, as from an older install or an import, thinks as it always
 did. Background is in
 [`docs/changelog/CHANGELOG-1.7.7-thinking-switch.md`](../docs/changelog/CHANGELOG-1.7.7-thinking-switch.md).
 
+`test-card-tools.mjs` covers tool calling for card-code tools: `gobbo.tool()`
+registration and its validation, that nothing is sent unless the card's tools
+switch is exactly true and its code is on (imports and restored state clear the
+switch), joining streamed `tool_calls` deltas, the loop around the transport
+(the exact message shape per round, the round limit, the retry when the
+engine runs without `--jinja`, Stop between rounds), `runCardTool`'s error
+strings, the editor, variant and rendering wiring, and (1.8.0) the four limits
+in CONFIG > Card Tools with their floors and ceilings. Background is in
+[`docs/changelog/CHANGELOG-1.8.0-card-tools.md`](../docs/changelog/CHANGELOG-1.8.0-card-tools.md).
+
+`test-load-failure.mjs` covers why a model failed to load (1.8.0, issue #67)
+on the page's side: a chat request that fails while the model is down shows
+`/swap-status`'s plain sentence and the engine's line instead of the HTTP
+status, and the landing page's OFFLINE pill and its details. The server side
+is `internal/supervisor/ring_test.go`. Background is in
+[`docs/changelog/CHANGELOG-1.8.0-load-failure.md`](../docs/changelog/CHANGELOG-1.8.0-load-failure.md).
+
+`test-gpu-choice.mjs` covers the GPU menu in CONFIG > Performance (1.8.0,
+issue #72): the devices the engine lists, the saved choice, the notes (CPU
+build, small card, PRIME offload) and saving through the box's buttons.
+Background is in
+[`docs/changelog/CHANGELOG-1.8.0-gpu-picker.md`](../docs/changelog/CHANGELOG-1.8.0-gpu-picker.md).
+
+`test-model-links.mjs` covers model links (1.8.0, issue #52): a chat
+remembering the model that wrote its last reply, a character linked to a model,
+and opening a chat following them as CONFIG > Model Switching says. It runs the
+real `js/02-model.js`: the name rule against the server's, the precedence, the
+ask bar and its buttons, automatic and off, remote mode, a model that is not
+installed, an imported card naming an absent model, the server's 409 busy
+turned into "switch when done", and writing `thread.model` only on a change.
+Background is in
+[`docs/changelog/CHANGELOG-1.8.0-model-links.md`](../docs/changelog/CHANGELOG-1.8.0-model-links.md).
+
 `test-context-budget.mjs` covers the four per-character numbers that decide when
 older messages are compressed into lore: input budget, reply room, landing point
 and verbatim reserve. It runs the real `resolveContextBudget`:
@@ -421,6 +464,18 @@ GOBBONET_TEST_APPIMAGE_RUNTIME=installer-linux/vendor/appimage-runtime-20251108-
   python3 tests/test-appimage.py
 ```
 
+`test-appimage-login-entry.py` runs the setup page through to Finish with
+Start at login ticked, laid out as an AppImage's mount with `APPIMAGE` and
+`APPDIR` set as the runtime sets them: the login entry must start the AppImage
+file, quoted, and not the launcher inside the mount, which is gone once
+GobboNet closes (1.7.8 to 1.8.0 wrote that). A package or ZIP layout, and
+another AppImage's variables, still get the launcher beside the setup page.
+`internal/autostart`'s Go tests cover `gobbonet autostart --enable`.
+
+```sh
+python3 tests/test-appimage-login-entry.py
+```
+
 `test-moe-offer.py` covers offering the three Mixture-of-Experts models to
 8-12 GB cards when there is enough system RAM (issue #65):
 
@@ -458,10 +513,11 @@ The downloader's own diagnostics are in
 
 ## Launcher invariants
 
-`test-launch-gpu-detect.py` checks the arrangement in `launch.bat` that lets it
-confirm GPU offload: that `-lv` is passed, that the verbosity is high enough for
-llama.cpp to emit the lines the check reads, and that the check accepts more than
-one spelling of them. Background is in
+`test-launch-gpu-detect.py` checks where GPU offload is confirmed. Up to 1.7.9
+that was `launch.bat`'s own log grep; since 1.8.0 it is `gobbonet.exe`
+(`internal/supervisor/engineout.go`), so the test checks `launch.bat` kept no
+half of it, that the Go command line passes `-lv` high enough for llama.cpp to
+emit the lines, and that the check accepts more than one spelling of them. Background is in
 [`docs/changelog/CHANGELOG-1.7-llamacpp-log-verbosity.md`](../docs/changelog/CHANGELOG-1.7-llamacpp-log-verbosity.md).
 
 ```sh
@@ -480,18 +536,38 @@ read sits inside a parenthesised block. Background is in
 python3 tests/test-setup-lan.py
 ```
 
-`test-launch-gpu-layers.py` pins where `launch.bat` turns automatic GPU
-placement (`-1`) into 99 layers: on the legacy path only, before llama-server
-and the hot-swap variables see it, never on the managed hand-off to
-`gobbonet.exe`, which does its own capability-checked fitting.
+`test-launch-gpu-layers.py` pins that `launch.bat` hands automatic GPU
+placement (`-1`) to `gobbonet.exe` untouched, which does its own
+capability-checked fitting. The conversion to 99 layers belonged to the legacy
+path, which 1.8.0 removed.
+
+`test-launch-setup-log.py` runs the Linux launcher's first run for real, with
+a stand-in program and setup page, and stops it every way a first run ends
+early: SIGTERM, a logout's SIGHUP, Ctrl+C, before and after the browser step,
+and a setup that fails. Each time the setup page's temporary log
+(`setup.XXXXXX`) must be gone, its output in `launch.log`, and the setup page
+stopped. Up to 1.8.0 an unfinished first run left that file, which kept the
+data folder after `gobbonet uninstall`.
+
+```sh
+python3 tests/test-launch-setup-log.py
+```
+
+`test-legacy-removal.py` keeps the PowerShell server gone (1.8.0, #13):
+`fileserver.ps1` is not shipped, the installer deletes a copy an older install
+left, and no file names `fileserver.ps1` or `GOBBONET_LEGACY_SERVER` except an
+allowlist that gives each remaining place its reason. A new mention fails here
+until it is removed or justified.
 
 ## Build scripts
 
 `test-build-scripts.py` holds the rule that no build script runs another as a
 bare path or behind `[ -x ]` — always `bash x.sh` or `python3 x.py`. The
 executable bit does not survive a commit made from Windows, and before this every
-build script had lost it: `./scripts/build-release.sh` was refused, and two steps skipped
-themselves silently. It tests its own pattern against the exact lines it
+build script had lost it: running `scripts/build-release.sh` directly was refused, and two steps skipped
+themselves silently. Since 1.8.0 it also holds the docs to the same rule: every
+command a person is told to type runs the script through `bash` or `python3`,
+so it works whatever the file mode. It tests its own pattern against the exact lines it
 replaced, so it cannot pass by matching nothing. Background is in
 [`docs/changelog/CHANGELOG-1.7.7-build-scripts.md`](../docs/changelog/CHANGELOG-1.7.7-build-scripts.md).
 
@@ -528,7 +604,10 @@ line and the spec's newest changelog entry. The page stamp has its own test,
 - **The payload:**
   - every helper `launch.bat` runs is installed;
   - `models.ini` is installed and removed;
-  - everything installed at the root is removed on uninstall.
+  - everything installed at the root is removed on uninstall;
+  - so is what the update button leaves beside the program
+    (`gobbonet.exe.old`, `gobbonet.exe.old-*`, `gobbonet.new.exe`, 1.8.0),
+    under the names `internal/update/install.go` gives them.
 - **The build guide:** it holds `docs/BUILDING.md` to naming `installer-win/`.
   `installer/` was built by mistake for 1.7.4 and for the first 1.7.7 test
   build.

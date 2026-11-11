@@ -53,6 +53,15 @@ class VersionStrings(unittest.TestCase):
                         "gobbonet.spec's newest changelog entry should be for %s, not %s"
                         % (VERSION, newest.group(1) if newest else 'missing'))
 
+    def test_bug_report_version_placeholder_follows_version(self):
+        # The bug form shows the version a reporter should see in ABOUT. It was
+        # not in this tree until 1.8.0 (CHANGELOG-1.7.9-version-bump.md noted it
+        # had to be bumped by hand on GitHub); now it moves with VERSION.
+        bug = (ROOT / '.github' / 'ISSUE_TEMPLATE' / 'bug.yml').read_text(encoding='utf-8')
+        version = bug.split('    id: version\n', 1)[1].split('  - type:', 1)[0]
+        self.assertIn('placeholder: "%s"' % VERSION, version,
+                      '.github/ISSUE_TEMPLATE/bug.yml should show %s as the version placeholder' % VERSION)
+
 
 if __name__ == '__main__':
     unittest.main()

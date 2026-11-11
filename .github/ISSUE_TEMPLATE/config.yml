@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a security problem privately
+    url: https://discord.gg/rcmN8uEbaa
+    about: Please don't open a public issue for a security problem. Send it to Elodine privately on the GobboNet Discord.
+  - name: Questions, ideas and half-finished thoughts
+    url: https://discord.gg/rcmN8uEbaa
+    about: The GobboNet Discord, for anything that isn't a bug report or a feature request yet.

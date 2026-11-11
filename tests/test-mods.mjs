@@ -15,6 +15,10 @@
  *      a phone can look, not install; a refused install says why
  *   F. a mod file that is missing or throws while loading switches its mod
  *      off and says so; a URL entry that fails does not; ?nomods loads none
+ *   G. each My extensions entry has its own switch (1.8.0, from Larck
+ *      Drakengold's 4db2469): off entries are not loaded, a switch acts on the
+ *      saved entry by the number the server gave it, a new entry's switch
+ *      waits for SAVE, a phone can only switch off, file:// keeps its own copy
  */
 import fs from 'fs';
 import vm from 'vm';
@@ -98,7 +102,19 @@ function world({ mods = [], canManage = true, served = true, importStatus = 200,
         return reply(200, { id, version: e.version, updated, enabled: updated ? server.mods.find(x => x.id === id).enabled : true });
       }
       if (url === '/mods/import-legacy') return reply(importStatus, importStatus === 200 ? { id: 'my-extensions', created: true } : { error: 'not on the PC' });
-      let m = url.match(/^\/mods\/([^/]+)\/enable$/);
+      let m = url.match(/^\/mods\/([^/]+)\/entry-enable$/);
+      if (m) {
+        const b = JSON.parse(opts.body);
+        if (server.entryStatus) return reply(server.entryStatus, { error: 'no such entry' });
+        if (b.enabled && !server.canManage) return reply(403, { error: 'PC only' });
+        const list = server.myExt[b.kind === 'css' ? 'styles' : 'scripts'] || [];
+        const e = list.find(x => x.index === b.index);
+        if (!e) return reply(404, { error: 'no such entry' });
+        e.enabled = b.enabled;
+        for (const mod of server.mods) for (const f of (mod.files || [])) if (f.type === b.kind && f.entryIndex === b.index) f.enabled = b.enabled;
+        return reply(200, {});
+      }
+      m = url.match(/^\/mods\/([^/]+)\/enable$/);
       if (m) { const b = JSON.parse(opts.body); if (b.enabled && !server.canManage) return reply(403, { error: 'PC only' }); server.mods.find(x => x.id === m[1]).enabled = b.enabled; return reply(200, {}); }
       if (url === '/mods/my-extensions/source' && method === 'GET') return reply(200, server.myExt);
       if (url === '/mods/my-extensions/source' && method === 'PUT') { if (!server.canManage) return reply(403, { error: 'PC only' }); server.myExt = JSON.parse(opts.body); return reply(200, { saved: true }); }
@@ -335,6 +351,90 @@ console.log('\n=== F. a mod that fails is switched off ===');
   const w = world({ mods: [{ id: 'theme', name: 'Theme', enabled: true, hash: 'h1', files: [{ path: 'theme.css', type: 'css' }] }], search: '?nomods' });
   await w.ctx.applyMods();
   ok(w.loaded().length === 0 && w.calls.some(c => c.url === '/mods'), '?nomods in the address loads no mods, and the panel still lists them');
+}
+
+console.log('\n=== G. each My extensions entry has its own switch (1.8.0, from 4db2469) ===');
+const MYEXT = () => [{ id: 'my-extensions', name: 'My extensions', enabled: true, hash: 'm', origin: 'editor', files: [
+  { path: 'style-1.css', type: 'css', name: 'Off one', entryIndex: 1, enabled: false },
+  { url: 'https://cdn.example/on.css', type: 'css', name: 'On one', entryIndex: 2, enabled: true },
+  { path: 'script-1.js', type: 'js', entryIndex: 0, enabled: true },
+] }];
+{
+  const w = world({ mods: MYEXT() });
+  await w.ctx.applyMods();
+  ok(JSON.stringify(w.loaded()) === JSON.stringify(['https://cdn.example/on.css', '/mods/my-extensions/files/script-1.js']),
+     'a file whose entry is switched off is not loaded; the rest of the mod is', w.loaded());
+}
+{
+  // The server reports where each entry is saved. Entry 0 was a name with no
+  // URL or text, saved as nothing, so the two that remain are 1 and 2.
+  const w = world({ mods: MYEXT() });
+  w.server.myExt = { name: 'My extensions', scripts: [], styles: [
+    { name: 'Off one', url: '', raw: 'a{}', enabled: false, index: 1 },
+    { name: 'On one', url: 'https://cdn.example/on.css', raw: '', enabled: true, index: 2 },
+  ] };
+  await w.ctx.loadMods();
+  await w.ctx._refreshMyExt();
+  w.ctx.openExtensions();
+  const html = w.els['ext-styles-list'].innerHTML;
+  const boxes = html.match(/<input type="checkbox" class="ext-entry-enabled"[^>]*>/g) || [];
+  const on = b => /class="ext-entry-enabled" checked/.test(b);
+  ok(boxes.length === 2 && !on(boxes[0]) && on(boxes[1]) && /Enabled/.test(html),
+     'each entry shows an Enabled switch, set from the server', boxes);
+  await w.ctx.setExtEntryEnabled('styles', w.ctx._draftRef().styles[0].id, true);
+  const post = w.calls.find(c => c.url === '/mods/my-extensions/entry-enable');
+  ok(post && post.body.kind === 'css' && post.body.index === 1 && post.body.enabled === true,
+     'switching one sends its saved number (1), not its place in the list (0)', post && post.body);
+  ok(w.server.myExt.styles[0].enabled === true && w.loaded().includes('/mods/my-extensions/files/style-1.css'),
+     'and it takes effect at once: the stylesheet loads', w.loaded());
+  ok(!w.calls.some(c => c.method === 'PUT'), 'without saving the rest of the draft');
+
+  w.server.entryStatus = 404;
+  await w.ctx.setExtEntryEnabled('styles', w.ctx._draftRef().styles[1].id, false);
+  ok(w.ctx._draftRef().styles[1].enabled === true && /Could not switch this entry: no such entry/.test(w.els['mods-note'].textContent),
+     'a refused switch goes back, and says why', w.els['mods-note'].textContent);
+}
+{
+  const w = world({ mods: MYEXT() });
+  await w.ctx.loadMods();
+  w.ctx.openExtensions();
+  w.ctx._draftRef().styles.push({ id: 'fresh', name: 'Fresh', url: '', raw: 'b{}', enabled: true, persisted: false, persistedIndex: null });
+  await w.ctx.setExtEntryEnabled('styles', 'fresh', false);
+  ok(!w.calls.some(c => c.url.endsWith('/entry-enable')) && /not saved yet.*SAVE/.test(w.els['mods-note'].textContent),
+     'an entry not saved yet asks nothing of the server, and says SAVE keeps its switch');
+  w.ctx.closeExtensions = () => {};
+  await w.ctx.saveExtensions();
+  const put = w.calls.find(c => c.method === 'PUT');
+  ok(put && put.body.styles.find(e => e.name === 'Fresh').enabled === false, 'SAVE carries every entry\'s switch', put && put.body);
+}
+{
+  // A phone: an ON entry can be switched off there, an OFF one cannot be switched on.
+  const w = world({ mods: MYEXT(), canManage: false });
+  w.server.myExt = { name: 'My extensions', scripts: [], styles: [
+    { name: 'Off one', url: '', raw: 'a{}', enabled: false, index: 1 },
+    { name: 'On one', url: 'https://cdn.example/on.css', raw: '', enabled: true, index: 2 },
+  ] };
+  await w.ctx.loadMods();
+  await w.ctx._refreshMyExt();
+  w.ctx.openExtensions();
+  const boxes = w.els['ext-styles-list'].innerHTML.match(/<input type="checkbox" class="ext-entry-enabled"[^>]*>/g) || [];
+  ok(/disabled/.test(boxes[0]) && !/disabled/.test(boxes[1]), 'on a phone an off entry cannot be switched on; an on one can be switched off', boxes);
+  const css = read('css/11-panels.css');
+  ok(css.includes('#ext-modal.mods-readonly .ext-entry input:not(.ext-entry-enabled)'), 'and the read-only panel leaves that switch usable');
+  await w.ctx.setExtEntryEnabled('styles', w.ctx._draftRef().styles[1].id, false);
+  ok(w.calls.some(c => c.url.endsWith('/entry-enable') && c.body.enabled === false && c.body.index === 2), 'switching off from a phone goes to the server');
+}
+{
+  // file://: this browser's copy. The switch changes the saved entry only.
+  const legacy = { enabled: true, styles: [{ id: 's1', name: 'A', url: '', raw: 'p{}' }, { id: 's2', name: 'B', url: '', raw: 'q{}' }], scripts: [] };
+  const w = world({ legacy, served: false });
+  await w.ctx.applyMods();
+  w.ctx.openExtensions();
+  w.ctx._draftRef().styles[1].raw = 'EDITED';
+  await w.ctx.setExtEntryEnabled('styles', 's1', false);
+  ok(w.ctx.state.extensions.styles[0].enabled === false && w.ctx.saves >= 1, 'on file:// the saved entry is switched off and saved');
+  ok(!w.loaded().includes('(inline):p{}') && w.loaded().includes('(inline):q{}'), 'its stylesheet goes; the other stays', w.loaded());
+  ok(w.ctx.state.extensions.styles[1].raw === 'q{}', 'and an unsaved edit to another entry is not saved by it');
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

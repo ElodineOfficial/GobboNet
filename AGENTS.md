@@ -4,7 +4,7 @@ GobboNet is a private, offline chat app for local GGUF models. One Go binary,
 `gobbonet`, serves the chat page, proxies to llama.cpp and supervises it. The
 Windows and Linux launchers and installers around it handle first-run setup.
 
-This file describes the tree as of 1.7.9. Where it and the code disagree, the
+This file describes the tree as of 1.8.0. Where it and the code disagree, the
 code is right, and this file should be fixed in the same change. It names files
 and functions rather than line numbers, because line numbers go stale.
 
@@ -44,31 +44,31 @@ and functions rather than line numbers, because line numbers go stale.
 
 | Path | What it is |
 | --- | --- |
-| `cmd/gobbonet/` | The binary: `serve` (the default), `launch`, `setup`, `set-password`, `config`, `doctor`, `check`, `engine`, `keyring`, `decrypt`, `autostart`, `uninstall`, `version`. Run `gobbonet --help`. |
+| `cmd/gobbonet/` | The binary: `serve` (the default), `launch`, `setup`, `set-password`, `config`, `doctor`, `check`, `engine`, `keyring`, `decrypt`, `autostart`, `uninstall`, `update`, `version`. Run `gobbonet --help`. |
 | `internal/` | Go packages, listed below. |
-| `chat.html`, `js/`, `css/` | The chat page: 25 JS modules (`01-config.js` to `25-tutorial.js`) and 19 stylesheets, as plain `<script>` and `<link>` tags. There is no bundler. `manifest.webmanifest` and `icons/` are its phone home-screen name and icons. |
+| `chat.html`, `js/`, `css/` | The chat page: 29 JS modules (`01-config.js` to `29-groups.js`) and 21 stylesheets, as plain `<script>` and `<link>` tags. There is no bundler. `manifest.webmanifest` and `icons/` are its phone home-screen name and icons. |
 | `default-characters.json` | The built-in character presets offered on the landing page. |
 | `launch.bat` | Windows first run and "Setup or add a model": password, hardware probe, engine download, model menu. It then writes the settings into `gobbonet.exe`'s config and starts it. |
-| `fileserver.ps1` | The legacy PowerShell server. Used only when `gobbonet.exe` is missing or `GOBBONET_LEGACY_SERVER` is set. |
-| `setup-lan.bat`, `teardown-lan.bat` | Windows LAN access: subnet-scoped firewall rules (`GobboNet-Web`, `GobboNet-mDNS`, program rule `GobboNet`) and URL reservations, and their removal. |
+| `setup-lan.bat`, `teardown-lan.bat` | Windows LAN access: subnet-scoped firewall rules (`GobboNet-Web`, `GobboNet-mDNS`, program rule `GobboNet`), and their removal. Both remove the URL reservations versions up to 1.7.9 made; neither adds one. |
 | `stop-gobbonet.bat`, `Repair Windows shortcuts.bat` | Stop everything; re-point Start menu and desktop shortcuts at `gobbonet.exe launch`. |
 | `hardware-probe.ps1`, `hw-recommend.ps1`, `identify-model.ps1` | Windows hardware detection, model recommendation, and GGUF identification for the launcher. |
 | `installer-win/` | **The Windows installer that ships** (NSIS). |
-| `catalog/` | `models.ini`, the model catalogue every platform reads, and `gen-catalog.py`, which generates it from `launch.bat`. `pin-hashes.py` pins each model's SHA-256 into `launch.bat`; `gen-remote-catalog.py` writes `gobbonet_model_list.json`, the live list to upload to goblincorps.com. (Was `installer/` until 1.7.9.) |
+| `catalog/` | `models.ini`, the model catalogue every platform reads, and `gen-catalog.py`, which generates it from `launch.bat`. `pin-hashes.py` pins each model's SHA-256 into `launch.bat` from HuggingFace's LFS pointers and then regenerates `models.ini` and `gobbonet_model_list.json`, the live list to upload to goblincorps.com (`--check --require-all` before a release; `--save-pointers FILE` on a machine that can reach HuggingFace, then that file as `GOBBONET_PIN_FIXTURE` where the catalogue is edited); `gen-remote-catalog.py` writes the live list on its own. (Was `installer/` until 1.7.9.) |
 | `installer-linux/` | The `.deb`, the Linux launcher `gobbonet-launch`, and its first-run wizard (`gobbonet-setup.py` + `wizard.html`). |
 | `installer-fedora/` | The `.rpm`. Install with `sudo dnf install`. |
 | `linux-amd64/` | The ZIP's Linux runtime: launcher, wizard copy and, once built, the binary and engine. |
 | `engine.sha256` | The pinned llama.cpp build and its hashes, read by every builder. |
-| `scripts/` | Build and packaging: `stage-web.sh`, `make-zip.sh`, `build-release.sh`, `verify-payload.sh`, `payload.manifest`, and `PATCH-README.txt`, the release notes `make-zip.sh` puts at the archive's root. Each runs from the repo root whatever directory you call it from. See [docs/BUILDING.md](docs/BUILDING.md). |
+| `scripts/` | Build and packaging: `stage-web.sh`, `make-zip.sh`, `build-release.sh`, `verify-payload.sh`, `payload.manifest`, `make-update-manifest.sh` (the signed update file the update button installs from; [docs/UPDATES.md](docs/UPDATES.md)), and `PATCH-README.txt`, the release notes `make-zip.sh` puts at the archive's root. Each runs from the repo root whatever directory you call it from. See [docs/BUILDING.md](docs/BUILDING.md). |
 | `tests/` | Node and Python suites. See [tests/README.md](tests/README.md). |
 | `docs/` | `GO_SERVER.md`, `BUILDING.md`, `state-integration.md`, `INDEX.md`, `changelog/`, investigations and roadmaps. |
+| `.github/` | The bug and feature issue forms, the security contact link, and the PR template with the privacy checklist (1.8.0). `tests/test-docs-current.py` holds them to `CONTRIBUTING.md`. |
 
 ### Go packages
 
 | Package | Does |
 | --- | --- |
 | `server` | Wires every route together (list below). |
-| `supervisor` | Owns the local llama-server process: builds its command line, starts it, restarts it, swaps models, idle stand-down. |
+| `supervisor` | Owns the local llama-server process: builds its command line, starts it, restarts it, swaps models, idle stand-down. Since 1.8.0 also the embedding server (`embed.go`), through the same process half (`managed.go`). |
 | `proxy` | Streaming reverse proxy for `/llm`, `/search`, `/embed`. |
 | `jobs` | Detached generation (`/llm/jobs`), so a reply survives the page closing. |
 | `state` | Cross-device chat state (`/state`). |
@@ -82,6 +82,8 @@ and functions rather than line numbers, because line numbers go stale.
 | `setup` | `gobbonet setup`, the Go first-run web wizard for platforms whose installer asks nothing. |
 | `webui`, `static` | The embedded chat page, and static file serving. |
 | `autostart`, `atomicfile`, `storelock`, `httpx`, `version` | Start at login, atomic file writes, maintenance locking, response helpers, the build stamp. |
+| `mcp` | MCP servers (1.8.0, #16): the `[[mcp_server]]` programs, started on first use through `supervisor.Child`, and a small stdio client of our own (`initialize`, `tools/list`, `tools/call`). Routes in `internal/server/mcp.go`; adding, changing or switching one on needs a browser on this PC. `mcptest` is a fake server for tests, never linked into the binary. |
+| `update` | The update button (1.8.0, ABOUT > CHECK FOR UPDATES): GitHub's release list, the signed `gobbonet-update.json` (ed25519, keys in `trusted-keys.txt`, built in), the never-backwards rule (a later release, or a later build of the same one by `version.Stamp`'s serial), the download, the checks and the swap. Routes in `internal/server/update.go`; installing needs a browser on this PC. `updatetest` is a fake GitHub for tests. docs/UPDATES.md. |
 | `procjob` | Windows: ties `launch.bat`'s whole process tree to the launcher with a kill-on-close job, and starts the browser outside it. No-ops elsewhere. |
 
 ---
@@ -95,8 +97,9 @@ and functions rather than line numbers, because line numbers go stale.
  gobbonet serve ── /login, /state, /perf, /swap-model, /llm/jobs, /catalog.json, ...
         |
         +── /llm/*    ──> llama-server   127.0.0.1:11437  (started and watched by supervisor)
-        +── /embed/*  ──> embedding server 127.0.0.1:11436 (optional, for retrieval)
+        +── /embed/*  ──> embedding server 127.0.0.1:11436 (optional, for retrieval; started and watched by supervisor)
         +── /search/* ──> web-search API  (only when the user turns search on)
+        +── /mcp/*    ──> MCP servers, programs on this PC over stdio (only those switched on)
 ```
 
 - **Routes:** listed, in matching order, in the comment at the top of
@@ -107,8 +110,9 @@ and functions rather than line numbers, because line numbers go stale.
 - **Engine:** `Supervisor.BuildArgs` makes the llama-server command line.
   Automatic GPU placement passes `--fit on --fit-target <gpu_reserve_mib>`, at
   least 2048 for Mixture-of-Experts models (#65). llama-server always binds to
-  loopback. `tests/test-engine-args.py` pins the flags shared with
-  `launch.bat`'s legacy path. Jinja is always stated, `--jinja` or
+  loopback. It is the only chat-model command line, and `EmbedArgs` the only
+  embedding one: since 1.8.0 `launch.bat` starts no llama-server at all
+  (`tests/test-engine-args.py`, `tests/test-embed-supervisor.py`). Jinja is always stated, `--jinja` or
   `--no-jinja`, and a built-in `--chat-template` NAME always goes with
   `--no-jinja`: the pinned engine has Jinja on by default and would render the
   name itself as the prompt (1.7.9, the Tekken bug).
@@ -142,13 +146,23 @@ and functions rather than line numbers, because line numbers go stale.
     leaves `.gobbonet-setup-pending` beside `launch.bat` and a config with no
     engine; `launch` runs setup again for that (`cmd/gobbonet/launch.go`).
   - **Linux packages and ZIP:** `gobbonet-launch` runs the Python wizard on
-    first run, then `gobbonet serve` and the embedding engine.
+    first run, then `gobbonet serve`.
+  - **The embedding server** is started by `gobbonet serve` itself on every
+    platform since 1.8.0 (`internal/supervisor/embed.go`, `embed_mode` in
+    `config.toml`); the launchers only download its model.
 
 ### The chat page
 
 - **Load order is the contract.** Modules share globals, so `chat.html`'s
   `<script>` order is load-bearing: `01-config.js` first, then `24-boot.js`,
-  then only `25-tutorial.js`, which waits on `window.GobboNet.ready`.
+  then only `25-tutorial.js`, which waits on `window.GobboNet.ready`, and
+  `26-mcp.js` (MCP servers, 1.8.0), `27-files-panel.js` (the Files panel,
+  1.8.0) and `28-update.js` (the update button, 1.8.0), which nothing calls
+  before the page is in use. `29-groups.js` (group chats, 1.8.0) is last and
+  is the exception: the reply paths, the prompt builder and the renderers
+  call into it, always behind `typeof fn === 'function'`, because the test
+  harnesses load modules singly; it re-renders once after boot in case the
+  first render ran before it had loaded.
   The module headers point to a `REFACTOR-PLAN.md` that is no longer in the
   tree; the order in `chat.html` is what counts.
 - **State:** one `state` object (`js/04-state.js`, versioned by
@@ -208,8 +222,86 @@ and functions rather than line numbers, because line numbers go stale.
   `buildLogitBias()` (`js/06-state-sync.js`, issue #51). It is per token: a
   word is banned at its own token or a safe leading piece, a phrase at its
   rarest word, and common words and short fragments never. Bans are picked
-  from `/tokenize` with pieces, cached per model. There is no real CFG:
-  llama-server does not expose the logits it would need.
+  from `/tokenize` with pieces, cached per model. There is no real CFG: the
+  pinned llama-server (b10456) takes no negative prompt or guidance scale for
+  chat models, and `n_probs` returns only the top N tokens, not the logits CFG
+  would mix (checked against the b10456 source for 1.8.0). Look again when
+  `engine.sha256` moves; patching the engine would break its pin.
+- **The Files panel** (1.8.0, `js/27-files-panel.js`): the conversation's
+  files beside it, read from the messages as they stand -- nothing new is
+  stored. `scanConversationFiles()` finds ```file:name blocks, text
+  attachments and html/svg code blocks through `mdListFences()`, the same
+  scanner `parseMarkdown()` renders with (`mdScanFences()` in
+  `js/18-utils.js`), so a block's `data-fence` number matches. Same name,
+  new version. HTML and SVG preview in an iframe sandboxed without
+  allow-same-origin, under a CSP put first in the document that loads
+  nothing from anywhere; scripts start off. EDIT attaches the user's version
+  to the next message, which then counts as a version.
+- **Group chats** (1.8.0, `js/29-groups.js`): a group is a record in
+  `state.groups` (`normalizeGroup()` in `js/04-state.js`: every group from
+  saved state, sync or an import goes through it) and a chat started from
+  one carries `thread.groupId`. Generation is unchanged: `sendMessage()` and
+  `regenerateFromThread()` ask `groupTurnCard()` which member replies, build
+  the prompt with that member's card, and call `groupAfterReply()` when the
+  reply is done, which starts the next member or ends the round. Whose turn
+  it is is never stored; it is derived from the conversation, so deleting,
+  rerolling, branching and sync cannot leave it wrong. A round's progress
+  (`_groupRound`) and AUTO are memory only. `groupPromptContext()` decides
+  what a member reads: its own messages as the assistant's, everyone else's
+  as the user's with the speaker's name in front. Anything that needs "the
+  character of this chat" in a group uses `replyCardForThread()` or
+  `makeCastResolver(thread).cardFor(msg)`, not `getActiveCard()`.
+- **The update button** (1.8.0, `js/28-update.js`, `internal/update`):
+  the page only ever asks this server; the server asks GitHub, and only when
+  CHECK FOR UPDATES is pressed. Never add an automatic check: PRIVATE BY
+  DESIGN promises the network is touched only when asked. What is installed
+  is decided server-side (signature, SHA-256s, `update.Newer`), not by the
+  page. Whatever it writes has to be removable: `<data_dir>/update` (its
+  downloads) is in `gobbonet uninstall`'s list, and the Windows uninstaller
+  deletes `gobbonet.exe.old*` and `gobbonet.new.exe` (`swap`, `NewPathFor`).
+  A new file there needs both, or uninstalling leaves a folder behind.
+  The public key it trusts is in `internal/update/trusted-keys.txt`; the
+  private key never enters the repository (docs/UPDATES.md).
+- **Auto Reroll** (1.8.0): a card's off-limits words (`autoRerollWords`,
+  switched on by `autoRerollEnabled === true`) are checked against the
+  visible reply as it streams, never the reasoning; a hit stops the try and
+  `runGenerationWithReroll()` (`js/03-generation.js`) generates it again, up
+  to `autoRerollMax` more times, the last try running to its end. It wraps
+  `runGenerationWithTools()` and is where `sendMessage()` and
+  `regenerateFromThread()` start a reply. A reply that ran a tool, one the
+  user stopped, and one finished while the page was closed are never
+  rerolled. Banned Phrases in the card editor points to it.
+- **Model links:** a chat remembers the model that wrote its last reply
+  (`thread.model`) and a character can name one (`card.preferredModel`, the
+  editor's "Model for this character"). Opening a chat, or starting one,
+  follows them as CONFIG > Model Switching says (`modelFollow`: ask, auto,
+  off), through `followModelForThread()` in `js/02-model.js`. Both are file
+  names only, checked by `isPlainModelFile()` (the server's
+  `models.CheckFileName`), and only ever match an installed model. The page's
+  switches go as `/swap-model {"auto": true}`, which the server refuses with
+  409 busy while any reply is being written (`Supervisor.SwapAuto`).
+- **Tools:** a card's custom code can offer the model functions with
+  `gobbo.tool(name, { description, parameters }, fn)` (`js/23-card-code.js`).
+  They are sent as the OpenAI `tools` array only while the card's "Let the
+  model call this card's tools" box is ticked (`toolsEnabled === true`, off
+  by default and cleared on import). `runGenerationWithTools`
+  (`js/03-generation.js`) wraps the transport: the stream feeder collects
+  `tool_calls` deltas, the page runs each call (`runCardTool`; errors go back
+  to the model as text), appends the assistant turn and one `tool` message per
+  call after the built context, and asks again, for up to `toolMaxRounds`
+  rounds, then once more without `tools` for the answer. The four limits
+  (rounds, time per call, result size, argument size) are settings in CONFIG
+  > Characters & Chat > Card Tools, read through `cardToolLimit()` with a
+  floor and ceiling each (1.8.0). Each tool records `source: 'card'`; MCP adds
+  `'mcp'` to the same loop.
+  The engine must run with `--jinja`; a refusal is retried once without tools
+  and noted in the reply. Consent is re-checked before every request and
+  before calls run, and a call is refused if another card owns the registry
+  by then. Arguments are the model's, parsed but not schema-checked: card
+  authors validate them. Calls are stored on the message as `toolCalls`,
+  kept per variant, and shown as a collapsed block; completed rounds' text
+  rides along as `toolPrefix` so a reload mid-round replays onto it. There
+  are no built-in tools. `tests/test-card-tools.mjs` pins all of it.
 
 ---
 
@@ -227,7 +319,7 @@ bash ./scripts/stage-web.sh && go test ./...                            # Go 1.2
   `tests/test-model-menu-input.py` also runs one `launch.bat` block through a
   small cmd interpreter.
 - **`tests/test-linux-onboarding.py`** needs a built `linux-amd64/gobbonet`
-  and an engine. `./scripts/make-zip.sh` produces both.
+  and an engine. `bash ./scripts/make-zip.sh` produces both.
 - **Logs:**
   - **Diagnostics:** `gobbonet doctor` checks the config, engine, storage,
     port, LAN addresses and firewall.
@@ -238,7 +330,7 @@ bash ./scripts/stage-web.sh && go test ./...                            # Go 1.2
 
 - **Go:** 1.25 or newer, no cgo. Run `scripts/stage-web.sh` before `go build`, or the
   binary has no chat page.
-- **ZIP:** `./scripts/make-zip.sh` builds both servers and refuses to produce an
+- **ZIP:** `bash ./scripts/make-zip.sh` builds both servers and refuses to produce an
   archive with a platform missing or a stale version stamp.
 - **Installers:** `installer-win/` (NSIS), `installer-linux/build-deb.sh`,
   `installer-fedora/build-rpm.sh`. All of them read `engine.sha256`.
@@ -259,8 +351,10 @@ historical on purpose:
   built. Its status block says what changed; the code wins.
 - `docs/changelog/` records each change as it was made. Old entries name files
   and behaviour that later changed.
-- Anything about `fileserver.ps1` describes the legacy PowerShell server,
-  which runs only without `gobbonet.exe` or with `GOBBONET_LEGACY_SERVER=1`.
+- Anything about `fileserver.ps1` or `GOBBONET_LEGACY_SERVER` describes the
+  PowerShell server that 1.8.0 removed. `stop-gobbonet.bat`, the installer and
+  `gobbonet doctor` still name it, to deal with a copy left behind by an
+  update (`tests/test-legacy-removal.py` lists every place allowed to).
 
 The website is not in this repository, so its download sizes and browser
 notes (#63) have to be fixed there.

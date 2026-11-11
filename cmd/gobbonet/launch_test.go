@@ -91,11 +91,12 @@ func TestLaunchHelp(t *testing.T) {
 	}
 }
 
-// 1.7.9 (PR #15): launch.bat runs as a fixed relative command with the legacy
-// switch stripped, whichever door starts it -- first run or --setup.
+// 1.7.9 (PR #15): launch.bat runs as a fixed relative command with the old
+// legacy-server switch stripped, whichever door starts it -- first run or
+// --setup. 1.8.0 removed that server; the switch is still kept out.
 func TestSetupBatchCommand(t *testing.T) {
 	dir := t.TempDir()
-	cmd := setupBatchCommand(dir, []string{"PATH=/bin", "GOBBONET_LEGACY_SERVER=1", "gobbonet_legacy_server=1", "KEEP=yes"})
+	cmd := setupBatchCommand(dir, []string{"PATH=/bin", "GOBBONET_LEGACY_SERVER=1", "gobbonet_legacy_server=1", "KEEP=yes"}, false)
 	if got := strings.Join(cmd.Args, " "); got != "cmd.exe /d /c launch.bat" {
 		t.Errorf("args = %q, want a fixed relative launch.bat", got)
 	}
@@ -123,5 +124,79 @@ func TestLaunchSetupFlag(t *testing.T) {
 	}
 	if err := cmdLaunch([]string{"extra"}); err == nil || !strings.Contains(err.Error(), "--setup") {
 		t.Errorf("stray argument: got %v, want the usage to name --setup", err)
+	}
+}
+
+// open_browser (1.8.0, PR #58). A configured launch -- the Start menu and
+// desktop shortcuts -- always passed --open before; now the key decides, and
+// --no-browser beats it.
+func TestLaunchServeFollowsOpenBrowser(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := config.WriteDefault(path); err != nil {
+		t.Fatal(err)
+	}
+	has := func(args []string) bool {
+		for _, a := range args {
+			if a == "--open" {
+				return true
+			}
+		}
+		return false
+	}
+	if args := launchServeArgs(path, false); !has(args) {
+		t.Errorf("default config: %v, want --open (the default is true)", args)
+	}
+	if args := launchServeArgs(path, true); has(args) {
+		t.Errorf("--no-browser with the key true: %v, want no --open", args)
+	}
+	if err := config.Set(path, "open_browser", "false"); err != nil {
+		t.Fatal(err)
+	}
+	if args := launchServeArgs(path, false); has(args) {
+		t.Errorf("open_browser = false: %v, want no --open", args)
+	}
+	if args := launchServeArgs(path, false); len(args) != 2 || args[0] != "--config" || args[1] != path {
+		t.Errorf("args = %v, want just --config %s", args, path)
+	}
+	// An unreadable config keeps the old behaviour; serve reports the problem.
+	if args := launchServeArgs(filepath.Join(t.TempDir(), "missing.toml"), false); !has(args) {
+		t.Errorf("unreadable config: %v, want --open as before", args)
+	}
+}
+
+// launch --setup --no-browser reaches launch.bat as GOBBONET_OPEN_BROWSER=false,
+// which beats open_browser there. An inherited value never does.
+func TestSetupBatchCarriesNoBrowser(t *testing.T) {
+	env := []string{"PATH=/bin", "GOBBONET_OPEN_BROWSER=true", "gobbonet_open_browser=false"}
+	count := func(cmdEnv []string) (n int, last string) {
+		for _, e := range cmdEnv {
+			if strings.HasPrefix(strings.ToUpper(e), "GOBBONET_OPEN_BROWSER=") {
+				n++
+				last = e
+			}
+		}
+		return n, last
+	}
+	if n, _ := count(setupBatchCommand(t.TempDir(), env, false).Env); n != 0 {
+		t.Errorf("without --no-browser, an inherited GOBBONET_OPEN_BROWSER reached launch.bat")
+	}
+	if n, last := count(setupBatchCommand(t.TempDir(), env, true).Env); n != 1 || last != "GOBBONET_OPEN_BROWSER=false" {
+		t.Errorf("with --no-browser: %d value(s), last %q; want exactly GOBBONET_OPEN_BROWSER=false", n, last)
+	}
+}
+
+func TestLaunchAcceptsNoBrowser(t *testing.T) {
+	err := cmdLaunch([]string{"--no-browser", "extra"})
+	if err == nil || !strings.Contains(err.Error(), "--no-browser") {
+		t.Errorf("got %v, want the usage error to name --no-browser", err)
+	}
+}
+
+func TestOpenBrowserDefaultsOnAndIsDocumented(t *testing.T) {
+	if !config.Default().OpenBrowser {
+		t.Error("open_browser must default to true: every launcher opened the browser before 1.8.0")
+	}
+	if !strings.Contains(config.DefaultTOML, "\nopen_browser = true\n") {
+		t.Error("the generated config.toml does not carry open_browser = true")
 	}
 }

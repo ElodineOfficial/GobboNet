@@ -190,7 +190,9 @@ function exportData(type) {
       exported: Date.now(), threads: state.threads, folders: _threadFolders(state.threads) },
       `gobbonet-threads-${ts}.json`);
   } else if (type === 'cards') {
-    downloadJSON({ gobbonet_export: 'cards', version: 1, exported: Date.now(), characterCards: state.characterCards },
+    // Groups travel with the characters they are made of (1.8.0).
+    downloadJSON({ gobbonet_export: 'cards', version: 1, exported: Date.now(), characterCards: state.characterCards,
+      groups: state.groups || [] },
       `gobbonet-characters-${ts}.json`);
   } else if (type === 'personas') {
     downloadJSON({ gobbonet_export: 'personas', version: 1, exported: Date.now(), personaCards: state.personaCards },
@@ -209,6 +211,7 @@ function exportData(type) {
       activeCardId: state.activeCardId,
       personaCards: state.personaCards,
       activePersonaId: state.activePersonaId,
+      groups: state.groups || [],
       schedules: state.schedules,
       folders: state.folders,
       extensions: state.extensions,
@@ -272,11 +275,15 @@ function exportThread(id, event) {
   if (!thread) return;
 
   const { cardIds, personaIds } = _threadCastIds(thread);
+  // A group chat brings its group, and every member of it -- one who has not
+  // spoken yet is still part of the chat the file describes (1.8.0).
+  const group = (typeof threadGroup === 'function') ? threadGroup(thread) : null;
+  if (group) for (const m of group.members) cardIds.add(m.cardId);
   const cards = (state.characterCards || []).filter(c => cardIds.has(c.id));
   const personas = (state.personaCards || []).filter(p => personaIds.has(p.id));
 
   const stem = _exportSlug(thread.name) || 'thread';
-  downloadJSON({
+  const out = {
     gobbonet_export: 'threads',
     version: 1,
     schemaVersion: STATE_SCHEMA_VERSION,
@@ -285,7 +292,39 @@ function exportThread(id, event) {
     folders: _threadFolders([thread]),
     characterCards: cards,
     personaCards: personas
-  }, `gobbonet-thread-${stem}-${new Date().toISOString().slice(0, 10)}.json`);
+  };
+  if (group) out.groups = [group];
+  downloadJSON(out, `gobbonet-thread-${stem}-${new Date().toISOString().slice(0, 10)}.json`);
+}
+
+/** Export one group with the characters in it, in the envelope the
+ *  Characters import already reads (1.8.0). */
+function exportGroup(id, event) {
+  if (event) event.stopPropagation();
+  const group = (state.groups || []).find(g => g && g.id === id);
+  if (!group) return;
+  const ids = new Set(group.members.map(m => m.cardId));
+  const stem = _exportSlug(group.name) || 'group';
+  downloadJSON({
+    gobbonet_export: 'cards',
+    version: 1,
+    exported: Date.now(),
+    characterCards: (state.characterCards || []).filter(c => ids.has(c.id)),
+    groups: [group]
+  }, `gobbonet-group-${stem}-${new Date().toISOString().slice(0, 10)}.json`);
+}
+
+/** Merge groups out of an imported file: one whose id is already here is
+ *  left alone, like a character. Each is read through normalizeGroup, so a
+ *  file cannot bring a field this build does not know. Returns how many
+ *  were added. */
+function _mergeImportedGroups(list) {
+  if (!Array.isArray(list) || !list.length) return 0;
+  if (!Array.isArray(state.groups)) state.groups = [];
+  const have = new Set(state.groups.map(g => g.id));
+  const add = normalizeGroups(list).filter(g => !have.has(g.id));
+  if (add.length) state.groups = [...state.groups, ...add];
+  return add.length;
 }
 
 /** Export one character in GobboNet's own format.
@@ -342,6 +381,10 @@ function _mergeBundledCast(data) {
       parts.push(`${add.length} persona(s)`);
     }
   }
+
+  // After the characters, so a group's members are here when it arrives.
+  const groupsAdded = _mergeImportedGroups(data.groups);
+  if (groupsAdded) parts.push(`${groupsAdded} group(s)`);
 
   return parts.length ? ' Also added ' + parts.join(', ') + '.' : '';
 }
@@ -450,11 +493,14 @@ function importData(fileInput, type) {
       // blob; only the cards being merged are touched.
       const neutralizedCards = neutralizeUntrustedCode({ characterCards: newCards });   // no typeof guard: fail closed
       state.characterCards = [...state.characterCards, ...newCards];
+      // A group export is its members plus the group (exportGroup).
+      const groupsAdded = _mergeImportedGroups(data.groups);
       saveState(); render();
       const cardCodeNote = neutralizedCards.cards
         ? ` ${neutralizedCards.cards} carried custom code — kept, but switched OFF.`
         : '';
-      showStatus(`✓ Imported ${newCards.length} character(s). ${data.characterCards.length - newCards.length} skipped (already exist).` + cardCodeNote, true);
+      const groupNote = groupsAdded ? ` Also added ${groupsAdded} group(s).` : '';
+      showStatus(`✓ Imported ${newCards.length} character(s). ${data.characterCards.length - newCards.length} skipped (already exist).` + cardCodeNote + groupNote, true);
 
     } else if (type === 'personas') {
       if (!Array.isArray(data.personaCards)) { showStatus('✗ No personaCards array found.', false); return; }
@@ -503,6 +549,7 @@ function importData(fileInput, type) {
         delete state.settings.userTextColor;
         delete state.settings.userDialogColor;
       }
+      state.groups         = normalizeGroups(data.groups);
       state.schedules      = data.schedules      || [];
       state.folders        = data.folders        || [];
       state.extensions     = migrateExtensions(data.extensions);
@@ -540,7 +587,7 @@ function importData(fileInput, type) {
    Meanwhile nothing is pushed to the server or other devices
    (undoHoldsSync): they learn of the purge only when it is final. */
 const _PURGE_FIELDS = ['threads', 'activeThreadId', 'settings', 'characterCards', 'activeCardId',
-  'personaCards', 'activePersonaId', 'schedules', 'folders', 'extensions', 'searchEnabled',
+  'personaCards', 'activePersonaId', 'groups', 'schedules', 'folders', 'extensions', 'searchEnabled',
   'macros', 'seededDefaultMacros', 'sidebarOpen', '_cardCodeStore'];
 
 function _purgeSnapshot(fields) {
@@ -575,10 +622,15 @@ async function purgeData(type) {
     saveState(); render();
     _offerPurgeUndo('Purged ' + snap.threads.length + ' thread(s)', snap);
   } else if (type === 'cards') {
-    if (!confirm('Reset all character cards to the built-in default? UNDO is offered for 10 seconds afterwards.')) return;
-    const snap = _purgeSnapshot(['characterCards', 'activeCardId']);
+    const _groupCount = (state.groups || []).length;
+    if (!confirm('Reset all character cards to the built-in default?' +
+        (_groupCount ? ' Your ' + _groupCount + ' group(s) go with them.' : '') +
+        ' UNDO is offered for 10 seconds afterwards.')) return;
+    // Groups go with the characters they were made of (1.8.0).
+    const snap = _purgeSnapshot(['characterCards', 'activeCardId', 'groups']);
     state.characterCards = [{ ...DEFAULT_CARD }];
     state.activeCardId = 'default';
+    state.groups = [];
     saveState(); render();
     _offerPurgeUndo('Reset all characters', snap);
   } else if (type === 'personas') {
@@ -603,6 +655,7 @@ async function purgeData(type) {
     state.activeCardId   = 'default';
     state.personaCards   = [{ ...DEFAULT_PERSONA }];
     state.activePersonaId = 'default-persona';
+    state.groups         = [];
     state.schedules      = [];
     state.folders        = [];
     state.extensions     = { ...DEFAULT_EXTENSIONS };

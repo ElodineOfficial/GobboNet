@@ -68,8 +68,13 @@ class Troubleshooting(Docs):
         intro = TROUBLE.split('\n## ', 1)[0]
         self.assertIn('gobbonet doctor', intro)
         self.assertIn('gobbonet.exe', intro)
-        self.assertIn('GOBBONET_LEGACY_SERVER=1', intro)
-        self.assertIn('GOBBONET_LEGACY_SERVER', read('launch.bat'), 'the legacy switch the page names exists')
+        # 1.8.0 removed the PowerShell server: the page says so, names the
+        # leftover a ZIP update leaves, and no longer offers the old switch.
+        flat = ' '.join(intro.split())
+        self.assertIn('Since 1.8 it is the only server', flat)
+        self.assertIn('`fileserver.ps1` from 1.7 may still be in the install folder', flat)
+        self.assertAbsent('GOBBONET_LEGACY_SERVER', TROUBLE, 'TROUBLESHOOTING.md')
+        self.assertFalse((ROOT / 'fileserver.ps1').exists(), 'the file the page calls a leftover is not shipped')
 
     def test_linux_is_supported(self):
         linux = section(TROUBLE, '## Linux')
@@ -139,6 +144,118 @@ class DesignNotes(Docs):
         self.assertAbsent('handled separately by\n;     launchLAN.exe', header, 'the installer header')
         self.assertIn('runas', header)
         self.assertIn('ExecShell "runas" "$INSTDIR\\${LANEXE}"', NSI)
+
+
+# --- Issue and PR templates (1.8.0, issue #62) -------------------------------
+#
+# CONTRIBUTING.md told people to "Use the Bug report template under New issue"
+# and described an optional AI section in "the bug report and PR templates",
+# and there was no .github/ folder at all. These hold the templates to what
+# CONTRIBUTING.md promises. The forms are read as text, so the suite still needs
+# nothing beyond Python itself.
+
+GH = ROOT / '.github'
+CONTRIBUTING = read('CONTRIBUTING.md')
+
+
+def form_field(form, field_id):
+    """The text of one body element of an issue form, from its `id:` line to
+    the next element."""
+    m = re.search(r'^  - type: \w+\n    id: ' + re.escape(field_id) + r'\n(.*?)(?=^  - type: |\Z)', form, re.M | re.S)
+    return m.group(0) if m else ''
+
+
+def dropdown_options(field):
+    block = field.split('options:', 1)[1].split('validations:', 1)[0]
+    return [o.strip().strip('"') for o in re.findall(r'^\s+- (.+)$', block, re.M)]
+
+
+class Templates(Docs):
+    BUG = (GH / 'ISSUE_TEMPLATE' / 'bug.yml')
+    FEATURE = (GH / 'ISSUE_TEMPLATE' / 'feature.yml')
+    CONFIG = (GH / 'ISSUE_TEMPLATE' / 'config.yml')
+    PR = (GH / 'PULL_REQUEST_TEMPLATE.md')
+
+    def test_every_template_contributing_names_exists(self):
+        self.assertIn('Use the **Bug report** template under New issue', CONTRIBUTING)
+        for p in (self.BUG, self.FEATURE, self.CONFIG, self.PR):
+            self.assertTrue(p.is_file(), '%s is missing' % p.relative_to(ROOT))
+        self.assertRegex(self.BUG.read_text(), r'(?m)^name: Bug report$')
+
+    def test_the_bug_form_asks_for_what_contributing_lists(self):
+        bug = self.BUG.read_text()
+        # CONTRIBUTING.md: version from ABOUT, COPY BUILD INFO, gobbonet doctor,
+        # how it was started, OS and GPU.
+        for field_id, words in (('version', 'ABOUT'), ('build-info', 'COPY BUILD INFO'), ('doctor', 'doctor'),
+                                ('started', 'start'), ('os', 'Operating system'), ('gpu', 'GPU')):
+            field = form_field(bug, field_id)
+            self.assertTrue(field, 'bug.yml has no %r field' % field_id)
+            self.assertIn(words, field)
+        self.assertIn('required: true', form_field(bug, 'version').split('validations:', 1)[1])
+
+    def test_the_bug_forms_start_options_are_the_launchers_that_ship(self):
+        # Each option, and the file in this tree that makes it real. A launcher
+        # that is added or retired shows up here.
+        nsi = NSI
+        shipped = {
+            'Windows: the GobboNet or Launch GobboNet shortcut (Start menu or desktop)':
+                '"$SMPROGRAMS\\${APPNAME}\\Launch ${APPNAME}.lnk"' in nsi and '"$DESKTOP\\${APPNAME}.lnk"' in nsi,
+            'Windows: the Setup or add a model shortcut': '"$SMPROGRAMS\\${APPNAME}\\Setup or add a model.lnk"' in nsi,
+            'Windows: launch.bat': (ROOT / 'launch.bat').is_file(),
+            'Windows: gobbonet.exe, run directly': re.search(r'(?m)^gobbonet\.exe$', read('scripts/make-zip.sh')) is not None,
+            'Linux: the app menu or the gobbonet command (.deb or .rpm)':
+                (ROOT / 'installer-linux' / 'gobbonet.desktop').is_file() and (ROOT / 'installer-fedora' / 'gobbonet.spec').is_file(),
+            'Linux: the AppImage': (ROOT / 'installer-linux' / 'build-appimage.sh').is_file(),
+            'Linux: the ZIP (./gobbonet)': (ROOT / 'installer-linux' / 'gobbonet-zip-entry').is_file(),
+        }
+        options = dropdown_options(form_field(self.BUG.read_text(), 'started'))
+        self.assertEqual(options[-1], 'Something else (say below)')
+        self.assertEqual(options[:-1], list(shipped), 'the start options and the launchers that ship disagree')
+        gone = [o for o, real in shipped.items() if not real]
+        self.assertEqual(gone, [], 'offered as a way to start GobboNet, but not in this tree')
+        self.assertAbsent('fileserver', '\n'.join(options), 'bug.yml start options')
+
+    def test_the_privacy_tick_is_required_and_says_what_to_remove(self):
+        bug = self.BUG.read_text()
+        tick = form_field(bug, 'privacy')
+        self.assertIn('type: checkboxes', tick)
+        self.assertIn('required: true', tick)
+        for word in ('addresses', 'folder paths'):
+            self.assertIn(word, tick)
+        # ...and the warning comes before anyone pastes, as CONTRIBUTING.md says.
+        self.assertLess(bug.index('Before you paste anything'), bug.index('id: doctor'))
+
+    def test_security_reports_go_privately_where_contributing_says(self):
+        discord = re.search(r'privately\s+to Elodine on the \[GobboNet Discord\]\((https://[^)]+)\)', CONTRIBUTING)
+        self.assertIsNotNone(discord, 'CONTRIBUTING.md no longer says where security reports go')
+        config = self.CONFIG.read_text()
+        self.assertRegex(config, r'(?m)^blank_issues_enabled: true$')
+        security = config.split('- name: Report a security problem privately', 1)[1].split('- name:', 1)[0]
+        self.assertIn('url: ' + discord.group(1), security)
+        self.assertIn(discord.group(1), self.BUG.read_text())
+
+    def test_the_pr_checklist_is_contributings_privacy_rules(self):
+        pr = self.PR.read_text()
+        rules = section(CONTRIBUTING, '## Privacy and security rules')
+        for rule, box in (('telemetry', 'No telemetry'), ('network destination', 'No new network destination'),
+                          ('dependency', 'No new dependency'), ('pinned by SHA-256', 'pinned by SHA-256'),
+                          ('LAN access stays opt-in', 'LAN access stays opt-in')):
+            self.assertIn(rule, rules, 'CONTRIBUTING.md no longer has the rule %r' % rule)
+            self.assertRegex(pr, r'(?m)^- \[ \] .*' + re.escape(box), 'the PR checklist has no box for %r' % rule)
+        self.assertRegex(pr, r'(?m)^- \[ \] Anything that can make code run is set from this PC only')
+
+    def test_the_ai_sections_are_optional_and_never_a_gate(self):
+        self.assertIn('optional section', CONTRIBUTING)
+        for p, field in ((self.BUG, 'ai-assist'), (self.FEATURE, 'ai-assist')):
+            f = form_field(p.read_text(), field)
+            self.assertIn('optional', f)
+            self.assertIn('required: false', f)
+        pr = self.PR.read_text()
+        self.assertIn('## AI assistance (optional)', pr)
+        ai = pr.split('## AI assistance (optional)', 1)[1]
+        for asks in ('which assistant', 'what a person checked', 'unverified'):
+            self.assertIn(asks, ai)
+        self.assertIn('never a gate', ai)
 
 
 if __name__ == '__main__':

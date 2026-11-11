@@ -335,6 +335,7 @@ function restoreScrollAnchor(anchor) {
 }
 
 function goHome() {
+  if (typeof groupLeftThread === 'function') groupLeftThread(null);
   state.activeThreadId = null;
   saveState();
   render();
@@ -503,7 +504,10 @@ function renderStreamingUpdate(assistantMsg) {
   }
 
   // ── Surgical updates ───────────────────────────────────────────
-  const card        = getActiveCard();
+  // Whoever is writing this message: renderMessages resolves each turn's
+  // card the same way, and in a group chat it is not the active character.
+  const card        = (typeof makeCastResolver === 'function')
+    ? makeCastResolver(thread).cardFor(assistantMsg) : getActiveCard();
   // Must agree with renderMessages (13-dashboard.js) or a message would
   // change colour the moment streaming ends and the final repaint lands.
   const aiTextColor   = card.textColor   || FALLBACK_CARD_TEXT_COLOR;
@@ -539,5 +543,7 @@ function renderStreamingUpdate(assistantMsg) {
   // but each chunk grows the content, pushing the latest reply further below
   // the fold. Drive the FAB from the tick so it surfaces as that happens.
   updateFollowButton();
+  // An open Files panel follows a file being written (1.8.0; throttled).
+  if (typeof filesPanelStreamTick === 'function') filesPanelStreamTick();
 }
 

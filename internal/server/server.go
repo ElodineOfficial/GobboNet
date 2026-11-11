@@ -1,5 +1,6 @@
-// Package server wires every route together. Port of fileserver.ps1's
-// `while ($listener.IsListening)` dispatch block.
+// Package server wires every route together. It began as a port of the
+// `while ($listener.IsListening)` dispatch block of the 1.7 PowerShell server
+// (removed in 1.8.0).
 //
 // Route order matters — more-specific prefixes must come before catch-alls:
 //
@@ -13,9 +14,17 @@
 //	/models-list.json          the header dropdown
 //	/catalog.json              the download catalogue, for the add-a-model modal
 //	/model-download            start (POST) and poll (GET) a model download
+//	/model-check               CHECK FILE: re-hash an installed model (POST), poll (GET)
 //	/state, /state/*           cross-device state sync
 //	/perf                      llama-server tuning the settings panel edits
+//	/launch-settings           open_browser, from CONFIG > Basics (any signed-in device)
+//	/model-folders             model_dir, model_dirs, scan_hf_cache: CONFIG > Model Folders (this PC only)
+//	/gpu                       the engine's GPUs and gpu_device: CONFIG > Performance (1.8.0, #72)
 //	/config/file[/restore]     CONFIG's config.toml editor, this PC only
+//	/mcp/tools, /mcp/call,     MCP servers (1.8.0, #16): tools and calls from any
+//	/mcp/servers               signed-in device; adding or switching one on, this PC only
+//	/update/check, /status     the update button (1.8.0): checking from any signed-in
+//	/update/install, /restart  device; installing and restarting, this PC only
 //	/swap-model, /swap-status  model-swap contract
 //	/llm/jobs, /llm/jobs/*     detached generation (OUR routes, not llama.cpp's)
 //	/llm, /llm/*               reverse proxy -> llama.cpp
@@ -26,6 +35,7 @@
 package server
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -44,6 +54,7 @@ import (
 	"github.com/ElodineOfficial/GobboNet/internal/httpx"
 	"github.com/ElodineOfficial/GobboNet/internal/jobs"
 	"github.com/ElodineOfficial/GobboNet/internal/keyring"
+	"github.com/ElodineOfficial/GobboNet/internal/mcp"
 	"github.com/ElodineOfficial/GobboNet/internal/models"
 	"github.com/ElodineOfficial/GobboNet/internal/mods"
 	"github.com/ElodineOfficial/GobboNet/internal/proxy"
@@ -83,6 +94,8 @@ type Server struct {
 	// tuning is the live ctx/gpu-layers/kv-cache triple. Held here rather than
 	// read off cfg because /perf changes it while the server runs.
 	tuning *tuning
+	// check is CHECK FILE's one running check (modelcheck.go).
+	check modelChecker
 
 	llmProxy *proxy.Proxy
 	// standDown is the idle timer's mutable timeout plus its stop channel.
@@ -90,6 +103,20 @@ type Server struct {
 	standDown   standDown
 	searchProxy *proxy.Proxy
 	embedProxy  *proxy.Proxy
+	// embed is the managed embedding server, or nil (off, external, remote
+	// mode, a test harness). See embed.go.
+	embed *supervisor.Embedder
+	// mcp runs the [[mcp_server]] programs (1.8.0, #16). Always set; a
+	// server with no tables, or none switched on, starts nothing. See mcp.go.
+	mcp *mcp.Manager
+	// upd is ABOUT's update button (1.8.0): the last check and the one
+	// install. See update.go.
+	upd *updater
+
+	// httpSrv is what Serve is running, so a restart into an update can stop
+	// it. Guarded: set by Serve, read by StopServing from another goroutine.
+	httpMu  sync.Mutex
+	httpSrv *http.Server
 
 	// vault is the unlocked keyring, or nil. It is filled by the login that
 	// unwrapped it and lives until the process exits.
@@ -212,6 +239,11 @@ func New(cfg config.Config, mode config.Mode, sup *supervisor.Supervisor) (*Serv
 		return nil, fmt.Errorf("embed_url: %w", err)
 	}
 
+	// Nothing starts here: a server starts the first time a tool list or a
+	// call needs it.
+	s.mcp = newMCPManager(cfg)
+	s.upd = newUpdater(cfg.DataDir, cfg.UpdateReleasesURL)
+
 	// Started here rather than at Boot: the timer has to be running before the
 	// first request arrives, and a Server built by a test harness with no
 	// supervisor is a no-op inside it.
@@ -226,7 +258,12 @@ func (s *Server) Info() *models.Info { return s.info }
 // Shutdown releases everything the server owns.
 func (s *Server) Shutdown() {
 	s.stopStandDownWatch()
+	s.upd.stop()
 	s.jobs.Shutdown()
+	s.mcp.Shutdown()
+	if s.embed != nil {
+		s.embed.Shutdown()
+	}
 	if s.sup != nil {
 		s.sup.Shutdown()
 	}
@@ -355,6 +392,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case path == "/model-download":
 		s.handleModelDownload(w, r)
 
+	// CHECK FILE (1.8.0, #67): re-hash an installed catalogue model.
+	case path == "/model-check":
+		s.handleModelCheck(w, r)
+
 	// Add a Model's "Found on this computer" (1.7.9, issue #12): the HF cache
 	// and model_dirs, read only when asked; see localmodels.go.
 	case path == "/local-models.json":
@@ -422,6 +463,22 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case path == "/standdown":
 		s.handleStandDown(w, r)
 
+	// MCP servers (1.8.0, #16): tools, calls and CONFIG's list. See mcp.go
+	// for who may do what.
+	case strings.HasPrefix(path, "/mcp/"):
+		s.handleMCP(w, r, path)
+
+	// The update button (1.8.0). See update.go for who may do what.
+	case strings.HasPrefix(path, "/update/"):
+		s.handleUpdate(w, r, path)
+
+	case path == "/launch-settings":
+		s.handleLaunchSettings(w, r)
+	case path == "/model-folders":
+		s.handleModelFolders(w, r)
+	case path == "/gpu":
+		s.handleGPU(w, r)
+
 	// Wrapped rather than delegated straight through: the model about to be
 	// launched may have a published ctx/kv, and this is the only point at which
 	// we know which model that is. See handleSwapModel in models.go.
@@ -451,7 +508,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	case path == "/embed" || strings.HasPrefix(path, "/embed/"):
 		// RAG embeddings. If nothing is listening the proxy returns 502 and the
-		// client falls back to tag-only retrieval.
+		// client falls back to tag-only retrieval. A managed server stood down
+		// with the chat model is brought back first, so the first message
+		// after a stand-down still matches by meaning.
+		if s.embed != nil {
+			s.embed.WakeAndWait(embedWakeWait)
+		}
 		s.embedProxy.ServeHTTP(w, r)
 
 	default:
@@ -657,11 +719,13 @@ func (s *Server) handleModelsList(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	body := map[string]any{
 		"status": "ok",
-		// WHICH PROGRAM IS ANSWERING. Two different servers can be in front of
-		// the same chat page: this one, and the older fileserver.ps1 that
-		// launch.bat starts on Windows. They have different capabilities —
-		// /standdown exists only here — and the page used to have to guess
-		// which it was talking to by watching a route 404.
+		// WHICH PROGRAM IS ANSWERING. Up to 1.7.9 two different servers could
+		// be in front of the same chat page: this one, and the PowerShell
+		// server launch.bat could start instead. They had different
+		// capabilities — /standdown exists only here — and the page used to
+		// have to guess which it was talking to by watching a route 404. 1.8.0
+		// removed the other one, but a copy left running from before an
+		// upgrade still answers, so the page still asks.
 		//
 		// It guessed wrong in the most common case and gave advice that could
 		// not be followed. So each server now says what it is, by name. The
@@ -675,6 +739,14 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"mode":        string(s.mode),
 		"upstream":    s.cfg.LLMURL,
 		"upstream_ok": s.upstreamOK(),
+	}
+
+	// Who answers /embed, so Privacy Status and the RAG indicator can say
+	// whether matching by meaning is on, and why not (1.8.0, #15): running,
+	// starting, restarting, standby, failed, external or off.
+	body["embed"], body["embed_detail"] = s.embedState()
+	if body["embed_detail"] == "" {
+		delete(body, "embed_detail")
 	}
 
 	// Absent when nothing published a bind — a Server driven directly by a test
@@ -958,7 +1030,27 @@ func (s *Server) Serve(ln net.Listener) error {
 		ReadHeaderTimeout: 20 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
+	s.httpMu.Lock()
+	s.httpSrv = srv
+	s.httpMu.Unlock()
 	return srv.Serve(ln)
+}
+
+// StopServing stops Serve: no new connections, and up to wait for the ones
+// in progress before they are closed. A reply still streaming is the reason
+// for the limit. Used by the restart into an update.
+func (s *Server) StopServing(wait time.Duration) {
+	s.httpMu.Lock()
+	srv := s.httpSrv
+	s.httpMu.Unlock()
+	if srv == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), wait)
+	defer cancel()
+	if err := srv.Shutdown(ctx); err != nil {
+		srv.Close()
+	}
 }
 
 // ListenAndServe binds and serves until the listener is closed.

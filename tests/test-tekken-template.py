@@ -4,9 +4,13 @@
 The pinned llama.cpp (b10456) runs llama-server with Jinja ON by default, and
 with Jinja on it reads --chat-template as Jinja source. "mistral-v7-tekken"
 then renders as that literal text for every request, so the model only sees
-the word "tekken". Go's side is covered by
-internal/supervisor/template_args_test.go; this pins launch.bat's side, which
-can only be checked statically from Linux.
+the word "tekken".
+
+Up to 1.7.9 two command lines carried the fix: launch.bat's own llama-server
+start and Go's BuildArgs. 1.8.0 removed the batch one -- gobbonet.exe starts
+the chat model -- so the rule is pinned in Go
+(internal/supervisor/template_args_test.go), and this file checks that
+launch.bat did not keep a half-copy that could drift from it.
 """
 import pathlib
 import re
@@ -14,6 +18,9 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 bat = (ROOT / "launch.bat").read_bytes().decode("latin-1")
+code = "\n".join(l for l in bat.split("\r\n")
+                 if not l.strip().startswith("::") and not l.strip().lower().startswith("rem "))
+go_test = (ROOT / "internal" / "supervisor" / "template_args_test.go").read_text()
 failures = 0
 
 
@@ -26,27 +33,15 @@ def check(name, ok, detail=""):
             print("        " + detail)
 
 
-# The flag block between the two "set" resets and the launcher write.
-start = bat.index('set "JINJA_FLAG="')
-end = bat.index(":: Write a small launcher script")
-block = bat[start:end]
-
 check("the old tekken -> mistral-v7 rewrite is gone",
       not re.search(r'set "MODEL_CHAT_TEMPLATE=mistral-v7"', bat),
       "it brought back issue #20's [INST] spacing")
-name_branch = re.search(
-    r'if not "!MODEL_CHAT_TEMPLATE!"=="" \(\r\n(.*?)\r\n    \)', block, re.S)
-check("a template-name branch exists", name_branch is not None)
-if name_branch:
-    body = name_branch.group(1)
-    check("the name branch forces --no-jinja",
-          'set "JINJA_FLAG=--no-jinja"' in body, body)
-    check("the name branch still sets --chat-template",
-          "--chat-template !MODEL_CHAT_TEMPLATE!" in body, body)
-check("Jinja off is stated, not left to the engine default",
-      'else (set "JINJA_FLAG=--no-jinja")' in block)
-check("file templates keep --jinja",
-      block.count('set "JINJA_FLAG=--jinja"') >= 2)
+check("launch.bat builds no template flags of its own (1.8.0)",
+      "JINJA_FLAG" not in code and "CHAT_TEMPLATE_FLAG" not in code,
+      "gobbonet.exe chooses them; a second copy here is the drift this file guards")
+for name in ("TestBuiltinTemplateNameAlwaysTravelsWithNoJinja", "TestEmbeddedTemplateKeepsJinja",
+             "TestSidecarTemplateFileKeepsJinja", "TestJinjaStateIsAlwaysExplicit"):
+    check(f"the Go side is pinned: {name}", f"func {name}(" in go_test)
 check("launch.bat is still CRLF throughout",
       "\n" not in bat.replace("\r\n", ""))
 

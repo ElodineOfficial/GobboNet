@@ -457,6 +457,32 @@ function _cardDataToInternal(data, spec, imageDataUrl) {
     card.customCode = '';
     card.customCodeEnabled = false;
   }
+  // A model link that came with the card (1.8.0, #52): kept only if it is a
+  // plain .gguf file name, the same check the server makes. Anything else --
+  // a path, a URL, a name with a folder in it -- is dropped, and nothing is
+  // ever downloaded for it: it only matches a model already installed here.
+  try {
+    const ext = (data.extensions && data.extensions.gobbonet) || {};
+    const pm = typeof ext.preferredModel === 'string' ? ext.preferredModel : '';
+    card.preferredModel = (typeof isPlainModelFile === 'function' && isPlainModelFile(pm)) ? pm : '';
+  } catch (e) {
+    card.preferredModel = '';
+  }
+  // Auto Reroll that came with the card (1.8.0): a word list, capped, and a
+  // number of tries held to 1..10. Kept switched on if it was: it only reads
+  // the reply, and the editor shows the list.
+  try {
+    const ext = (data.extensions && data.extensions.gobbonet) || {};
+    const ar = ext.autoReroll;
+    if (ar && typeof ar === 'object' && typeof ar.words === 'string' && ar.words.trim()) {
+      card.autoRerollWords = ar.words.replace(/\u0000/g, '').slice(0, AUTO_REROLL_MAX_WORDS_CHARS);
+      card.autoRerollEnabled = ar.enabled === true;
+      card.autoRerollMax = autoRerollMaxOf({ autoRerollMax: ar.tries });
+    }
+  } catch (e) {
+    card.autoRerollEnabled = false;
+    card.autoRerollWords = '';
+  }
   // A lore prompt that came with the card. Text, capped; it is visible and
   // editable in the editor, and only ever sent to the local model.
   try {
@@ -789,9 +815,19 @@ function _cardToV3(card) {
       const memory = cardMemoryFiles(card);
       if (memory.length) g.memoryFiles = memory.map(f => ({ name: f.name, text: f.text }));
       if (card.customCode && card.customCode.trim()) g.customCode = card.customCode;
+      // The model link (1.8.0, #52): a file name only, so no folder of this
+      // PC travels with a shared card. The recipient's GobboNet treats it as
+      // a suggestion that only matches a model they already have.
+      if (typeof isPlainModelFile === 'function' && isPlainModelFile(card.preferredModel)) g.preferredModel = card.preferredModel;
       // The card's own lore prompt, only when it uses one.
       if (card.loreCustomPrompt && typeof card.lorePrompt === 'string' && card.lorePrompt.trim()) {
         g.lorePrompt = card.lorePrompt.slice(0, LORE_PROMPT_MAX_CHARS);
+      }
+      // Auto Reroll (1.8.0): the words are part of how the character writes.
+      // Only text and two numbers; nothing in it runs.
+      if (typeof card.autoRerollWords === 'string' && card.autoRerollWords.trim()) {
+        g.autoReroll = { enabled: card.autoRerollEnabled === true, words: card.autoRerollWords.slice(0, AUTO_REROLL_MAX_WORDS_CHARS),
+                         tries: autoRerollMaxOf(card) };
       }
       return Object.keys(g).length ? { gobbonet: g } : {};
     })(),

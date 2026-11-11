@@ -278,3 +278,48 @@ func TestVerifiedDownloadIsKept(t *testing.T) {
 		t.Error("the stored file does not match what was served")
 	}
 }
+
+// A file name that is not a plain .gguf name must never be written, even if
+// something hands the downloader such an entry. The catalogue loaders drop
+// these already (1.8.0); this is the second lock. Before 1.8.0 the verified
+// download below landed at <root>/escaped.gguf, outside the models folder.
+func TestAFileNameOutsideTheModelsFolderIsNeverWritten(t *testing.T) {
+	body := []byte("weights that must not land outside the folder")
+	requests := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if strings.Contains(r.URL.Path, "/raw/") {
+			w.Write([]byte("version https://git-lfs.github.com/spec/v1\noid sha256:" + sum(body) + "\nsize 4\n"))
+			return
+		}
+		w.Write(body)
+	}))
+	t.Cleanup(srv.Close)
+
+	for _, name := range []string{"../escaped.gguf", "sub/../../escaped.gguf", `..\escaped.gguf`, "escaped.txt"} {
+		root := t.TempDir()
+		dir := filepath.Join(root, "models")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		e := testEntry(sum(body))
+		e.File = name
+		d := New(e, dir)
+		d.hostBase = srv.URL
+		d.sizeFloor = 1
+		requests = 0
+		d.Run()
+
+		if st := d.Status(); st.State != "error" {
+			t.Errorf("%q: state = %q, want error", name, st.State)
+		}
+		if requests != 0 {
+			t.Errorf("%q: %d request(s) were made; the name should be refused before any", name, requests)
+		}
+		for _, p := range []string{filepath.Join(root, "escaped.gguf"), filepath.Join(dir, "escaped.txt")} {
+			if _, err := os.Stat(p); err == nil {
+				t.Errorf("%q: a file was written at %s", name, p)
+			}
+		}
+	}
+}

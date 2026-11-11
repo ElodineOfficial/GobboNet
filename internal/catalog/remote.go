@@ -17,8 +17,11 @@ package catalog
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"strconv"
 	"strings"
+
+	"github.com/ElodineOfficial/GobboNet/internal/models"
 )
 
 // SchemaVersion is the only remote schema this build understands. A file
@@ -108,6 +111,13 @@ func ParseRemote(body []byte, clientVersion string) (*Catalog, error) {
 		// so it is not a model however well-formed the rest of it looks. Same
 		// rule Load applies to models.ini.
 		if m.Index <= 0 || m.Repo == "" || m.File == "" {
+			continue
+		}
+		// The file name becomes the download's name in the models folder, and
+		// this list comes over the network: a "../x" would write outside the
+		// folder (1.8.0). Same rule Load applies to models.ini.
+		if err := models.CheckFileName(m.File); err != nil {
+			log.Printf("[catalog] remote list: skipping %q: %v", m.File, err)
 			continue
 		}
 		// Duplicate indices would make Find ambiguous and the UI's selection

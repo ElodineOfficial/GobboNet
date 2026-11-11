@@ -211,6 +211,8 @@ func parseText(path string, raw []byte) (Config, []string, error) {
 		key := k.String()
 		if near := nearestKey(key); near != "" {
 			typos = append(typos, key+" (did you mean "+near+"?)")
+		} else if near := mcpTypo(key); near != "" {
+			typos = append(typos, key+" (did you mean "+near+"?)")
 		} else if !strings.HasPrefix(key, "ui.") {
 			warnings = append(warnings, key)
 		}

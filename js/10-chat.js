@@ -14,6 +14,13 @@ async function sendMessage(overrideContent) {
   const isProgrammatic = overrideContent !== undefined;
   const content = isProgrammatic ? overrideContent : input.value.trim();
   const hasAttachments = !isProgrammatic && _pendingAttachments.length > 0;
+  // Group chats (1.8.0): Enter on an empty box lets the next member speak,
+  // which is what the NEXT button under the chat does.
+  if (!isProgrammatic && !content && !hasAttachments && !isGenerating &&
+      typeof groupPass === 'function' && typeof threadGroup === 'function' && threadGroup(getActiveThread())) {
+    groupPass('pass');
+    return;
+  }
   if ((!content && !hasAttachments) || isGenerating) return;
 
   // Manual send while a chain is mid-countdown → user is taking back
@@ -29,7 +36,7 @@ async function sendMessage(overrideContent) {
 
   let thread = getActiveThread();
   if (!thread) {
-    createThread();
+    createThread({ fromSend: true });
     thread = getActiveThread();
   }
 
@@ -80,10 +87,16 @@ async function sendMessage(overrideContent) {
   // Card code gets first look at the outgoing text. A 'send' hook that
   // returns a string replaces it; anything else leaves it alone. Wrapped
   // so a broken card cannot stop you sending a message.
-  try {
-    storedContent = transformViaCardHook('send', storedContent,
-                                         { card: getActiveCard(), thread: thread });
-  } catch (e) { console.error('[card-code] send hook:', e); }
+  // Not in a group chat (1.8.0): the code that is loaded is the active
+  // character's, and that character may not be in the group at all. A
+  // member's own code runs on that member's turn (js/29-groups.js).
+  const _group = (typeof threadGroup === 'function') ? threadGroup(thread) : null;
+  if (!_group) {
+    try {
+      storedContent = transformViaCardHook('send', storedContent,
+                                           { card: getActiveCard(), thread: thread });
+    } catch (e) { console.error('[card-code] send hook:', e); }
+  }
 
   const userMessage = { role: 'user', content: storedContent, timestamp: Date.now(),
                         personaId: getActivePersona().id };
@@ -113,7 +126,12 @@ async function sendMessage(overrideContent) {
   render();
   scrollToBottom();
 
-  const card = getActiveCard();
+  // Who answers. In a group chat a member does, not the active character:
+  // groupTurnCard() begins the round and names the first to reply. Null means
+  // nobody replies to this message -- manual order, everyone muted, or the DM
+  // gave the turn straight back -- and the message simply stays posted.
+  const card = _group ? await groupTurnCard(thread, _group, { startedBy: 'user' }) : getActiveCard();
+  if (!card) { groupNobodyReplies(thread); return; }
 
   // Web search — runs BEFORE context building so results are saved on the message
   // and included in context/lore automatically. Skipped on programmatic
@@ -170,7 +188,9 @@ async function sendMessage(overrideContent) {
   let sendErrored = false;
 
   const logitBiasParams = await buildLogitBias(card);
-  const _stopParams = getStopStrings();
+  // A group reply also stops where it starts writing another member's line.
+  const _stopParams = (typeof groupStopParams === 'function')
+    ? groupStopParams(getStopStrings(), thread, card) : getStopStrings();
   console.log('[gen] family=' + ((activeModel && activeModel.family) || 'unknown') +
               ' stop=' + JSON.stringify(_stopParams.stop || []) +
               '  (run gobboDiag() to dump the exact prompt the model receives)');
@@ -179,8 +199,11 @@ async function sendMessage(overrideContent) {
   // Transport + token parsing live in runGenerationStream: a detached
   // server-side job when the fileserver supports it (the reply survives
   // navigating away — see the DETACHED GENERATION JOBS block), else the
-  // legacy in-page stream.
-  const outcome = await runGenerationStream(thread, assistantMsg, requestBody);
+  // legacy in-page stream. runGenerationWithTools wraps it to run the
+  // card's tools as the model calls them; with none it is the same one call.
+  // runGenerationWithReroll writes the reply again if it uses one of the
+  // card's off-limits words (Auto Reroll, 1.8.0).
+  const outcome = await runGenerationWithReroll(thread, assistantMsg, requestBody, { card });
   // A smart-limit cut arrives as an abort (we cancel the stream ourselves),
   // but it's a *successful* turn — don't let it halt an auto-continue chain.
   sendErrored = outcome.errored || (outcome.aborted && !assistantMsg.smartCapped);
@@ -195,17 +218,23 @@ async function sendMessage(overrideContent) {
   // pending parser tail — regenerateFromThread always finalized; this now
   // matches the correct behavior everywhere.)
   finalizeStreamMessage(assistantMsg);
+  // A group reply loses its own name label and anything written as another
+  // member (groupCleanReply, js/29-groups.js).
+  if (_group && typeof groupCleanReply === 'function') groupCleanReply(assistantMsg, thread, card);
 
   // Card code sees the finished reply, after the format parsers have run
   // and scrubbed their markers, so a hook edits prose rather than
-  // half-parsed thinking tags.
+  // half-parsed thinking tags. `card` is whoever wrote it: the active
+  // character, or in a group chat the member whose code is loaded for its turn.
   try {
     const _edited = transformViaCardHook('reply', assistantMsg.content || '',
-                                         { card: getActiveCard(), thread: thread });
+                                         { card: card, thread: thread });
     if (_edited !== assistantMsg.content) assistantMsg.content = _edited;
   } catch (e) { console.error('[card-code] reply hook:', e); }
 
   applyGenerationOutcome(assistantMsg, outcome, 'diagnostic');
+  // Model links (1.8.0, #52): the chat remembers which model wrote this.
+  if (!outcome.errored && (assistantMsg.content || assistantMsg.reasoning)) { if (typeof noteReplyModel === 'function') noteReplyModel(thread); }
 
   // Final repaint. Nothing between here and the last streamed token has
   // touched the DOM, and by now four things have changed underneath it:
@@ -277,12 +306,18 @@ async function sendMessage(overrideContent) {
     renderSidebar();
   }
   updateContextInfo();
+  // A reply that wrote a file opens it in the Files panel (1.8.0).
+  if (typeof filesPanelAfterReply === 'function') filesPanelAfterReply(thread, assistantMsg);
 
   // Advance the auto-continue chain if one is active. Errors (including
   // user-initiated aborts) kill the chain — there's no good reason to
   // keep feeding messages into a broken server, and if the user hit Stop
   // they almost certainly want the whole thing to halt, not just the
   // current generation.
+  //
+  // In a group chat the round decides what happens next: another member
+  // replies, or the round is over and only then does a chain move on.
+  if (_group && typeof groupAfterReply === 'function' && groupAfterReply(thread, assistantMsg, !sendErrored)) return;
   if (sendErrored) {
     if (autoContinue) cancelAutoContinue('generation errored or aborted');
   } else {
@@ -298,6 +333,11 @@ function stopGeneration(opts = {}) {
   // (keepChain is set by the smart token limit: trimming one reply is
   // normal operation, and the chain should carry on to the next post.)
   if (autoContinue && !opts.keepChain) cancelAutoContinue('user stopped generation');
+  // A group chat's AUTO stops with it too; the round ends when this reply does.
+  if (!opts.keepChain && typeof groupStopRequested === 'function') groupStopRequested();
+  // Any stop but the smart limit's and Auto Reroll's own ends the turn:
+  // no reroll may start after it (runGenerationWithReroll, 03-generation.js).
+  if (!opts.keepChain && typeof _genStopRequested !== 'undefined') _genStopRequested = true;
   // Detached job: ask the server to abort its upstream call. llama-server
   // frees the slot, the worker marks the job 'cancelled', and the poll loop
   // observes the terminal state (usually within ~300ms).
@@ -573,6 +613,8 @@ function syncActiveVariant(msg) {
   v.attachments    = msg.attachments;
   v.genMs          = msg.genMs;        // response-timer readout, per variant
   v.smartCapped    = msg.smartCapped;  // smart-limit ✂ marker, per variant
+  v.toolCalls      = msg.toolCalls;    // card-tool calls this variant made
+  v.autoReroll     = msg.autoReroll;   // Auto Reroll's ↻ marker, per variant
   v.timestamp  = msg.timestamp || v.timestamp || Date.now();
 }
 
@@ -615,6 +657,16 @@ function applyVariantToMessage(msg) {
     msg.smartCapped = v.smartCapped;
   } else {
     delete msg.smartCapped;
+  }
+  if (Array.isArray(v.toolCalls) && v.toolCalls.length) {
+    msg.toolCalls = v.toolCalls;
+  } else {
+    delete msg.toolCalls;
+  }
+  if (v.autoReroll && typeof v.autoReroll === 'object') {
+    msg.autoReroll = v.autoReroll;
+  } else {
+    delete msg.autoReroll;
   }
   if (v.timestamp) msg.timestamp = v.timestamp;
 }
@@ -690,6 +742,8 @@ function rerollMessage() {
       searchData: msg.searchData,
       genMs:      msg.genMs,
       smartCapped: msg.smartCapped,
+      toolCalls:  msg.toolCalls,
+      autoReroll: msg.autoReroll,
       timestamp:  msg.timestamp  || Date.now()
     }];
     msg.activeVariant = 0;
@@ -722,6 +776,9 @@ function rerollMessage() {
   delete msg.genMs;
   delete msg.smartCapped;
   delete msg._smartLimitAt;
+  delete msg.toolCalls;        // the new variant makes its own calls
+  delete msg.toolPrefix;
+  delete msg.autoReroll;       // and has its own rerolls, if any
   msg.timestamp = Date.now();
 
   saveState();
@@ -742,7 +799,17 @@ async function regenerateFromThread(options = {}) {
   // Same reset as sendMessage — fresh turn starts without a stale marker.
   pendingLoreCompressionNote = null;
 
-  const card = getActiveCard();
+  // Who answers (see sendMessage). In a group chat:
+  //   options.groupCard        the round names the member (js/29-groups.js)
+  //   rerollIntoLastMessage    the member who wrote the reply writes it again
+  //   otherwise                an edited or scheduled message: a new round
+  const _group = (typeof threadGroup === 'function') ? threadGroup(thread) : null;
+  let card;
+  if (!_group) card = getActiveCard();
+  else if (options.groupCard) card = options.groupCard;
+  else if (options.rerollIntoLastMessage) card = groupRerollCard(thread, _group);
+  else card = await groupTurnCard(thread, _group, { startedBy: 'user' });
+  if (!card) { groupNobodyReplies(thread); return; }
 
   // Optional web search — used by scheduler
   // Results saved on the user message so they persist in context/lore
@@ -784,6 +851,9 @@ async function regenerateFromThread(options = {}) {
     delete assistantMsg.smartCapped;
     delete assistantMsg._smartLimitAt;
     delete assistantMsg.genMs;
+    delete assistantMsg.toolCalls;
+    delete assistantMsg.toolPrefix;
+    delete assistantMsg.autoReroll;
     assistantMsg.timestamp = Date.now();
     // Reroll re-authors the turn: the new text comes from whatever card is
     // active now, so the stamp moves with it rather than keeping the old one.
@@ -805,7 +875,9 @@ async function regenerateFromThread(options = {}) {
   startGenTimerTicker();
 
   const logitBiasParams = await buildLogitBias(card);
-  const _stopParams = getStopStrings();
+  // A group reply also stops where it starts writing another member's line.
+  const _stopParams = (typeof groupStopParams === 'function')
+    ? groupStopParams(getStopStrings(), thread, card) : getStopStrings();
   console.log('[gen] family=' + ((activeModel && activeModel.family) || 'unknown') +
               ' stop=' + JSON.stringify(_stopParams.stop || []) +
               '  (run gobboDiag() to dump the exact prompt the model receives)');
@@ -813,12 +885,23 @@ async function regenerateFromThread(options = {}) {
 
   // Shared transport: detached server-side job when available (survives
   // navigation), legacy direct stream otherwise. See sendMessage.
-  const outcome = await runGenerationStream(thread, assistantMsg, requestBody);
+  const outcome = await runGenerationWithReroll(thread, assistantMsg, requestBody, { card });
 
   // Flush parser state and scrub any format-specific stray markers, then
   // stamp the abort/error note so it lands after the scrubbed text.
   finalizeStreamMessage(assistantMsg);
+  if (_group && typeof groupCleanReply === 'function') groupCleanReply(assistantMsg, thread, card);
+  // In a group chat every member after the first replies through here, so
+  // its 'reply' hook runs here as the first member's does in sendMessage.
+  // (A reroll, in any chat, has never run it and still does not.)
+  if (_group && !options.rerollIntoLastMessage) {
+    try {
+      const _edited = transformViaCardHook('reply', assistantMsg.content || '', { card: card, thread: thread });
+      if (_edited !== assistantMsg.content) assistantMsg.content = _edited;
+    } catch (e) { console.error('[card-code] reply hook:', e); }
+  }
   applyGenerationOutcome(assistantMsg, outcome, 'plain');
+  if (!outcome.errored && (assistantMsg.content || assistantMsg.reasoning)) { if (typeof noteReplyModel === 'function') noteReplyModel(thread); }
 
   // Final repaint. Nothing between here and the last streamed token has
   // touched the DOM, and by now four things have changed underneath it:
@@ -869,6 +952,11 @@ async function regenerateFromThread(options = {}) {
     renderSidebar();   // finished off-screen — refresh the preview, leave the view alone
   }
   updateContextInfo();
+  if (typeof filesPanelAfterReply === 'function') filesPanelAfterReply(thread, assistantMsg);
+  // A group chat's round carries on from here, or ends (see sendMessage).
+  if (_group && typeof groupAfterReply === 'function') {
+    groupAfterReply(thread, assistantMsg, !(outcome.errored || (outcome.aborted && !assistantMsg.smartCapped)));
+  }
 }
 
 /* ================================================================
@@ -919,12 +1007,21 @@ async function finalizeJobIntoThread(thread, jobId, { live = false } = {}) {
   // strictly supersedes any partial text the 2.5s ticker saved. That
   // includes the smart-limit cut marker: it gates the feeder, and the
   // replay re-derives it (deterministically) from the same byte stream.
-  msg.content = '';
-  msg.reasoning = '';
+  // A reload between tool rounds: the completed rounds' text was kept as
+  // toolPrefix (runGenerationWithTools), and this job's transcript holds only
+  // the round that was running. Replay onto the prefix, not a blank.
+  msg.content = (msg.toolPrefix && msg.toolPrefix.content) || '';
+  msg.reasoning = (msg.toolPrefix && msg.toolPrefix.reasoning) || '';
+  delete msg.toolPrefix;
   delete msg._parseState;
+  delete msg._pendingToolCalls;
+  delete msg._finishReason;
   delete msg.smartCapped;
   delete msg._smartLimitAt;
   delete msg.genMs;
+  // msg.toolCalls is kept: calls from rounds before the pending one were
+  // recorded and saved as they ran, and this replay covers only the last
+  // round's transcript.
   // Response timer: keep the clock that started before the reload. The
   // message's own persisted stamp is best; the pendingJob breadcrumb is
   // the fallback (both are client wall-clock ms from the original send).
@@ -942,9 +1039,22 @@ async function finalizeJobIntoThread(thread, jobId, { live = false } = {}) {
     if (thread.id === state.activeThreadId) renderMessages();
   }
 
-  const outcome = await runGenerationStream(thread, msg, null, { resumeJobId: jobId });
+  const outcome = await attachLoadFailure(await runGenerationStream(thread, msg, null, { resumeJobId: jobId }));
   finalizeStreamMessage(msg);
+  // A resumed round that ended in tool calls is not continued (v1): the
+  // tools live in this page's card code, and the loop that would run them
+  // and ask again ended with the page that left. Record what was asked and
+  // say so, so a reroll is one click away.
+  const interrupted = takePendingToolCalls(msg);
+  if (interrupted.length && !outcome.errored && !outcome.aborted) {
+    recordToolCalls(msg, interrupted.map(c => ({
+      name: c.name, args: c.arguments, result: 'not run: the page was left before this call ran',
+      error: true, ms: 0
+    })));
+    msg.content += '\n\n*(tool call interrupted by leaving the page — reroll to start the reply again)*';
+  }
   applyGenerationOutcome(msg, outcome, 'plain');
+  if (!outcome.errored && (msg.content || msg.reasoning)) { if (typeof noteReplyModel === 'function') noteReplyModel(thread); }
 
   // Final repaint. Nothing between here and the last streamed token has
   // touched the DOM, and by now four things have changed underneath it:
@@ -1031,10 +1141,35 @@ let _resumingJobs = false;
 // stream a reply into thread objects that are about to be swapped out.
 let _appBooted = false;
 
+/**
+ * Between tool rounds there is no job at all (runGenerationWithTools), so a
+ * page closed while a tool ran leaves a reply that simply stops. The loop
+ * keeps `toolPrefix` on the message only while it is alive; one still there
+ * with no pending job and nothing generating is a loop that died with the
+ * page. Say so, the way an interrupted resume does, and clear it.
+ */
+function sweepInterruptedToolLoops() {
+  if (isGenerating) return;
+  let touched = false;
+  for (const thread of state.threads || []) {
+    if (thread.pendingJob) continue;
+    for (const msg of thread.messages || []) {
+      if (!msg || !msg.toolPrefix) continue;
+      delete msg.toolPrefix;
+      const note = '\n\n*(tool call interrupted by leaving the page — reroll to start the reply again)*';
+      if (msg.role === 'assistant' && !(msg.content || '').includes(note)) msg.content = (msg.content || '') + note;
+      delete msg.genStartedAt;
+      touched = true;
+    }
+  }
+  if (touched) { saveState(); try { renderSidebar(); } catch (e) {} }
+}
+
 async function resumePendingJobs() {
   if (_resumingJobs) return;
   _resumingJobs = true;
   try {
+    sweepInterruptedToolLoops();
     if (jobsAvailable === false) return;
     const pending = state.threads.filter(t => t.pendingJob && t.pendingJob.id);
     if (pending.length === 0) return;

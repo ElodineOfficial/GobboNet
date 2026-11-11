@@ -84,13 +84,13 @@ func borrowBuckets(c, bundled *Catalog) int {
 	return filled
 }
 
-// withBundledBuckets fills a remote or cached catalogue's missing buckets, and
-// its missing MoE allowances (moe.go), from the bundled models.ini, and says
-// so in the notes.
+// withBundledBuckets fills a remote or cached catalogue's missing buckets, its
+// missing MoE allowances (moe.go) and its missing pins (pins.go) from the
+// bundled models.ini, and says so in the notes.
 func withBundledBuckets(c *Catalog, bundledPath string, notes []string) []string {
 	needs := false
 	for _, e := range c.Entries {
-		if len(e.BucketTags()) == 0 || (e.MoEMinVRAM == 0 && e.MinRAM == 0) {
+		if len(e.BucketTags()) == 0 || (e.MoEMinVRAM == 0 && e.MinRAM == 0) || e.SHA256 == "" {
 			needs = true
 			break
 		}
@@ -113,6 +113,9 @@ func withBundledBuckets(c *Catalog, bundledPath string, notes []string) []string
 	}
 	if n := borrowMoE(c, bundled); n > 0 {
 		notes = append(notes, fmt.Sprintf("took the MoE small-card allowance for %d model(s) from the bundled list", n))
+	}
+	if n := borrowPins(c, bundled); n > 0 {
+		notes = append(notes, fmt.Sprintf("took the SHA-256 pin for %d model(s) from the bundled list", n))
 	}
 	return notes
 }

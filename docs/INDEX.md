@@ -48,6 +48,10 @@ shell below line 1394 stayed in `chat.html`).
 | `js/23-card-code.js` | — | 313 |
 | `js/24-boot.js` | 12144–12289 | 154 |
 | `js/25-tutorial.js` | — (1.7.9) | 444 |
+| `js/26-mcp.js` | — (1.8.0) | 425 |
+| `js/27-files-panel.js` | — (1.8.0) | 753 |
+| `js/28-update.js` | — (1.8.0) | 299 |
+| `js/29-groups.js` | — (1.8.0) | 1835 |
 
 ## Stylesheets
 
@@ -58,13 +62,23 @@ total, split out of the former 2,943-line `style.css` plus the inline `<style>`
 block. Load order matters here too: `01-tokens.css` defines the custom
 properties every later sheet reads.
 
+Hand-written since: `16-math` to `19-tour`, `20-files-panel` (1.8.0, the
+Files panel) and `21-groups` (1.8.0, group chats).
+
 ## Load-order hazards
 
 - `js/01-config.js` must load first (globals every other module reads) and
   `js/24-boot.js` after every module it calls (it wires listeners and kicks
   off the first render). `js/25-tutorial.js`, the first-run tour, comes after
   boot and waits on `window.GobboNet.ready` rather than running at load.
-- `js/23-card-code.js` and `js/25-tutorial.js` are the hand-written modules — the other 23 were
+  `js/26-mcp.js`, MCP servers (1.8.0), `js/27-files-panel.js`, the Files
+  panel (1.8.0), and `js/28-update.js`, the update button (1.8.0), come after
+  it; nothing calls them before the page is in use. `js/29-groups.js`, group
+  chats (1.8.0), is last. Earlier modules do call into it (the reply paths in
+  `10-chat.js`, the prompt in `08-rag.js`, the renderers), each call behind a
+  `typeof` check, and it renders once more after boot in case the first
+  render ran before it loaded.
+- `js/23-card-code.js`, `js/25-tutorial.js`, `js/26-mcp.js`, `js/27-files-panel.js`, `js/28-update.js` and `js/29-groups.js` are the hand-written modules — the other 23 were
   mechanically extracted, which is why their headers carry line ranges.
 - Adding a module means editing `chat.html`'s `<script>` list. `stage-web.sh`
   refuses to stage a frontend whose file count disagrees with what `chat.html`

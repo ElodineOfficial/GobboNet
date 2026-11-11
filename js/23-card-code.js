@@ -18,6 +18,13 @@
        gobbo.on('send',  ctx => ctx.text.toUpperCase());
        gobbo.on('reply', ctx => ctx.text.replace(/\bthee\b/g, 'you'));
        gobbo.on('activate', () => gobbo.notify('Ready.'));
+       gobbo.tool('roll', { description: 'Roll dice',
+                            parameters: { type: 'object', properties: { sides: { type: 'integer' } } } },
+                  args => 1 + Math.floor(Math.random() * (args.sides || 6)));
+
+   Tools are offered to the model only when the card's "let the model call
+   this card's tools" switch is on (cardToolDefs); the tool loop that runs
+   them is runGenerationWithTools in 03-generation.js.
 
    WHY IT IS NOT SANDBOXED
    The code runs with the same access as the page, because there is no
@@ -37,8 +44,52 @@
    activation, discarded on every switch — nothing survives a card
    change, which is what keeps one card's logic out of another's. */
 let _cardHooks = null;
+let _cardTools = null;        // Map name -> { name, description, parameters, fn }
 let _cardCodeCardId = null;
 let _cardCodeError = null;
+
+/* Tools (issue: tool calling). A card's code may offer the model functions
+   to call with gobbo.tool(). They are sent as the OpenAI `tools` array only
+   when the card's "let the model call this card's tools" switch is on, and
+   run in the page with the same access the rest of the card's code has. */
+const CARD_TOOL_NAME_RE = /^[A-Za-z0-9_-]{1,64}$/;
+
+/* The limits (1.8.0, roadmap #9). PR #71 had them as constants; the defaults
+   are its values. They are settings -- CONFIG > Characters & Chat > Card
+   Tools -- read through cardToolLimit() at the moment of use, never cached,
+   so a change applies to the next call without a reload. A missing or
+   nonsense value falls back to the default; one below the floor or above the
+   ceiling is held to it. The floors keep a tool loop able to do anything at
+   all; the ceilings keep a typo from meaning "forever" (setTimeout fires at
+   once past 2^31 ms) or a prompt the size of a book.
+
+     toolMaxRounds       rounds of tool calls per reply. One more request
+                         follows the last round, without tools, so the model
+                         answers in text: 4 rounds is PR #71's five requests.
+     toolTimeoutSeconds  how long one call may run
+     toolResultMaxChars  what one result may send back; a reply's results
+                         together may send three times this
+     toolArgsMaxKB       the most arguments one call may bring */
+const CARD_TOOL_LIMITS = {
+  toolMaxRounds:      { def: 4,    floor: 1,   ceil: 20 },
+  toolTimeoutSeconds: { def: 30,   floor: 1,   ceil: 3600 },
+  toolResultMaxChars: { def: 8000, floor: 500, ceil: 100000 },
+  toolArgsMaxKB:      { def: 64,   floor: 1,   ceil: 1024 }
+};
+// The CONFIG > Card Tools field for each limit (openSettings / saveSettings).
+const CARD_TOOL_LIMIT_FIELDS = [
+  ['set-tool-max-rounds', 'toolMaxRounds'],
+  ['set-tool-timeout', 'toolTimeoutSeconds'],
+  ['set-tool-result-max', 'toolResultMaxChars'],
+  ['set-tool-args-max', 'toolArgsMaxKB']
+];
+function cardToolLimit(key) {
+  const spec = CARD_TOOL_LIMITS[key];
+  const s = (typeof state !== 'undefined' && state && state.settings) ? state.settings : null;
+  const n = parseInt(s && s[key], 10);
+  if (!isFinite(n)) return spec.def;
+  return Math.min(spec.ceil, Math.max(spec.floor, n));
+}
 
 /* Only names that are genuinely invoked belong here. 'context' used to be
    listed and never fired anywhere -- on() accepted it without complaint, so
@@ -64,6 +115,7 @@ function teardownCardCode() {
     runCardHook('deactivate', {});
   }
   _cardHooks = null;
+  _cardTools = null;
   _cardCodeCardId = null;
   _cardCodeError = null;
   updateCardCodeStatus();
@@ -72,17 +124,23 @@ function teardownCardCode() {
 /**
  * Evaluate the active card's code and register its hooks.
  * Safe to call repeatedly — it always tears down first.
+ *
+ * `forCard` (1.8.0, group chats) loads another card's code instead: the
+ * member of a group whose turn it is, so that its hooks and tools are the
+ * ones running while it replies. js/29-groups.js puts the active card's
+ * back when the round ends. The card's own switch decides as always.
  */
-function applyCardCode() {
+function applyCardCode(forCard) {
   teardownCardCode();
 
-  const card = (typeof getActiveCard === 'function') ? getActiveCard() : null;
+  const card = forCard || ((typeof getActiveCard === 'function') ? getActiveCard() : null);
   if (!card || !card.customCodeEnabled) { updateCardCodeStatus(); return; }
 
   const src = (card.customCode || '').trim();
   if (!src) { updateCardCodeStatus(); return; }
 
   const hooks = {};
+  const tools = new Map();
   const api = {
     card: card,
     on(name, fn) {
@@ -96,6 +154,45 @@ function applyCardCode() {
         return;
       }
       (hooks[name] = hooks[name] || []).push(fn);
+    },
+
+    /* Offer the model a function it can call. `spec.parameters` is a JSON
+       Schema object describing the arguments; `fn(args, ctx)` runs when the
+       model calls it and its return value (a string, or anything that
+       JSON-stringifies) goes back to the model as the tool result. Nothing
+       is sent unless the card's tools switch is on. Validation mirrors on():
+       bad input is warned about and skipped, never thrown. */
+    tool(name, spec, fn) {
+      if (typeof name !== 'string' || !CARD_TOOL_NAME_RE.test(name)) {
+        console.warn('[card-code] tool name must match ' + CARD_TOOL_NAME_RE + ':', name);
+        return;
+      }
+      if (tools.has(name)) {
+        console.warn('[card-code] tool "' + name + '" is already registered');
+        return;
+      }
+      if (!spec || typeof spec !== 'object' || Array.isArray(spec)) {
+        console.warn('[card-code] tool "' + name + '" needs { description, parameters }');
+        return;
+      }
+      const params = spec.parameters;
+      if (!params || typeof params !== 'object' || Array.isArray(params)) {
+        console.warn('[card-code] tool "' + name + '" needs a JSON Schema object in parameters');
+        return;
+      }
+      if (typeof fn !== 'function') {
+        console.warn('[card-code] tool "' + name + '" needs a function');
+        return;
+      }
+      tools.set(name, {
+        name: name,
+        description: String(spec.description == null ? '' : spec.description),
+        parameters: params,
+        fn: fn,
+        // Where the tool came from. Every tool so far is the card's own;
+        // MCP servers (roadmap #16) add theirs to the same loop as 'mcp'.
+        source: 'card'
+      });
     },
     store: _cardStore(card.id),
     save() { try { saveState(); } catch (e) {} },
@@ -204,14 +301,17 @@ function applyCardCode() {
     const fn = new Function('gobbo', '"use strict";\n' + src);
     fn(api);
     _cardHooks = hooks;
+    _cardTools = tools;
     _cardCodeCardId = card.id;
     _cardCodeError = null;
     const n = Object.keys(hooks).reduce((a, k) => a + hooks[k].length, 0);
     console.log('[card-code] "' + card.name + '" loaded, ' + n + ' hook(s):',
-                liveCardHooks().join(', ') || 'none');
+                liveCardHooks().join(', ') || 'none',
+                '- ' + tools.size + ' tool(s):', liveCardTools().join(', ') || 'none');
     runCardHook('activate', { card });
   } catch (err) {
     _cardHooks = null;
+    _cardTools = null;
     _cardCodeError = String(err && err.message ? err.message : err);
     console.error('[card-code] "' + card.name + '" failed to load:', err);
   }
@@ -258,6 +358,133 @@ function cardCodeActive() {
   return liveCardHooks().length > 0;
 }
 
+/** Names of the tools the active card's code registered. */
+function liveCardTools() {
+  return _cardTools ? Array.from(_cardTools.keys()) : [];
+}
+
+/**
+ * The OpenAI `tools` array for a request on behalf of `card`, or [] when
+ * nothing may be offered: the switch is off (it must be exactly true, so a
+ * card from an import or an older install offers nothing), the code is off
+ * or failed to load, or the live registry belongs to a different card.
+ */
+function cardToolDefs(card) {
+  if (!card || card.toolsEnabled !== true || !card.customCodeEnabled) return [];
+  if (!_cardTools || !_cardTools.size || _cardCodeCardId !== card.id) return [];
+  return Array.from(_cardTools.values()).map(t => ({
+    type: 'function',
+    function: { name: t.name, description: t.description, parameters: t.parameters }
+  }));
+}
+
+/** Turn a tool's return value into the string the model receives. */
+function cardToolResultString(value) {
+  let out;
+  if (value === undefined || value === null) out = '';
+  else if (typeof value === 'string') out = value;
+  else {
+    try { out = JSON.stringify(value); } catch (e) { out = String(value); }
+    if (out === undefined) out = String(value);
+  }
+  const max = cardToolLimit('toolResultMaxChars');
+  if (out.length > max) {
+    out = out.slice(0, max) + '\n[result cut at ' + max + ' characters]';
+  }
+  return out;
+}
+
+/**
+ * Run one tool call from the model. Never throws: a tool that is missing,
+ * gets bad JSON or over-long arguments, throws, or runs past the timeout
+ * answers the model with an "error: ..." string instead, so it can recover
+ * or apologise, and the tool stays registered. Resolves to the record that
+ * is stored on the message: { name, args, result, error, ms } (args is the
+ * model's string, cut for storage at the result limit, toolResultMaxChars).
+ *
+ * extra: { signal, timeoutMs, cardId }
+ *   signal  -- Stop. The tool receives its own ctx.signal, which follows this
+ *              one and is also aborted when the timeout fires. A timeout ends
+ *              the wait, not the function: a tool that ignores its signal
+ *              keeps running, and the model is told it timed out.
+ *   thread  -- the thread the reply belongs to (ctx.thread). Chats can be
+ *              switched while a reply runs, so the one on screen is not
+ *              necessarily it; without this it falls back to the active one.
+ *   cardId  -- the card the call was offered for. If another card owns the
+ *              live registry by the time the call runs (the user switched
+ *              characters mid-reply), the call is refused rather than run
+ *              against a card that never consented.
+ */
+async function runCardTool(name, argsJson, extra) {
+  extra = extra || {};
+  const t0 = Date.now();
+  const rec = { name: String(name), args: argsJson == null ? '' : String(argsJson),
+                result: '', error: false, ms: 0, source: 'card' };
+  const def = _cardTools && _cardTools.get(rec.name);
+  const timeoutMs = (typeof extra.timeoutMs === 'number') ? extra.timeoutMs : cardToolLimit('toolTimeoutSeconds') * 1000;
+  const resultMax = cardToolLimit('toolResultMaxChars');
+  const argsMax = cardToolLimit('toolArgsMaxKB') * 1024;
+  const signal = extra.signal || null;
+
+  const fail = (msg) => { rec.error = true; rec.result = 'error: ' + msg; };
+
+  const argsText = rec.args;
+  if (argsText.length > resultMax) {
+    rec.args = argsText.slice(0, resultMax) + '\n[arguments cut at ' + resultMax + ' characters]';
+  }
+
+  if (!def) {
+    fail('unknown tool "' + rec.name + '"');
+  } else if (extra.cardId != null && extra.cardId !== _cardCodeCardId) {
+    fail('the character changed before this call ran');
+  } else if (signal && signal.aborted) {
+    fail('stopped');
+  } else if (argsText.length > argsMax) {
+    fail('arguments too long (' + argsText.length + ' characters, limit ' + argsMax + ')');
+  } else {
+    let args = {};
+    let parsed = true;
+    if (argsText.trim()) {
+      try { args = JSON.parse(argsText); } catch (e) { parsed = false; }
+    }
+    if (!parsed) {
+      fail('arguments are not valid JSON');
+    } else {
+      const card = (typeof getActiveCard === 'function') ? getActiveCard() : null;
+      let thread = extra.thread || null;
+      if (!thread) { try { thread = getActiveThread(); } catch (e) {} }
+      // The tool's own signal: follows Stop, and fires on timeout too, so a
+      // tool that checks it can give up instead of running on unobserved.
+      const ac = new AbortController();
+      let timer = null, onAbort = null;
+      try {
+        if (signal) {
+          onAbort = () => ac.abort();
+          signal.addEventListener('abort', onAbort, { once: true });
+        }
+        const run = Promise.resolve().then(() => def.fn(args, { card, thread, signal: ac.signal }));
+        const guard = new Promise((_, reject) => {
+          // Reject first, then abort: the abort listener below also rejects,
+          // and the first rejection is the one the model is told about.
+          timer = setTimeout(() => { reject(new Error('timed out after ' + timeoutMs + ' ms')); ac.abort(); }, timeoutMs);
+          ac.signal.addEventListener('abort', () => reject(new Error('stopped')), { once: true });
+        });
+        const value = await Promise.race([run, guard]);
+        rec.result = cardToolResultString(value);
+      } catch (err) {
+        fail(String(err && err.message ? err.message : err));
+      } finally {
+        if (timer) clearTimeout(timer);
+        if (signal && onAbort) signal.removeEventListener('abort', onAbort);
+      }
+    }
+  }
+  rec.ms = Date.now() - t0;
+  console.log('[card-tool] ' + rec.name + '(' + rec.args.slice(0, 200) + ') -> ' +
+              (rec.error ? rec.result : rec.result.length + ' chars') + ' in ' + rec.ms + ' ms');
+  return rec;
+}
+
 /**
  * Text transform helper for the 'send' and 'reply' hooks. Returns the
  * original text unless a handler returned a string, and refuses a
@@ -282,8 +509,11 @@ function updateCardCodeStatus() {
   if (_cardCodeError) {
     el.textContent = 'error: ' + _cardCodeError;
     el.style.color = 'var(--red, #ff6b6b)';
-  } else if (cardCodeActive()) {
-    el.textContent = 'active - hooks: ' + liveCardHooks().join(', ');
+  } else if (cardCodeActive() || liveCardTools().length) {
+    const parts = [];
+    if (cardCodeActive()) parts.push('hooks: ' + liveCardHooks().join(', '));
+    if (liveCardTools().length) parts.push('tools: ' + liveCardTools().join(', '));
+    el.textContent = 'active - ' + parts.join(' - ');
     el.style.color = 'var(--green-neon, #00ff73)';
   } else {
     el.textContent = '';
@@ -326,8 +556,12 @@ function neutralizeUntrustedCode(blob) {
   if (Array.isArray(blob.characterCards)) {
     for (const card of blob.characterCards) {
       if (!card || typeof card !== 'object') continue;
-      if (card.customCodeEnabled) result.cards++;
+      // Either flag counts: the caller only re-serialises the blob when
+      // something was cleared, so a card with only toolsEnabled set would
+      // otherwise be written back with it still on.
+      if (card.customCodeEnabled || card.toolsEnabled) result.cards++;
       card.customCodeEnabled = false;
+      card.toolsEnabled = false;
     }
   }
 
@@ -358,12 +592,14 @@ function applyImportedCardCode(card, rawCode) {
   if (typeof rawCode === 'string' && rawCode.trim()) {
     card.customCode = rawCode;
     card.customCodeEnabled = false;
+    card.toolsEnabled = false;
     console.warn('[card-code] imported card "' + (card.name || '?') +
                  '" carries custom code. It is DISABLED until you read it ' +
                  'and switch it on in the character editor.');
   } else {
     card.customCode = '';
     card.customCodeEnabled = false;
+    card.toolsEnabled = false;
   }
   return card;
 }

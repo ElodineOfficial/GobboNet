@@ -23,6 +23,8 @@ function openSettings() {
   document.getElementById('set-auto-continue-delay').value = autoContinueDelayMs() / 1000;
   document.getElementById('set-auto-continue-max').value = autoContinueMaxChain();
   document.getElementById('set-lore-timeout').value = loreTimeoutMs() / 1000;
+  // Card Tools: the limits as they will apply, floors and ceilings included.
+  for (const [id, key] of CARD_TOOL_LIMIT_FIELDS) document.getElementById(id).value = cardToolLimit(key);
   // Smart response limit
   const aScale = state.settings.avatarScale || 1;
   document.getElementById('set-avatar-scale').value = aScale;
@@ -37,20 +39,32 @@ function openSettings() {
   // Off unless chosen: `=== true`, so a settings blob from before the option
   // keeps the order it has always had.
   document.getElementById('set-retrieval-near-end').checked = (state.settings.retrievalNearEnd === true);
+  // Files Panel (1.8.0)
+  document.getElementById('set-files-auto-open').checked = (state.settings.filesAutoOpen !== false);
+  document.getElementById('set-files-fold').checked = (state.settings.filesFoldInChat !== false);
+  document.getElementById('set-files-run-scripts').checked = (state.settings.filesRunScripts === true);
   // autoScrollMode() owns the "what counts as valid" rule, so an unrecognised
   // stored value checks the same radio here that it will actually behave as.
   document.querySelectorAll('input[name="set-auto-scroll"]').forEach(el => {
     el.checked = (el.value === autoScrollMode());
   });
+  // Same rule for Model Switching: modelFollowMode() decides what counts.
+  document.querySelectorAll('input[name="set-model-follow"]').forEach(el => {
+    el.checked = (el.value === modelFollowMode());
+  });
   loadStandDownPanel();
+  loadOpenBrowserPanel();
+  loadModelFoldersPanel();
   loadNetworkHostsPanel();
   loadConfigFilePanel();
+  loadMCPPanel();
   document.getElementById('avatar-scale-val').textContent = Math.round(aScale * 100) + '%';
   // The Add a Model button needs a server to download with; in file:// mode it
   // is hidden with an explanation instead. Runs on open rather than at boot so
   // it is correct even if the panel is built before 02-model.js has run.
   try { applyModelCatalogAvailability(); } catch (e) { console.error('[catalog]', e); }
   loadLanPanel();
+  loadPrivacyEmbedLine();
   try { initConfigSections(); } catch (e) { console.error('[config-sections]', e); }
   document.getElementById('settings-modal').classList.add('open');
 }
@@ -188,6 +202,13 @@ function saveSettings() {
   state.settings.autoContinueDelaySeconds = (isFinite(acDelay) && acDelay >= 0) ? acDelay : DEFAULT_SETTINGS.autoContinueDelaySeconds;
   const acMax = parseInt(document.getElementById('set-auto-continue-max').value, 10);
   state.settings.autoContinueMaxChain = (isFinite(acMax) && acMax >= 1) ? acMax : DEFAULT_SETTINGS.autoContinueMaxChain;
+  // Card Tools: a cleared or nonsense field keeps the default; a number past
+  // a floor or ceiling is held to it, so what is saved is what will apply.
+  for (const [id, key] of CARD_TOOL_LIMIT_FIELDS) {
+    const spec = CARD_TOOL_LIMITS[key];
+    const n = parseInt(document.getElementById(id).value, 10);
+    state.settings[key] = isFinite(n) ? Math.min(spec.ceil, Math.max(spec.floor, n)) : spec.def;
+  }
   const loreT = parseInt(document.getElementById('set-lore-timeout').value, 10);
   state.settings.loreTimeoutSeconds = isFinite(loreT) ? Math.max(5, loreT) : DEFAULT_SETTINGS.loreTimeoutSeconds;
   state.settings.avatarScale = parseFloat(document.getElementById('set-avatar-scale').value) || 1;
@@ -195,6 +216,13 @@ function saveSettings() {
   state.settings.streamReplies = document.getElementById('set-stream-replies').checked;
   state.settings.stickyCards = document.getElementById('set-sticky-cards').checked;
   state.settings.retrievalNearEnd = document.getElementById('set-retrieval-near-end').checked;
+  state.settings.filesAutoOpen = document.getElementById('set-files-auto-open').checked;
+  state.settings.filesFoldInChat = document.getElementById('set-files-fold').checked;
+  state.settings.filesRunScripts = document.getElementById('set-files-run-scripts').checked;
+  const followPick = document.querySelector('input[name="set-model-follow"]:checked');
+  if (followPick && MODEL_FOLLOW_MODES.indexOf(followPick.value) >= 0) {
+    state.settings.modelFollow = followPick.value;
+  }
   const scrollPick = document.querySelector('input[name="set-auto-scroll"]:checked');
   if (scrollPick && AUTO_SCROLL_MODES.indexOf(scrollPick.value) >= 0) {
     state.settings.autoScroll = scrollPick.value;
@@ -207,6 +235,8 @@ function saveSettings() {
   saveState();
   closeSettings();
   renderMessages();
+  // The Files panel's preview reads "run scripts without asking" (1.8.0).
+  if (typeof filesPanelSync === 'function') filesPanelSync(true);
   applyActiveCardBackground();   // background obeys the same gate -- repaint it
   updateContextInfo();
   updatePrivacyBadge();
@@ -238,6 +268,10 @@ function openCharacters() {
   charEditorClosed();
   document.getElementById('card-editor').style.display = 'none';
   document.getElementById('persona-editor').style.display = 'none';
+  // Groups (1.8.0, js/29-groups.js): the third list in CAST, and its editor.
+  if (typeof editingGroupId !== 'undefined') { editingGroupId = null; _groupDraft = null; }
+  const _groupEd = document.getElementById('group-editor');
+  if (_groupEd) _groupEd.style.display = 'none';
   document.getElementById('char-modal-list').style.display = '';
   document.getElementById('char-close-row').style.display = '';
   renderCardGrid();
@@ -375,6 +409,9 @@ function renderCardGrid() {
       </div>
     </div>`;
   }).join('');
+  // The groups list shows its members' names and faces, so it is redrawn
+  // whenever the characters are (1.8.0, js/29-groups.js).
+  if (typeof renderGroupGrid === 'function') { try { renderGroupGrid(); } catch (e) { console.error('[group]', e); } }
 }
 
 function activateCard(id) {
@@ -420,6 +457,9 @@ function createCard() {
     dryMultiplier: 0,
     bannedPhrases: '',
     logitBiasStrength: -20,
+    autoRerollEnabled: false,
+    autoRerollWords: '',
+    autoRerollMax: 3,
     carouselEnabled: false,
     carouselPrompts: '',
     carouselMode: 'random',
@@ -429,7 +469,9 @@ function createCard() {
     contextLimit: 0,
     smartLimitEnabled: false,
     smartLimitTokens: 300,
-    thinkingEnabled: true
+    thinkingEnabled: true,
+    toolsEnabled: false,
+    preferredModel: ''
   };
   state.characterCards.push(card);
   saveState();
@@ -446,12 +488,15 @@ function editCard(id) {
   document.getElementById('card-personality').value = card.personality;
   document.getElementById('card-lore-toggle').value = card.loreEnabled !== false ? 'on' : 'off';
   populateLoreModelSelect(card.loreModelFile || '');
+  populatePreferredModelSelect(card.preferredModel || '');
   document.getElementById('card-starting-lore').value = card.startingLore || '';
   loadLorePromptEditor(card);
   document.getElementById('card-rag-storybook').value = card.ragStorybook || '';
   const _rw = document.getElementById('card-rag-words');
   if (_rw) _rw.value = String(ragWordsToFireOf(card));
   updateStorybookReadout();
+  // The readout says whether matching by meaning is on; ask, then redraw it.
+  refreshEmbedState().then(updateStorybookReadout).catch(() => {});
   // Greeting + alt greetings — mirror the carousel toggle pattern so
   // the body opens/closes cleanly when the user re-edits.
   document.getElementById('card-greeting').value = card.greeting || '';
@@ -508,6 +553,11 @@ function editCard(id) {
   const lbStrength = card.logitBiasStrength !== undefined ? card.logitBiasStrength : -20;
   document.getElementById('card-logit-strength').value = lbStrength;
   document.getElementById('card-logit-strength-val').textContent = lbStrength;
+  // Auto Reroll (1.8.0)
+  document.getElementById('card-auto-reroll-enabled').checked = (card.autoRerollEnabled === true);
+  document.getElementById('card-auto-reroll-words').value = card.autoRerollWords || '';
+  document.getElementById('card-auto-reroll-max').value = autoRerollMaxOf(card);
+  updateAutoRerollNote();
   // Carousel prompt
   const carouselEnabled = !!card.carouselEnabled;
   document.getElementById('card-carousel-enabled').checked = carouselEnabled;
@@ -532,6 +582,8 @@ function editCard(id) {
   updateCardCtxHint();
   document.getElementById('card-custom-code').value = card.customCode || '';
   document.getElementById('card-code-enabled').checked = !!card.customCodeEnabled;
+  // `=== true`: a card with no field (older, or imported) offers no tools.
+  document.getElementById('card-tools-enabled').checked = (card.toolsEnabled === true);
   updateCardCodeStatus();
   previewAvatar('card-avatar', 'card-avatar-preview');
   previewBg();
@@ -681,9 +733,16 @@ function downloadCardMemoryFile(i) {
 function saveFileToCardMemory(btn) {
   const payload = (typeof fileBlockPayload === 'function') ? fileBlockPayload(btn) : null;
   if (!payload) return;
-  const thread = getActiveThread();
   const msgEl = btn.closest && btn.closest('[data-index]');
-  const m = thread && msgEl ? thread.messages[Number(msgEl.dataset.index)] : null;
+  saveTextToCardMemory(payload.filename, payload.content, msgEl ? Number(msgEl.dataset.index) : -1);
+}
+
+/* The same, for a file the Files panel holds (1.8.0): its name, its text,
+   and the message it came from, whose speaker gets it. */
+function saveTextToCardMemory(filename, content, msgIndex) {
+  const payload = { filename, content };
+  const thread = getActiveThread();
+  const m = thread && msgIndex >= 0 ? thread.messages[msgIndex] : null;
   const speaker = thread ? makeCastResolver(thread).cardFor(m) : getActiveCard();
   const card = speaker && speaker.id && state.characterCards.find(c => c.id === speaker.id);
   if (!card) {
@@ -763,12 +822,18 @@ function saveCard() {
   Object.assign(card, readCardBudgetFields());
   card.customCode = document.getElementById('card-custom-code').value;
   card.customCodeEnabled = document.getElementById('card-code-enabled').checked;
+  card.toolsEnabled = document.getElementById('card-tools-enabled').checked;
   card.name = document.getElementById('card-name').value.trim() || 'Unnamed';
   card.avatar = document.getElementById('card-avatar').value.trim();
   card.writingStyle = document.getElementById('card-style').value;
   card.personality = document.getElementById('card-personality').value;
   card.loreEnabled = document.getElementById('card-lore-toggle').value === 'on';
   card.loreModelFile = document.getElementById('card-lore-model').value || '';
+  // A file name or nothing: the select only offers installed models, the
+  // card's existing link and "whatever is loaded", and the check is repeated
+  // so nothing else can be saved even if the list was tampered with.
+  const preferred = document.getElementById('card-preferred-model').value || '';
+  card.preferredModel = isPlainModelFile(preferred) ? preferred : '';
   card.startingLore = document.getElementById('card-starting-lore').value;
   Object.assign(card, readLorePromptEditor(card));
   const _prevStorybook = card.ragStorybook || '';
@@ -805,6 +870,9 @@ function saveCard() {
   card.dryMultiplier = safeParse(document.getElementById('card-dry-mult').value, 0);
   card.bannedPhrases = document.getElementById('card-banned-phrases').value;
   card.logitBiasStrength = safeParse(document.getElementById('card-logit-strength').value, -20);
+  card.autoRerollEnabled = document.getElementById('card-auto-reroll-enabled').checked;
+  card.autoRerollWords = document.getElementById('card-auto-reroll-words').value;
+  card.autoRerollMax = autoRerollMaxOf({ autoRerollMax: document.getElementById('card-auto-reroll-max').value });
   card.carouselEnabled = document.getElementById('card-carousel-enabled').checked;
   card.carouselPrompts = document.getElementById('card-carousel-prompts').value;
   card.carouselMode = document.getElementById('carousel-mode-random').checked ? 'random' : 'sequential';
@@ -890,6 +958,59 @@ async function populateLoreModelSelect(selected) {
     sel.appendChild(o);
   }
   sel.value = want;
+}
+
+/**
+ * Fill "Model for this character" (1.8.0, #52) from models-list.json, like
+ * the Compression Model menu above it. A link to a model that is not in the
+ * models folder stays selected, marked not installed, rather than being reset:
+ * the model may be on a drive that is unplugged today, and "Whatever is
+ * loaded" clears it in one click. Hidden where there is nothing to switch:
+ * remote mode, or a page opened from a file.
+ */
+async function populatePreferredModelSelect(selected) {
+  const sel = document.getElementById('card-preferred-model');
+  const group = document.getElementById('card-preferred-model-group');
+  if (!sel) return;
+  const want = isPlainModelFile(selected) ? selected : '';
+  sel.innerHTML = '<option value="">Whatever is loaded (default)</option>';
+  let data = null;
+  if (IS_SERVED) {
+    try {
+      const r = await fetch('/models-list.json', { cache: 'no-store' });
+      if (r.ok) data = await r.json();
+    } catch (e) {}
+  }
+  if (group) group.style.display = (!data || data.mode === 'remote') ? 'none' : '';
+  const models = (data && data.models) || [];
+  for (const m of models) {
+    if (!isPlainModelFile(m.file)) continue;
+    const o = document.createElement('option');
+    o.value = m.file;
+    o.textContent = m.name + (m.active ? '  (currently loaded)' : '');
+    sel.appendChild(o);
+  }
+  if (want && !models.some(m => m.file === want)) {
+    const o = document.createElement('option');
+    o.value = want;
+    o.textContent = want + '  (not installed)';
+    o.dataset.missing = '1';
+    sel.appendChild(o);
+  }
+  sel.value = want;
+  updatePreferredModelNote();
+}
+
+function updatePreferredModelNote() {
+  const sel = document.getElementById('card-preferred-model');
+  const note = document.getElementById('card-preferred-model-note');
+  if (!sel || !note) return;
+  const opt = sel.options[sel.selectedIndex];
+  const missing = !!(opt && opt.dataset && opt.dataset.missing);
+  note.textContent = missing
+    ? 'Not installed here, so the loaded model answers. The link is kept; choose “Whatever is loaded” to clear it.'
+    : '';
+  note.style.display = missing ? '' : 'none';
 }
 
 function cancelCardEdit() {
@@ -1091,14 +1212,26 @@ function _standDownStatus(msg, tone) {
  *  these web files and told the reader to replace the gobbonet program file
  *  beside web/. That was a guess off a 404, and on the most common Windows
  *  setup it was wrong in a way the reader could not act on -- GobboNet started
- *  from launch.bat is served by fileserver.ps1, which has no /standdown and
- *  never will, and an install made from the source ZIP has no gobbonet program
- *  file and no web/ folder to put one beside. The advice named two things that
- *  were not there.
+ *  from launch.bat up to 1.7.9 could be served by the PowerShell file server,
+ *  which has no /standdown and never will, and an install made from the source
+ *  ZIP had no gobbonet program file and no web/ folder to put one beside. The
+ *  advice named two things that were not there. 1.8.0 removed that server, but
+ *  a copy left running from before an update still answers this page.
  *
  *  /health-fileserver is answered by BOTH servers and only the Go one reports a
  *  version, so it is what actually distinguishes them. Ask it first, and every
  *  branch below can say something true. */
+/** Privacy Status's line about the embedding server (1.8.0, #15). */
+async function loadPrivacyEmbedLine() {
+  const el = document.getElementById('privacy-embed');
+  if (!el) return;
+  const st = await refreshEmbedState();
+  const t = embedStateText(st);
+  el.textContent = t.text;
+  el.style.display = t.text ? '' : 'none';
+  el.classList.toggle('privacy-embed-off', !t.on && !!t.text);
+}
+
 async function loadStandDownPanel() {
   const group = document.getElementById('standdown-group');
   if (!group) return;
@@ -1132,14 +1265,12 @@ async function loadStandDownPanel() {
     (health.server === 'fileserver.ps1' || !health.version);
 
   if (isLegacyServer) {
-    // The PowerShell file server. It can start and stop llama-server for a
-    // model swap, so this is a gap rather than an impossibility -- but it is a
-    // gap in a different program, and the fix is to run the other one.
-    disable('GobboNet is being served by the older PowerShell file server (fileserver.ps1), ' +
-            'which does not have idle stand-down. To get it, start GobboNet with the gobbonet ' +
-            'program file in your GobboNet folder instead of launch.bat. Everything else works ' +
-            'the same, and the chat page is built into that program file, so there is nothing ' +
-            'else to update.');
+    // The PowerShell file server, removed in 1.8.0. The only way to meet it now
+    // is a copy left running from before an update, and stopping it is the fix:
+    // the next start runs the gobbonet program file, which has stand-down.
+    disable('GobboNet is being served by a PowerShell file server (fileserver.ps1) left running ' +
+            'from GobboNet 1.7, which does not have idle stand-down. GobboNet 1.8 removed it: run ' +
+            'stop-gobbonet.bat in your GobboNet folder, then start GobboNet again.');
     return;
   }
 
@@ -1214,6 +1345,176 @@ async function applyStandDown() {
       : ''), data.persisted === false ? 'err' : 'ok');
   } catch (e) {
     _standDownStatus('Could not reach the server.', 'err');
+  }
+}
+
+/* ================================================================
+   WHEN GOBBONET STARTS (1.8.0, PR #58)
+
+   open_browser in config.toml: whether a browser tab opens on the PC when
+   GobboNet starts. Every launcher reads that file, so this panel reads and
+   writes it through /launch-settings rather than state.settings. Like Idle
+   Stand-Down it is a server setting, so it applies on its own -- the moment
+   the box changes -- never on SAVE. Any signed-in device may change it: it
+   decides nothing but whether a tab opens, and cannot make anything run.
+================================================================ */
+function _openBrowserStatus(msg, tone) {
+  const el = document.getElementById('open-browser-status');
+  if (!el) return;
+  el.textContent = msg || '';
+  if (tone) el.dataset.tone = tone; else delete el.dataset.tone;
+}
+
+async function loadOpenBrowserPanel() {
+  const box = document.getElementById('set-open-browser');
+  if (!box) return;
+  const off = (why) => { box.disabled = true; _openBrowserStatus(why); };
+  if (!IS_SERVED) {
+    off('Opened from a file rather than the GobboNet server, so there is no start-up to change.');
+    return;
+  }
+  try {
+    const resp = await fetch(window.location.origin + '/launch-settings', { cache: 'no-store' });
+    if (resp.status === 404) {
+      off('This version of the GobboNet program file does not have this setting; it arrived in 1.8.0.');
+      return;
+    }
+    if (!resp.ok) {
+      off('The server could not read this setting (error ' + resp.status + ').');
+      return;
+    }
+    const data = await resp.json();
+    box.disabled = false;
+    box.checked = !(data && data.open_browser === false);
+    _openBrowserStatus('');
+  } catch (e) {
+    off('Could not reach the server to read this setting.');
+  }
+}
+
+async function applyOpenBrowser(on) {
+  const box = document.getElementById('set-open-browser');
+  const undo = () => { if (box) box.checked = !on; };
+  try {
+    const resp = await fetch(window.location.origin + '/launch-settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ open_browser: !!on })
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) {
+      // Nothing was saved, so the box goes back to what config.toml says.
+      undo();
+      _openBrowserStatus(data.error || 'Could not change the setting.', 'err');
+      return;
+    }
+    const now = !(data && data.open_browser === false);
+    if (box) box.checked = now;
+    _openBrowserStatus(now
+      ? 'Saved. A browser tab opens on the PC when GobboNet starts.'
+      : 'Saved. GobboNet will start without opening a browser; the chat stays at its usual address.', 'ok');
+  } catch (e) {
+    undo();
+    _openBrowserStatus('Could not reach the server.', 'err');
+  }
+}
+
+/* ================================================================
+   MODEL FOLDERS (1.8.0, issue #68)
+
+   model_dir, model_dirs and scan_hf_cache from config.toml, through
+   /model-folders. Saved for the next start, on its own button, never by SAVE:
+   the model menu, the engine and downloads all hold the models folder from
+   start-up. Only the PC GobboNet runs on may see or change them (they decide
+   where it writes files); any other device is told so and sent no paths.
+================================================================ */
+function _modelFoldersStatus(msg, tone) {
+  const el = document.getElementById('model-folders-status');
+  if (!el) return;
+  el.textContent = msg || '';
+  if (tone) el.dataset.tone = tone; else delete el.dataset.tone;
+}
+
+function _modelFoldersShow(data) {
+  const dir = document.getElementById('set-model-dir');
+  const dirs = document.getElementById('set-model-dirs');
+  const hf = document.getElementById('set-scan-hf-cache');
+  if (dir) dir.value = data.model_dir || '';
+  if (dirs) dirs.value = (data.model_dirs || []).join('\n');
+  if (hf) hf.checked = !!data.scan_hf_cache;
+}
+
+function _modelFoldersPending(data) {
+  const notes = [];
+  if (data.restart_needed) notes.push('Saved changes take effect when GobboNet restarts.');
+  if (data.env_override) notes.push(data.env_override + ' is set where GobboNet starts, and wins over the models folder here.');
+  return notes.join(' ');
+}
+
+async function loadModelFoldersPanel() {
+  const fields = document.getElementById('model-folders-fields');
+  if (!fields) return;
+  const off = (why) => { fields.style.display = 'none'; _modelFoldersStatus(why); };
+  if (!IS_SERVED) {
+    off('Opened from a file rather than the GobboNet server, so there are no folders to show.');
+    return;
+  }
+  try {
+    const resp = await fetch(window.location.origin + '/model-folders', { cache: 'no-store' });
+    if (resp.status === 404) {
+      off('This version of the GobboNet program file does not have this box; it arrived in 1.8.0. The folders are in config.toml.');
+      return;
+    }
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) {
+      off(data.error || ('The server could not read the model folders (error ' + resp.status + ').'));
+      return;
+    }
+    if (!data.editable) {
+      off(data.reason || 'The model folders can only be changed on the PC GobboNet runs on.');
+      return;
+    }
+    fields.style.display = '';
+    _modelFoldersShow(data);
+    _modelFoldersStatus(_modelFoldersPending(data));
+  } catch (e) {
+    off('Could not reach the server to read the model folders.');
+  }
+}
+
+async function saveModelFolders() {
+  const btn = document.getElementById('model-folders-save');
+  const dir = document.getElementById('set-model-dir');
+  const dirs = document.getElementById('set-model-dirs');
+  const hf = document.getElementById('set-scan-hf-cache');
+  if (!dir || !dirs || !hf) return;
+  const body = {
+    model_dir: dir.value,
+    model_dirs: dirs.value.split(/\r?\n/).map(s => s.trim()).filter(Boolean),
+    scan_hf_cache: hf.checked
+  };
+  if (btn) btn.disabled = true;
+  _modelFoldersStatus('Saving…');
+  try {
+    const resp = await fetch(window.location.origin + '/model-folders', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) {
+      // Nothing was saved; what is typed stays, so it can be corrected.
+      _modelFoldersStatus(data.error || ('Could not save the model folders (error ' + resp.status + ').'), 'err');
+      return;
+    }
+    _modelFoldersShow(data);
+    const pending = _modelFoldersPending(data);
+    _modelFoldersStatus(data.saved ? ('Saved to config.toml. ' + pending).trim() : ('Nothing changed. ' + pending).trim(),
+      data.saved ? 'ok' : undefined);
+  } catch (e) {
+    _modelFoldersStatus('Could not reach the server.', 'err');
+  } finally {
+    if (btn) btn.disabled = false;
   }
 }
 
@@ -1336,8 +1637,9 @@ async function loadLanPanel() {
     if (hr.ok) health = await hr.json();
   } catch (e) { /* handled with an unreachable /lan below */ }
   if (health && (health.server === 'fileserver.ps1' || !health.version)) {
-    disable('GobboNet is being served by the older PowerShell file server (fileserver.ps1), which ' +
-            'can\u2019t show or change these here. Its window lists the addresses when it starts.');
+    disable('GobboNet is being served by a PowerShell file server (fileserver.ps1) left running from ' +
+            'GobboNet 1.7, which can\u2019t show or change these here. Run stop-gobbonet.bat in your ' +
+            'GobboNet folder, then start GobboNet again.');
     return;
   }
 
@@ -1707,10 +2009,18 @@ async function _cfgPost(path, body) {
 }
 
 function _cfgSavedMessage(data, verb) {
-  const changed = Array.isArray(data.changed) ? data.changed : [];
+  // MCP servers apply at once (1.8.0, #16); everything else on the next start.
+  const now = Array.isArray(data.applied_now) ? data.applied_now : [];
+  const all = Array.isArray(data.changed) ? data.changed : [];
+  const changed = all.filter(k => !now.includes(k));
+  const live = all.filter(k => now.includes(k));
   let msg = changed.length
     ? verb + ': ' + changed.join(', ') + '. Restart GobboNet to use it (close its window and start it again).'
-    : verb + '; no setting changed.';
+    : (live.length ? verb + '.' : verb + '; no setting changed.');
+  if (live.length) {
+    msg += ' ' + live.join(', ') + ' applied now.';
+    try { loadMCPPanel(); } catch (_) {}
+  }
   if (Array.isArray(data.warnings) && data.warnings.length) {
     msg += ' This version does not know ' + data.warnings.join(', ') + ' and will ignore it.';
   }

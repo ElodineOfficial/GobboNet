@@ -41,6 +41,7 @@ function makeEl(id) {
     _html: '',
     children: [],
     style: {},
+    dataset: {},
     classList: {
       _s: new Set(),
       add(c) { this._s.add(c); },
@@ -97,7 +98,7 @@ function makeDom() {
 
 /* --- harness -------------------------------------------------------------- */
 
-function run(name, { catalogBody, downloadPost, downloadGet, isServed = true }, body) {
+function run(name, { catalogBody, downloadPost, downloadGet, isServed = true, check = null }, body) {
   console.log('\n' + name);
   const dom = makeDom();
   const calls = [];
@@ -118,6 +119,11 @@ function run(name, { catalogBody, downloadPost, downloadGet, isServed = true }, 
       return reply(downloadPost.status || 200, downloadPost.body);
     }
     if (url === '/model-download') return reply(200, downloadGet ? downloadGet() : { state: 'idle' });
+    // CHECK FILE (1.8.0): the test supplies the server's answers.
+    if (url === '/model-check' && check) {
+      const a = check(opts && opts.method === 'POST' ? JSON.parse(opts.body) : null);
+      return reply(a.status || 200, a.body);
+    }
     return reply(404, {});
   };
 
@@ -128,6 +134,7 @@ function run(name, { catalogBody, downloadPost, downloadGet, isServed = true }, 
     IS_SERVED: isServed,
     setInterval: () => 1,
     clearInterval: () => {},
+    setTimeout, clearTimeout,   // CHECK FILE polls with these (1.8.0)
     loadModelsList: () => {},
     swapToModelFile: async () => {},
   };
@@ -214,10 +221,74 @@ await run('An installed model is marked and cannot be re-downloaded', {
   const byName = (n) => rows.find(r => r.children[0].textContent === n);
   const installedRow = byName('Small Model');
   ok(installedRow.classList.contains('installed'), 'the row is flagged installed');
-  const btn = installedRow.children[2];
+  // 1.8.0: the installed row's buttons sit together, ALREADY INSTALLED and
+  // CHECK FILE.
+  const actions = installedRow.children[2];
+  ok(actions.classList.contains('catalog-entry-actions'), 'its buttons are grouped');
+  const btn = actions.children[0];
   ok(btn.disabled === true, 'its button is disabled');
   eq(btn.textContent, 'ALREADY INSTALLED', 'and says so');
+  eq(actions.children[1].textContent, 'CHECK FILE', 'beside it, CHECK FILE');
+  ok(actions.children[1].disabled !== true, '  which can be pressed');
   ok(byName('Big Model').children[2].disabled !== true, 'the uninstalled model is still offered');
+  ok(!byName('Big Model').children.some(c => c.classList && c.classList.contains('catalog-entry-actions')), '  with no CHECK FILE: nothing to check');
+});
+
+/* --- 3b. CHECK FILE (1.8.0, #67) ------------------------------------------ */
+
+await run('CHECK FILE compares an installed model offline, and asks HuggingFace only on click', {
+  catalogBody: CATALOG,
+  downloadPost: { body: {} },
+  check: (post) => {
+    if (!post) return { body: { state: 'done', index: 2, source: 'catalogue', result: 'mismatch',
+      expected: 'a'.repeat(64), got: 'b'.repeat(64), message: 'Small Model does not match the checksum the catalogue publishes: it is incomplete.' } };
+    if (post.source === 'huggingface') return { status: 202, body: { state: 'running', index: post.index, source: 'huggingface', total: 0 } };
+    return { status: 202, body: { state: 'running', index: post.index, source: 'catalogue', total: 2147483648, percent: 25 } };
+  },
+}, async ({ ctx, els, calls }) => {
+  await ctx.loadModelCatalog();
+  await tick();
+  const rows = () => els['model-catalog-list'].children.filter(c => c.classList.contains('catalog-entry'));
+  const small = () => rows().find(r => r.children[0].textContent === 'Small Model');
+  await small().children[2].children[1].onclick();
+  await tick();
+  const post = calls.find(c => c.url === '/model-check' && c.opts && c.opts.method === 'POST');
+  ok(post && JSON.parse(post.opts.body).index === 2 && JSON.parse(post.opts.body).source === 'catalogue',
+     'CHECK FILE posts the catalogue index and asks for the offline check');
+  ok(!JSON.parse(post.opts.body).file, '  never a file name or a path');
+  const running = small().children.find(c => c.classList.contains('catalog-check-note'));
+  ok(running && /Checking\u2026 25% of 2\.0 GB/.test(running.textContent), 'while it runs, the row says how far it is', running && running.textContent);
+  ok(small().children[2].children[1].disabled === true, '  and CHECK FILE waits for it');
+  await new Promise(r => setTimeout(r, 800));
+  await tick();
+  const done = small().children.find(c => c.classList.contains('catalog-check-note'));
+  ok(done && done.dataset.tone === 'err' && /does not match/.test(done.textContent) && done.textContent.includes('Expected: ' + 'a'.repeat(64)),
+     'a mismatch is shown in red, with both checksums', done && done.textContent);
+  ok(!calls.some(c => c.url === '/model-check' && c.opts && c.opts.method === 'POST' && JSON.parse(c.opts.body).source === 'huggingface'),
+     'HuggingFace was not asked: the catalogue had a checksum');
+});
+
+await run('A model with no pinned checksum offers Ask HuggingFace', {
+  catalogBody: CATALOG,
+  downloadPost: { body: {} },
+  check: (post) => post && post.source !== 'huggingface'
+    ? { body: { state: 'done', index: post.index, source: 'catalogue', result: 'no-reference',
+                message: 'The catalogue publishes no checksum for Small Model. Ask HuggingFace sends one request to huggingface.co.' } }
+    : { status: 202, body: { state: 'running', index: 2, source: 'huggingface', total: 0 } },
+}, async ({ ctx, els, calls }) => {
+  await ctx.loadModelCatalog();
+  await tick();
+  const small = () => els['model-catalog-list'].children.filter(c => c.classList.contains('catalog-entry')).find(r => r.children[0].textContent === 'Small Model');
+  await small().children[2].children[1].onclick();
+  await tick();
+  const note = small().children.find(c => c.classList.contains('catalog-check-note'));
+  const ask = note && note.children.find(c => c.tag === 'button');
+  ok(ask && ask.textContent === 'Ask HuggingFace for this file\u2019s checksum' && /huggingface\.co/.test(ask.title),
+     'no reference here: a second, labelled button that says it asks huggingface.co');
+  await ask.onclick();
+  await tick();
+  const posts = calls.filter(c => c.url === '/model-check' && c.opts && c.opts.method === 'POST').map(c => JSON.parse(c.opts.body).source);
+  eq(posts.join(','), 'catalogue,huggingface', 'HuggingFace is asked only when that button is pressed');
 });
 
 /* --- 4. a download already running is adopted, not duplicated ------------- */

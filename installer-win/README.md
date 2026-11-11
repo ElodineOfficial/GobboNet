@@ -4,11 +4,12 @@
 `installer/`; see "Not to be confused with `installer/`" below.
 
 This is the script that built `GobboNetSetup-1_7_0.exe` and everything before
-it. It installs the batch/PowerShell path — `launch.bat` and `fileserver.ps1` —
-and, since 1.7.6, the Go binary.
+it. It installs `launch.bat`, the first-run questions, and the Go binary it hands
+over to (since 1.7.6). Since 1.8.0 it no longer installs `fileserver.ps1`, the
+PowerShell server, and deletes the copy an older install left.
 
 ```sh
-./scripts/make-zip.sh                                  # dist/GobboNet-<ver>.zip
+bash ./scripts/make-zip.sh                             # dist/GobboNet-<ver>.zip
 unzip -q dist/GobboNet-*.zip -d /tmp/gn
 installer-win/stage-payload.sh /tmp/gn/GobboNet   # -> ../staging, from the ZIP
 cd installer-win && makensis gobbonet.nsi      # NSIS 3.12, large strings
@@ -45,6 +46,14 @@ the "Setup or add a model" shortcut, and three new payload files; the
 uninstaller's list is identical. See
 `docs/changelog/CHANGELOG-1.7.9-windows-installer.md`.
 
+For 1.8.0, against the official `GobboNetSetup-1_7_9.exe` itself. First the
+toolchain: the `v1.7.9` script, compiled with the official installer's own
+payload (extracted by 7-Zip, file times kept), gives a file **byte-identical
+to the official one** once the stub and the three plugins carry 1.7.9's link
+times. They are the same compiler's output (MinGW-w64 GCC from Ubuntu 24.04),
+and those link times are the only bytes in which they differ. Then the 1.8.0
+build, made with that same NSIS: see "1.8.0" below.
+
 On Linux, makensis and the Windows stubs build from the NSIS source (tag
 `v312`) with SCons, either way:
 
@@ -75,9 +84,10 @@ Same pages, same first-run flow (`launch.bat` fetches llama.cpp and offers the
 model catalogue on first launch); nothing is downloaded during setup. Three
 additions, all forced by shipping the Go server:
 
-- **`gobbonet.exe` is installed.** `launch.bat` hands the server role to it
-  when present. `fileserver.ps1` alone has no per-conversation sync routes, so
-  1.7.6's chat backup and device sync would fail without it.
+- **`gobbonet.exe` is installed.** `launch.bat` hands the server role to it.
+  Up to 1.7.9 `fileserver.ps1` was the fallback without it, and it had no
+  per-conversation sync routes, so chat backup and device sync needed the Go
+  binary from 1.7.6 on. Since 1.8.0 it is the only server.
 - **GobboNet is stopped before files are replaced or removed**
   (`stop-gobbonet.bat /quiet`), because a running `gobbonet.exe` holds its own
   file open.
@@ -141,7 +151,8 @@ side over first. This script now matches it:
 - **Setup or add a model** runs `gobbonet.exe launch --setup`, which runs
   `launch.bat`: the engine download, hardware check and model menu. Going
   through `gobbonet.exe` puts it in a kill-on-close job, so closing the window
-  also ends the embedding server it started (1.7.9, PR #15).
+  ends everything it started (1.7.9, PR #15). Since 1.8.0 `launch.bat` only
+  downloads the embedding model; `gobbonet.exe` starts the embedding server.
 - The finish page's *Launch GobboNet* runs the same command as the shortcuts,
   in the same folder.
 - Every link is recreated on each install, so updating over an older version
@@ -153,6 +164,47 @@ ZIP installs get the same links from `Repair Windows shortcuts.bat`. See
 `docs/changelog/CHANGELOG-1.7.6-windows-launch.md` and
 `docs/changelog/CHANGELOG-1.7.8-hotfix-installers.md`.
 `tests/test-windows-launch.py` holds both scripts to it.
+
+## 1.8.0: the same installer, for the 1.8.0 payload
+
+Pages, texts, colours, password and port handling, shortcuts, registry entries,
+folder and compression are 1.7.9's. What changed:
+
+- **`APPVER` 1.8.0**, and with it `OutFile` and `VIProductVersion`, from the
+  version bump.
+- **The header says `v1.8`** (`art/modern-header.bmp`; see art/ below).
+- **The payload:** `fileserver.ps1` is gone and a stale copy is deleted on
+  install (round 6, `CHANGELOG-1.8.0-legacy-removal.md`); six new page files
+  (`js/26` to `js/29`, `css/20` and `css/21`) arrive through the `js\*.js` and
+  `css\*.css` lines.
+- **The uninstaller removes what the update button leaves** beside the
+  program: `gobbonet.exe.old` (or `gobbonet.exe.old-<n>`), kept until GobboNet
+  next starts, and `gobbonet.new.exe`, a new program whose checks never
+  finished. Without that, uninstalling after an update and before a restart
+  left the folder behind. `gobbonet uninstall`, which the uninstaller runs,
+  likewise removes the update's download folder in the data folder.
+
+**How it was built:** NSIS 3.12 large strings as above, with the stub
+(`Stubs/lzma_solid-x86-unicode`) and `System.dll`, `nsDialogs.dll` and
+`nsExec.dll` given 1.7.9's link times, so the installer engine and its plugins
+are the very files 1.7.9 shipped. Staged from the extracted 1.8.0 update ZIP.
+
+**How it was checked** (`CHANGELOG-1.8.0-windows-installer.md` has the
+details):
+
+- the 66 payload files are byte-for-byte the ZIP's; the file list is 1.7.9's
+  without `fileserver.ps1`, plus the six page files;
+- decoded and lined up against the official 1.7.9, the installer's 1,229
+  instructions differ from 1.7.9's 1,223 only in the title and
+  `DisplayVersion`, the `fileserver.ps1` line and the six files; the
+  uninstaller's 466 differ from 463 only in the three update leftovers; every
+  jump lands where 1.7.9's does; the string tables differ only in those, and
+  the stub only in its version resource;
+- run under Wine 9.0 beside the official 1.7.9: every page, screenshot by
+  screenshot, differs only in the version marks and the size of the install;
+  a fresh install, an upgrade over 1.7.9 (models, engine and password kept,
+  `fileserver.ps1` deleted) and an uninstall after an update, which leaves
+  nothing behind where 1.7.9's left the folder.
 
 ## Not to be confused with `installer/`
 
@@ -169,9 +221,29 @@ want. `tests/test-windows-installer.py` now holds this script to its pages and
 
 ## art/
 
-`art/modern-header.bmp` carries the version as painted pixels — `v1.7` covers
-the whole 1.7.x line. It is not generated, so it does not follow `APPVER`; on a
+`art/modern-header.bmp` carries the version as painted pixels — `v1.8` covers
+the whole 1.8.x line. It is not generated, so it does not follow `APPVER`; on a
 minor bump the bitmap has to be repainted or the wizard shows the old number
-while every other surface shows the new one. The copy under `installer/art/`
+while every other surface shows the new one.
+
+How 1.8.0's was repainted, for the next one: `v1.` is DejaVu Sans Mono at 8
+pixels, colour `#56801E` on `#0D0E12`, starting at x=53, y=33. The digit was
+painted by hand, heavier than the font's own (whose 8 at this size blurs into
+a 0). The `7` was cleared to the background (x 66-72, y 32-39, plain
+background otherwise) and an `8` painted in its 5×6 box at x=67, y=33, in the
+three shades the `1` beside it uses: `#56801E`, `#42601B`, `#222E15`. Rows,
+top to bottom, with 9, 7, 3 for those shades:
+
+```
+79997
+9...9
+39993
+9...9
+9...9
+79997
+```
+
+Only those 20 pixels changed; the file was patched in place, so the rest of
+it is byte-for-byte 1.7's. The copy under `installer/art/`
 was stale at `v1.3` for exactly this reason and has been replaced with the
 shipped one.
