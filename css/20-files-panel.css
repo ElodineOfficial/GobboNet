@@ -21,6 +21,8 @@
 }
 .files-toggle:hover { background: var(--cyan-bright); color: var(--black); box-shadow: var(--glow-cyan); }
 .files-toggle[aria-expanded="true"] { background: rgba(0, 243, 255, 0.18); }
+/* Only while the chat has a file or the panel is open (_filesShowToggle). */
+.files-toggle[hidden] { display: none; }
 .files-count {
   font-size: 10px;
   font-weight: 700;

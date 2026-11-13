@@ -745,7 +745,9 @@ async function restoreFromServer(opts) {
       updateSyncIndicator();
       state.activeThreadId = null;
       if (!opts.boot) {
-        searchEnabled = state.searchEnabled || false;
+        // The 🔍 switch is this device's and the server's copy does not
+        // touch it; just keep the button showing it after the re-render.
+        if (typeof showSearchSwitch === 'function') showSearchSwitch();
         applyExtensions();
         applyCardCode();
         applyAvatarScale();

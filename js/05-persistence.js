@@ -337,7 +337,9 @@ function applyLoadedState(saved) {
       state.groups = (typeof normalizeGroups === 'function') ? normalizeGroups(saved.groups) : [];
 
       state.schedules = saved.schedules || [];
-      state.searchEnabled = saved.searchEnabled || false;
+      // The 🔍 switch is this device's (js/11-search.js). A stored true is
+      // another device's, or a 1.8.0 one's, and never switches search on here.
+      state.searchEnabled = false;
       state.folders = saved.folders || [];
       state.extensions = migrateExtensions(saved.extensions);
       state.macros = Array.isArray(saved.macros) ? saved.macros : DEFAULT_MACROS.map(m => ({ ...m }));
@@ -778,7 +780,7 @@ function buildStateMeta() {
     groups: state.groups || [],
     schedules: state.schedules,
     sidebarOpen: state.sidebarOpen,
-    searchEnabled: state.searchEnabled,
+    searchEnabled: false,   // per device now (js/11-search.js); false so a 1.8.0 reader turns its own off
     folders: state.folders,
     extensions: state.extensions,
     macros: state.macros,

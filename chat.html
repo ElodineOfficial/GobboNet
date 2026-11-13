@@ -94,8 +94,9 @@
       <span class="lore-chip" id="lore-chip" style="display:none" role="button" tabindex="0"
             onclick="openLoreInspector()"
             onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openLoreInspector();}"></span>
-      <!-- The Files panel (1.8.0, js/27-files-panel.js): this chat's files. -->
-      <button class="files-toggle" id="files-toggle" type="button" title="Files in this chat" aria-controls="files-panel" aria-expanded="false">&#128196;<span class="files-count" id="files-count"></span></button>
+      <!-- The Files panel (1.8.0, js/27-files-panel.js): this chat's files.
+           Hidden until the chat on screen has a file, or the panel is open. -->
+      <button class="files-toggle" id="files-toggle" type="button" title="Files in this chat" aria-controls="files-panel" aria-expanded="false" hidden>&#128196;<span class="files-count" id="files-count"></span></button>
       <span class="status-label" id="status-label">Checking...</span>
       <span class="status-dot" id="status-dot"></span>
       <span class="privacy-badge" id="privacy-badge" title="llama.cpp — fully offline, zero telemetry">&#128274;</span>
@@ -143,7 +144,7 @@
       <input type="file" id="attach-input" multiple style="display:none" onchange="onAttachInput(this)">
       <button class="attach-btn" id="attach-btn" onclick="document.getElementById('attach-input').click()" title="Attach files (or drag & drop onto the chat)">&#128206;</button>
       <textarea id="msg-input" placeholder="Type your message... (Enter to send, Shift+Enter for newline)" rows="1"></textarea>
-      <button class="search-toggle" id="search-toggle" onclick="toggleSearch()" title="Toggle web search">&#128269;</button>
+      <button class="search-toggle" id="search-toggle" onclick="toggleSearch()" title="Web search is off on this device. Click to search online before each message." aria-pressed="false">&#128269;</button>
       <button class="btn btn-fill" id="send-btn" onclick="sendMessage()">Send</button>
       <button class="btn" id="stop-btn" onclick="stopGeneration()" style="display:none;">Stop</button>
     </div>
@@ -362,7 +363,7 @@
          SAVE, per device like the rest of this section. -->
     <div class="form-group" id="files-panel-group" style="margin-top:12px; padding:12px; border:1px solid rgba(0,243,255,0.18); border-radius:var(--radius); background:rgba(0,243,255,0.02);">
       <label>&#128196; Files Panel</label>
-      <div class="form-hint" style="margin-top:2px;margin-bottom:10px;">The &#128196; button at the top opens a panel with every file in the chat, whole, with its versions.<button type="button" class="tip-btn" aria-label="More about the Files panel" aria-describedby="tip-files-panel" aria-expanded="false">?</button></div>
+      <div class="form-hint" style="margin-top:2px;margin-bottom:10px;">The &#128196; button at the top, there once a chat has a file, opens a panel with every file in the chat, whole, with its versions.<button type="button" class="tip-btn" aria-label="More about the Files panel" aria-describedby="tip-files-panel" aria-expanded="false">?</button></div>
       <div class="tip-body" id="tip-files-panel" hidden>A file is anything a character writes as a <code>```file:name</code> block, a text file you attach, or a web page or picture written as an <code>html</code> or <code>svg</code> code block. Writing the same name again makes a new version; the arrows step through them. Markdown, CSV and TSV are shown rendered, and HTML and SVG as a preview that cannot reach the internet or GobboNet. <strong>EDIT</strong> lets you change a file and send your version with your next message, and <strong>ASK ABOUT THE SELECTION</strong> quotes the part you selected into the message box. Nothing in the panel is sent anywhere.</div>
       <label class="code-enable-row">
         <input type="checkbox" id="set-files-auto-open">

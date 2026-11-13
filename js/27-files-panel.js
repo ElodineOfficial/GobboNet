@@ -325,6 +325,18 @@ function _filesApplyWidth() {
 
 function filesPanelIsOpen() { return _fp.open; }
 
+/**
+ * The header button is there only when it has something to do: the chat on
+ * screen has at least one file, or the panel is open. The home screen has no
+ * chat, so no button. An open panel keeps it, so moving to a chat with no
+ * files never takes away the button the panel was opened from; closing the
+ * panel there hides it. _fp.files is the active chat's list, kept current by
+ * filesPanelSync.
+ */
+function _filesShowToggle(els) {
+  if (els && els.toggle) els.toggle.hidden = !(_fp.open || _fp.files.length > 0);
+}
+
 /** Open or close the panel; with no argument, switch it. */
 function toggleFilesPanel(force) {
   const els = _filesEls();
@@ -333,6 +345,7 @@ function toggleFilesPanel(force) {
   els.panel.hidden = !_fp.open;
   document.body.classList.toggle('files-open', _fp.open);
   if (els.toggle) els.toggle.setAttribute('aria-expanded', _fp.open ? 'true' : 'false');
+  _filesShowToggle(els);
   _filesSavePrefs();
   if (_fp.open) { _filesApplyWidth(); filesPanelSync(true); }
 }
@@ -354,8 +367,8 @@ function _filesShowList() {
 }
 
 /**
- * Bring the panel up to date with the active conversation: the count on the
- * header button always, the panel itself when it is open. Called after the
+ * Bring the panel up to date with the active conversation: the header
+ * button and its count always, the panel itself when it is open. Called after the
  * chat renders (renderMessages), while a reply streams (throttled), and by
  * the panel's own controls with force.
  */
@@ -376,6 +389,7 @@ function filesPanelSync(force) {
     els.count.textContent = n ? String(n) : '';
     if (els.toggle) els.toggle.title = n ? 'Files in this chat (' + n + ')' : 'Files in this chat';
   }
+  _filesShowToggle(els);
   if (!_fp.open || (!changed && !force)) return;
   // Mid-edit, a new token elsewhere must not throw away what is being typed.
   if (_fp.editing && !force) return;
@@ -715,7 +729,12 @@ function _filesWire() {
   if (els.close) els.close.addEventListener('click', closeFilesPanel);
   if (els.back) els.back.addEventListener('click', _filesShowList);
   els.panel.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && !_fp.editing) { e.stopPropagation(); closeFilesPanel(); try { els.toggle && els.toggle.focus(); } catch (_) {} }
+    if (e.key === 'Escape' && !_fp.editing) {
+      e.stopPropagation(); closeFilesPanel();
+      // Back to the button, unless closing hid it (a chat with no files).
+      const back = (els.toggle && !els.toggle.hidden) ? els.toggle : document.getElementById('msg-input');
+      try { back && back.focus(); } catch (_) {}
+    }
   });
   // Resizing: drag the left edge, or focus it and use the arrow keys.
   const r = els.resize;
@@ -748,6 +767,9 @@ function _filesWire() {
   const p = _filesLoadPrefs();
   _filesApplyWidth();
   if (p.open && window.innerWidth >= FILES_OVERLAY_BELOW) toggleFilesPanel(true);
+  // chat.html starts the button hidden; say so here too, so the page and this
+  // module agree before the first render.
+  _filesShowToggle(els);
 }
 
 try { _filesWire(); } catch (e) { console.error('[files] wiring:', e); }

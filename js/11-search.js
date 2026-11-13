@@ -5,14 +5,43 @@
    @end-split-header */
 /* ================================================================
    WEB SEARCH
+
+   THE SWITCH BELONGS TO THIS DEVICE (1.8.0). The 🔍 switch used to be
+   stored in /state with everything else, so switching it on at the PC
+   switched it on for every phone and browser that opened GobboNet
+   afterwards, and their messages went to the web with nobody there having
+   asked. When the switch arrived by sync while the page was open, the
+   button did not even change. Like the search key (settings.apiKey, which
+   never leaves this browser), it now lives in this browser's localStorage:
+   off until it is switched on here, and the button always shows it.
+
+   state.searchEnabled is still written, always false, so a 1.8.0 device
+   that reads this state turns its own search off rather than on. A value
+   arriving in it -- by sync, in a backup, from a 1.8.0 device -- is ignored.
 ================================================================ */
-let searchEnabled = false;
+const SEARCH_SWITCH_KEY = 'gobbonet.webSearch';
+
+function _readSearchSwitch() {
+  try { return localStorage.getItem(SEARCH_SWITCH_KEY) === 'on'; } catch (_) { return false; }
+}
+
+let searchEnabled = _readSearchSwitch();
+
+/** Make the 🔍 button say what this device's switch is. */
+function showSearchSwitch() {
+  const b = document.getElementById('search-toggle');
+  if (!b) return;
+  b.classList.toggle('active', searchEnabled);
+  b.setAttribute('aria-pressed', searchEnabled ? 'true' : 'false');
+  b.title = searchEnabled
+    ? 'Web search is ON on this device: each message is searched online first. Click to turn it off.'
+    : 'Web search is off on this device. Click to search online before each message.';
+}
 
 function toggleSearch() {
   searchEnabled = !searchEnabled;
-  state.searchEnabled = searchEnabled;
-  saveState();
-  document.getElementById('search-toggle').classList.toggle('active', searchEnabled);
+  try { localStorage.setItem(SEARCH_SWITCH_KEY, searchEnabled ? 'on' : 'off'); } catch (_) {}
+  showSearchSwitch();
 }
 
 async function webSearch(query) {

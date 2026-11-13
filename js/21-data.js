@@ -560,7 +560,7 @@ function importData(fileInput, type) {
       // are present by the time this runs.
       const neutralized = neutralizeUntrustedCode(state);   // no typeof guard: fail closed
       state.macros         = Array.isArray(data.macros) ? data.macros : DEFAULT_MACROS.map(m => ({ ...m }));
-      state.searchEnabled  = data.searchEnabled  || false;
+      state.searchEnabled  = false;   // a backup's search switch is another device's (js/11-search.js)
       saveState();
       applyExtensions();
       render();

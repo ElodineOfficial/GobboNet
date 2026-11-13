@@ -55,8 +55,8 @@ window.GobboNet.ready = (async function boot() {
   if (window.innerWidth <= 700) {
     state.sidebarOpen = false;
   }
-  searchEnabled = state.searchEnabled || false;
-  document.getElementById('search-toggle').classList.toggle('active', searchEnabled);
+  // This device's 🔍 switch, never the server's (js/11-search.js).
+  if (typeof showSearchSwitch === 'function') showSearchSwitch();
   setupInput();
   applyExtensions(); // Apply any saved CSS/JS extensions
   // Load the active character's own code, if it has any and it is

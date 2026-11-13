@@ -71,12 +71,13 @@ class El {
   button(label) { return this.buttons().find(b => b.textContent === label); }
 }
 
-function world({ width = 1400, settings = {} } = {}) {
+function world({ width = 1400, settings = {}, prefs = null } = {}) {
   const els = {};
   for (const id of ['files-panel', 'files-body', 'files-title', 'files-back', 'files-close', 'files-toggle', 'files-count', 'files-resize', 'files-status', 'msg-input', 'messages'])
     els[id] = new El(id === 'msg-input' ? 'textarea' : 'div', id);
   els['files-panel'].hidden = true;
   const store = {};
+  if (prefs) store['gobbonet.filesPanel'] = JSON.stringify(prefs);   // saved on this device before the page loads
   const toasts = [];
   const ctx = {
     console: { log() {}, warn() {}, error: (...a) => console.error(...a) }, setTimeout: (f) => { f(); return 1; }, clearTimeout() {},
@@ -209,6 +210,55 @@ console.log('\n=== the panel ===');
   ok(els['files-title'].textContent === 'Files', 'back to the list');
 }
 
+console.log('\n=== the header button: there only when there is something to open ===');
+{
+  const EMPTY = () => ({ id: 't2', messages: [{ role: 'user', content: 'hi' }, { role: 'assistant', content: 'Hello. No files here.' }] });
+  const w = world();
+  const { ctx, els } = w;
+  const btn = els['files-toggle'];
+  ok(btn.hidden === true, 'hidden when the page starts, before any chat');
+  ctx.setThread(null); ctx.filesPanelSync();
+  ok(btn.hidden === true && els['files-count'].textContent === '', 'hidden on the home screen');
+  ctx.setThread(EMPTY()); ctx.filesPanelSync();
+  ok(btn.hidden === true, 'hidden in a chat with no files');
+  ctx.setThread(THREAD()); ctx.filesPanelSync();
+  ok(btn.hidden === false && els['files-count'].textContent === '5', 'shown, with its count, in a chat with files');
+  ctx.setThread(null); ctx.filesPanelSync();
+  ok(btn.hidden === true, 'hidden again going home with the panel closed');
+  ctx.setThread(THREAD()); ctx.filesPanelSync();
+  ctx.toggleFilesPanel(true);
+  ctx.setThread(EMPTY()); ctx.filesPanelSync();
+  ok(btn.hidden === false && els['files-panel'].hidden === false, 'panel open: kept in a chat with no files, so it can be closed where it was opened');
+  ctx.setThread(null); ctx.filesPanelSync();
+  ok(btn.hidden === false, 'and on the home screen while the panel is open');
+  ctx.setThread(EMPTY()); ctx.filesPanelSync();
+  let focused = null;
+  btn.focus = () => { focused = 'button'; };
+  els['msg-input'].focus = () => { focused = 'msg-input'; };
+  els['files-panel'].dispatch('keydown', { key: 'Escape', stopPropagation() {} });
+  ok(els['files-panel'].hidden === true && btn.hidden === true, 'closing the panel there hides it');
+  ok(focused === 'msg-input', 'Escape puts focus in the message box, not on a button that just went away', focused);
+  ctx.setThread(THREAD()); ctx.filesPanelSync();
+  ctx.toggleFilesPanel(true);
+  focused = null;
+  els['files-panel'].dispatch('keydown', { key: 'Escape', stopPropagation() {} });
+  ok(btn.hidden === false && focused === 'button', 'in a chat with files, closing keeps it and Escape returns to it', focused);
+  // A reply that writes the chat's first file: the next render shows the button.
+  const t = EMPTY();
+  ctx.setThread(t); ctx.filesPanelSync();
+  ok(btn.hidden === true, 'before the reply: hidden');
+  t.messages.push({ role: 'user', content: 'Write it down.' }, { role: 'assistant', content: fence('file:plan.md', '# Plan') });
+  ctx.filesPanelSync();
+  ok(btn.hidden === false && els['files-count'].textContent === '1', 'the first file appears: shown, counting 1');
+  // A panel remembered open on this device reopens at load, and brings its button.
+  const reopened = world({ prefs: { open: true } });
+  ok(reopened.els['files-panel'].hidden === false && reopened.els['files-toggle'].hidden === false,
+     'remembered open on a wide screen: the panel reopens at load, with its button');
+  const narrow = world({ width: 600, prefs: { open: true } });
+  ok(narrow.els['files-panel'].hidden === true && narrow.els['files-toggle'].hidden === true,
+     'on a narrow screen it does not reopen, so no button until a chat has a file');
+}
+
 console.log('\n=== HTML: scripts off until asked, and a page that leaves is stopped ===');
 {
   const w = world();
@@ -326,6 +376,8 @@ console.log('\n=== the page ===');
 {
   ok(/<aside id="files-panel" class="files-panel" aria-label="Files in this chat" hidden>/.test(HTML) && /id="files-resize" role="separator"/.test(HTML), 'the panel, hidden until opened, with a resize edge');
   ok(/id="files-toggle"[^>]*aria-controls="files-panel"/.test(HTML), 'a header button opens it');
+  ok(/<button class="files-toggle" id="files-toggle"[^>]* hidden>/.test(HTML) && /\.files-toggle\[hidden\] \{ display: none; \}/.test(CSS),
+     'the button starts hidden, and stays hidden whatever the header\'s layout does');
   ok(HTML.indexOf('id="files-panel"') > HTML.indexOf('</main>') && HTML.indexOf('id="files-panel"') < HTML.indexOf('<!-- SETTINGS MODAL'), 'beside the chat, inside the app');
   ok(/<script src="js\/26-mcp\.js"><\/script>\n<script src="js\/27-files-panel\.js"><\/script>/.test(HTML) && /href="css\/20-files-panel\.css"/.test(HTML), 'its script and stylesheet load');
   ok(/@media \(max-width: 900px\)[\s\S]*#files-panel \{\s*position: fixed;\s*inset: 0;/.test(CSS), 'on a narrow screen it covers the chat instead');
