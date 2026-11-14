@@ -45,7 +45,7 @@
     <div class="sidebar-header">
       <div class="sidebar-header-row">
         <h1>GOBBONET</h1>
-        <button class="sidebar-close-btn" onclick="toggleSidebar()" title="Close sidebar">&times;</button>
+        <button class="sidebar-close-btn" onclick="toggleSidebar()" title="Close sidebar" aria-label="Close sidebar">&times;</button>
       </div>
       <!-- + NEW_THREAD was one button until 1.8.0. It is two now: a chat with
            the active character, and a chat with a group of characters
@@ -58,7 +58,7 @@
       <div class="thread-search-wrap">
         <span class="thread-search-icon">&#128269;</span>
         <input type="text" id="thread-search" class="thread-search-input" placeholder="Search or #tag..." oninput="filterThreads()" autocomplete="off" spellcheck="false">
-        <button class="thread-search-clear" id="thread-search-clear" onclick="clearThreadSearch()" title="Clear search" style="display:none;">&times;</button>
+        <button class="thread-search-clear" id="thread-search-clear" onclick="clearThreadSearch()" title="Clear search" aria-label="Clear search" style="display:none;">&times;</button>
       </div>
     </div>
     <div class="thread-list" id="thread-list"></div>
@@ -82,11 +82,11 @@
   <!-- CHAT AREA -->
   <main id="chat">
     <div class="chat-header">
-      <button class="toggle-sidebar" onclick="toggleSidebar()" title="Toggle sidebar">&#9776;</button>
-      <button class="home-btn" onclick="goHome()" title="Go to dashboard" id="home-btn" data-tour="home">&#8962;</button>
+      <button class="toggle-sidebar" onclick="toggleSidebar()" title="Toggle sidebar" aria-label="Toggle sidebar">&#9776;</button>
+      <button class="home-btn" onclick="goHome()" title="Go to dashboard" aria-label="Go to dashboard" id="home-btn" data-tour="home">&#8962;</button>
       <div class="header-model-wrap" id="header-model-wrap" data-tour="model" title="Active model — pick another to hot-swap (no restart needed)">
-        <span class="header-model-label">MODEL</span>
-        <select id="header-model-select" onchange="onHeaderModelChange(this)">
+        <span class="header-model-label" id="header-model-label">MODEL</span>
+        <select id="header-model-select" aria-labelledby="header-model-label" onchange="onHeaderModelChange(this)">
           <option value="">— detecting —</option>
         </select>
       </div>
@@ -96,7 +96,7 @@
             onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openLoreInspector();}"></span>
       <!-- The Files panel (1.8.0, js/27-files-panel.js): this chat's files.
            Hidden until the chat on screen has a file, or the panel is open. -->
-      <button class="files-toggle" id="files-toggle" type="button" title="Files in this chat" aria-controls="files-panel" aria-expanded="false" hidden>&#128196;<span class="files-count" id="files-count"></span></button>
+      <button class="files-toggle" id="files-toggle" type="button" title="Files in this chat" aria-label="Files in this chat" aria-controls="files-panel" aria-expanded="false" hidden>&#128196;<span class="files-count" id="files-count"></span></button>
       <span class="status-label" id="status-label">Checking...</span>
       <span class="status-dot" id="status-dot"></span>
       <span class="privacy-badge" id="privacy-badge" title="llama.cpp — fully offline, zero telemetry">&#128274;</span>
@@ -142,9 +142,9 @@
     <div class="attach-tray" id="attach-tray" style="display:none;"></div>
     <div class="input-area" data-tour="message">
       <input type="file" id="attach-input" multiple style="display:none" onchange="onAttachInput(this)">
-      <button class="attach-btn" id="attach-btn" onclick="document.getElementById('attach-input').click()" title="Attach files (or drag & drop onto the chat)">&#128206;</button>
+      <button class="attach-btn" id="attach-btn" onclick="document.getElementById('attach-input').click()" title="Attach files (or drag & drop onto the chat)" aria-label="Attach files">&#128206;</button>
       <textarea id="msg-input" placeholder="Type your message... (Enter to send, Shift+Enter for newline)" rows="1"></textarea>
-      <button class="search-toggle" id="search-toggle" onclick="toggleSearch()" title="Web search is off on this device. Click to search online before each message." aria-pressed="false">&#128269;</button>
+      <button class="search-toggle" aria-label="Web search" id="search-toggle" onclick="toggleSearch()" title="Web search is off on this device. Click to search online before each message." aria-pressed="false">&#128269;</button>
       <button class="btn btn-fill" id="send-btn" onclick="sendMessage()">Send</button>
       <button class="btn" id="stop-btn" onclick="stopGeneration()" style="display:none;">Stop</button>
     </div>
@@ -294,12 +294,12 @@
       <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
         <div style="display:flex;align-items:center;gap:8px;">
           <span style="font-size:12px;color:rgba(255,255,255,0.5);">Wait between posts:</span>
-          <input type="number" id="set-auto-continue-delay" min="0" step="1" value="20" style="width:62px;text-align:center;font-size:13px;">
+          <input type="number" id="set-auto-continue-delay" min="0" step="1" value="20" style="width:62px;text-align:center;font-size:13px;" aria-label="Wait between posts, seconds">
           <span style="font-size:12px;color:rgba(255,255,255,0.5);">s</span>
         </div>
         <div style="display:flex;align-items:center;gap:8px;">
           <span style="font-size:12px;color:rgba(255,255,255,0.5);">Most posts per chain:</span>
-          <input type="number" id="set-auto-continue-max" min="1" step="1" value="50" style="width:62px;text-align:center;font-size:13px;">
+          <input type="number" id="set-auto-continue-max" min="1" step="1" value="50" style="width:62px;text-align:center;font-size:13px;" aria-label="Most posts per chain">
         </div>
       </div>
     </div>
@@ -339,21 +339,21 @@
       <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
         <div style="display:flex;align-items:center;gap:8px;">
           <span style="font-size:12px;color:rgba(255,255,255,0.5);">Rounds per reply:</span>
-          <input type="number" id="set-tool-max-rounds" min="1" max="20" step="1" value="4" style="width:62px;text-align:center;font-size:13px;">
+          <input type="number" id="set-tool-max-rounds" min="1" max="20" step="1" value="4" style="width:62px;text-align:center;font-size:13px;" aria-label="Rounds per reply">
         </div>
         <div style="display:flex;align-items:center;gap:8px;">
           <span style="font-size:12px;color:rgba(255,255,255,0.5);">Time per call:</span>
-          <input type="number" id="set-tool-timeout" min="1" max="3600" step="1" value="30" style="width:62px;text-align:center;font-size:13px;">
+          <input type="number" id="set-tool-timeout" min="1" max="3600" step="1" value="30" style="width:62px;text-align:center;font-size:13px;" aria-label="Time per call, seconds">
           <span style="font-size:12px;color:rgba(255,255,255,0.5);">s</span>
         </div>
         <div style="display:flex;align-items:center;gap:8px;">
           <span style="font-size:12px;color:rgba(255,255,255,0.5);">Result size:</span>
-          <input type="number" id="set-tool-result-max" min="500" max="100000" step="500" value="8000" style="width:78px;text-align:center;font-size:13px;">
+          <input type="number" id="set-tool-result-max" min="500" max="100000" step="500" value="8000" style="width:78px;text-align:center;font-size:13px;" aria-label="Result size, characters">
           <span style="font-size:12px;color:rgba(255,255,255,0.5);">chars</span>
         </div>
         <div style="display:flex;align-items:center;gap:8px;">
           <span style="font-size:12px;color:rgba(255,255,255,0.5);">Arguments:</span>
-          <input type="number" id="set-tool-args-max" min="1" max="1024" step="1" value="64" style="width:62px;text-align:center;font-size:13px;">
+          <input type="number" id="set-tool-args-max" min="1" max="1024" step="1" value="64" style="width:62px;text-align:center;font-size:13px;" aria-label="Arguments, KB">
           <span style="font-size:12px;color:rgba(255,255,255,0.5);">KB</span>
         </div>
       </div>
@@ -527,7 +527,7 @@
       <div class="form-hint" style="margin-top:2px;margin-bottom:10px;">Unloads the model after this many idle minutes to free VRAM (0 keeps it loaded).<button type="button" class="tip-btn" aria-label="More about Idle Stand-Down" aria-describedby="tip-standdown" aria-expanded="false">?</button></div>
       <div class="tip-body" id="tip-standdown" hidden>llama.cpp holds the whole model in VRAM for as long as it runs, whether or not anyone is talking to it. Leaving GobboNet open therefore pins several gigabytes against nothing. After this many minutes with no messages the model is unloaded, and the next message reloads it &mdash; that reload takes as long as starting up does, so a shorter timeout trades waiting for memory. Set it to 0 to keep the model loaded always.</div>
       <div class="standdown-row" id="standdown-row">
-        <input type="number" id="set-standdown-minutes" min="0" max="1440" step="1">
+        <input type="number" id="set-standdown-minutes" min="0" max="1440" step="1" aria-label="Minutes idle before unloading">
         <span>minutes idle before unloading</span>
         <button class="btn btn-sm" id="standdown-apply" onclick="applyStandDown()">APPLY</button>
       </div>
@@ -545,7 +545,7 @@
         </label>
         <div id="cot-timeout-timer-wrap" style="display:flex;align-items:center;gap:8px;opacity:0.35;pointer-events:none;transition:opacity 0.15s;">
           <span style="font-size:12px;color:rgba(255,255,255,0.5);">Max runtime:</span>
-          <input type="number" id="set-cot-timeout-minutes" min="1" max="60" step="1" value="2" style="width:62px;text-align:center;font-size:13px;">
+          <input type="number" id="set-cot-timeout-minutes" min="1" max="60" step="1" value="2" style="width:62px;text-align:center;font-size:13px;" aria-label="Max runtime, minutes">
           <span style="font-size:12px;color:rgba(255,255,255,0.5);">min</span>
         </div>
       </div>
@@ -629,7 +629,7 @@
       <div class="tip-body" id="tip-lore-timeout" hidden>When a chat outgrows the model's context, the oldest messages are summarised into the lore log before your message is sent. If that takes longer than this, it is cancelled so your message can go through &mdash; and those oldest messages leave the context without a summary. Slow or CPU-only computers may need longer.</div>
       <div style="display:flex;align-items:center;gap:8px;">
         <span style="font-size:12px;color:rgba(255,255,255,0.5);">Give up after:</span>
-        <input type="number" id="set-lore-timeout" min="5" step="5" value="45" style="width:62px;text-align:center;font-size:13px;">
+        <input type="number" id="set-lore-timeout" min="5" step="5" value="45" style="width:62px;text-align:center;font-size:13px;" aria-label="Lore Compression time limit, seconds">
         <span style="font-size:12px;color:rgba(255,255,255,0.5);">s</span>
       </div>
     </div>

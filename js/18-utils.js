@@ -2211,7 +2211,7 @@ function renderAttachTray() {
       <span class="attach-chip-icon">${icon}</span>
       <span class="attach-chip-name">${escapeHtml(a.name)}</span>
       <span class="attach-chip-meta">${escapeHtml(meta)}</span>
-      <button class="attach-chip-x" onclick="removeAttachment('${escapeJsAttr(a.id)}')" title="Remove">×</button>
+      <button class="attach-chip-x" onclick="removeAttachment('${escapeJsAttr(a.id)}')" title="Remove" aria-label="Remove">×</button>
     </span>`;
   }).join('');
 }

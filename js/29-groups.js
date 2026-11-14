@@ -1366,6 +1366,8 @@ function _groupActionBtn(label, title, cls, fn) {
   b.className = 'msg-action-btn' + (cls ? ' ' + cls : '');
   b.textContent = label;
   if (title) b.title = title;
+  // A symbol for a label ('×') is read aloud as "times": the title is the name.
+  if (title && !/[A-Za-z0-9]/.test(label)) b.setAttribute('aria-label', title);
   b.addEventListener('click', (e) => { e.stopPropagation(); fn(b); });
   return b;
 }
