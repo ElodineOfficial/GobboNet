@@ -31,7 +31,7 @@ Unicode true
 !endif
 
 !define APPNAME     "GobboNet"
-!define APPVER      "1.8.0"
+!define APPVER      "1.8.1"
 ; What the main shortcuts and the finish page start: `gobbonet.exe launch`
 ; (1.7.6 hotfix, patch 3). It serves straight away with the settings already
 ; saved, and runs launch.bat's first-run setup only when there are none yet
@@ -48,7 +48,7 @@ Unicode true
 !define REGKEY      "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}"
 
 Name              "${APPNAME}"
-OutFile           "GobboNetSetup-1_8_0.exe"
+OutFile           "GobboNetSetup-1_8_1.exe"
 InstallDir        "$LOCALAPPDATA\${APPNAME}"
 InstallDirRegKey  HKCU "Software\${APPNAME}" "InstallDir"
 RequestExecutionLevel user
@@ -56,7 +56,7 @@ SetCompressor /SOLID lzma
 ShowInstDetails   show
 ShowUninstDetails show
 
-VIProductVersion "1.8.0.0"
+VIProductVersion "1.8.1.0"
 VIAddVersionKey  "ProductName"     "${APPNAME}"
 VIAddVersionKey  "FileDescription" "${APPNAME} Installer"
 VIAddVersionKey  "FileVersion"     "${APPVER}.0"

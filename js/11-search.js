@@ -6,7 +6,7 @@
 /* ================================================================
    WEB SEARCH
 
-   THE SWITCH BELONGS TO THIS DEVICE (1.8.0). The 🔍 switch used to be
+   THE SWITCH BELONGS TO THIS DEVICE (1.8.1). The 🔍 switch used to be
    stored in /state with everything else, so switching it on at the PC
    switched it on for every phone and browser that opened GobboNet
    afterwards, and their messages went to the web with nobody there having

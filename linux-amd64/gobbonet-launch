@@ -27,6 +27,35 @@ PREFIX="$(dirname "$(readlink -f "$0")")"
 BIN="$PREFIX/gobbonet"
 # Upstream shared libraries also depend on sibling libraries.
 export LD_LIBRARY_PATH="$PREFIX/llama-cpp:$PREFIX/llama-cpp-cpu${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+# OpenSSL 3, for the engine on a system without it (1.8.1). llama.cpp's
+# libraries need libssl.so.3 and libcrypto.so.3. Fedora 45 and later ship
+# OpenSSL 4 and keep 3 as a separate package, openssl3-libs, which the .rpm
+# depends on but nothing installs for the AppImage or the ZIP: there the engine
+# did not load at all, and pick_engine blamed the GPU build. Those two carry
+# OpenSSL 3 in openssl3/ (scripts/fetch-openssl3.sh, pinned in engine.sha256);
+# the .deb and .rpm do not, so for them this does nothing. It goes on the
+# library path only when the dynamic loader cannot find the system's own --
+# asked with the loader's own trace mode, which is what ldd does and loads
+# nothing -- so the system's copy, kept current by its package manager, always
+# wins. Before the commands below, so `gobbonet doctor` and the rest see the
+# engine as the server will.
+OPENSSL3=system
+if [ -d "$PREFIX/openssl3" ]; then
+    case ":$LD_LIBRARY_PATH:" in
+        # Already decided: this launcher started again by itself (`setup`).
+        *":$PREFIX/openssl3:"*) OPENSSL3=bundled ;;
+        *)
+            for probe in "$PREFIX/llama-cpp/llama-server" "$PREFIX/llama-cpp-cpu/llama-server"; do
+                [ -x "$probe" ] || continue
+                if LD_TRACE_LOADED_OBJECTS=1 "$probe" 2>/dev/null \
+                        | grep -qE '^[[:space:]]*lib(ssl|crypto)\.so\.3 => not found'; then
+                    export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:$PREFIX/openssl3"
+                    OPENSSL3=bundled
+                fi
+                break
+            done ;;
+    esac
+fi
 # Explicit server/administration commands keep their normal CLI behavior.
 case "${1:-}" in
     ""|--no-browser) ;;
@@ -120,6 +149,8 @@ note_engine() {
     {
         printf 'build=%s\n' "$1"
         printf 'reason=%s\n' "$(printf '%s' "$2" | tr -d '\r\n' | cut -c1-300)"
+        # system, or bundled: GobboNet's own OpenSSL 3 (see the top of this file).
+        printf 'openssl=%s\n' "$OPENSSL3"
     } > "$DATA_DIR/engine-choice" 2>/dev/null || true
 }
 pick_engine() {
@@ -146,6 +177,7 @@ pick_engine() {
 }
 ENGINE="$(pick_engine)"
 echo "engine: ${ENGINE:-<none bundled>}"
+[ "$OPENSSL3" = bundled ] && echo "openssl: this system has no OpenSSL 3, so the engine uses GobboNet's own ($PREFIX/openssl3)"
 
 # ---------------------------------------------------------------------------
 # First run. setup is idempotent and returns immediately once complete, so it

@@ -4,7 +4,7 @@ GobboNet is a private, offline chat app for local GGUF models. One Go binary,
 `gobbonet`, serves the chat page, proxies to llama.cpp and supervises it. The
 Windows and Linux launchers and installers around it handle first-run setup.
 
-This file describes the tree as of 1.8.0. Where it and the code disagree, the
+This file describes the tree as of 1.8.1. Where it and the code disagree, the
 code is right, and this file should be fixed in the same change. It names files
 and functions rather than line numbers, because line numbers go stale.
 
@@ -15,7 +15,10 @@ and functions rather than line numbers, because line numbers go stale.
 - **Privacy first.** No telemetry, analytics, crash reporting or update checks.
   Nothing leaves the machine unless the user asked for it: engine and model
   downloads happen when the user picks them, and web search only when it is
-  switched on. Every download is pinned by SHA-256. See [CONTRIBUTING.md](CONTRIBUTING.md).
+  switched on -- on that device: the 🔍 switch, like the search key, is the
+  browser's own (`localStorage`, `js/11-search.js`) and never rides in
+  `/state`, so a switch flipped at the PC cannot send a phone's messages to
+  the web (1.8.0). Every download is pinned by SHA-256. See [CONTRIBUTING.md](CONTRIBUTING.md).
 - **Never edit `internal/webui/assets/`.** `scripts/stage-web.sh` copies `chat.html`,
   `js/`, `css/`, `manifest.webmanifest` and `icons/` there, and `go:embed` compiles them into the binary. Edit the
   originals and re-run `scripts/stage-web.sh`.
@@ -57,7 +60,7 @@ and functions rather than line numbers, because line numbers go stale.
 | `installer-linux/` | The `.deb`, the Linux launcher `gobbonet-launch`, and its first-run wizard (`gobbonet-setup.py` + `wizard.html`). |
 | `installer-fedora/` | The `.rpm`. Install with `sudo dnf install`. |
 | `linux-amd64/` | The ZIP's Linux runtime: launcher, wizard copy and, once built, the binary and engine. |
-| `engine.sha256` | The pinned llama.cpp build and its hashes, read by every builder. |
+| `engine.sha256` | The pinned llama.cpp build and its hashes, read by every builder; since 1.8.1 also the OpenSSL 3 the AppImage and ZIP carry for systems without it (`scripts/fetch-openssl3.sh`, `openssl3/`). |
 | `scripts/` | Build and packaging: `stage-web.sh`, `make-zip.sh`, `build-release.sh`, `verify-payload.sh`, `payload.manifest`, `make-update-manifest.sh` (the signed update file the update button installs from; [docs/UPDATES.md](docs/UPDATES.md)), and `PATCH-README.txt`, the release notes `make-zip.sh` puts at the archive's root. Each runs from the repo root whatever directory you call it from. See [docs/BUILDING.md](docs/BUILDING.md). |
 | `tests/` | Node and Python suites. See [tests/README.md](tests/README.md). |
 | `docs/` | `GO_SERVER.md`, `BUILDING.md`, `state-integration.md`, `INDEX.md`, `changelog/`, investigations and roadmaps. |
@@ -208,6 +211,9 @@ and functions rather than line numbers, because line numbers go stale.
   `LORE_DEFAULT_PROMPT`, or the card's own (`loreCustomPrompt`, `lorePrompt`,
   the editor's "Edit the lore summary prompt" box). Keep the default free of
   names and stories: small models copy examples, and lore is fed back as fact.
+  An entry of three words or fewer is culled and written again, warmer, up to
+  `LORE_SHORT_REROLLS` more times, then the pass fails rather than store it
+  (`loreEntryWords`, which counts each character of scripts without spaces).
   The prompt itself is assembled in `buildContextMessages` (`js/08-rag.js`).
   llama-server reuses the last prompt up to its first difference, so anything
   that changes every message belongs near the end. The retrieved snippets go
@@ -236,7 +242,10 @@ and functions rather than line numbers, because line numbers go stale.
   new version. HTML and SVG preview in an iframe sandboxed without
   allow-same-origin, under a CSP put first in the document that loads
   nothing from anywhere; scripts start off. EDIT attaches the user's version
-  to the next message, which then counts as a version.
+  to the next message, which then counts as a version. The header button
+  (`#files-toggle`) shows only while the chat on screen has a file or the
+  panel is open (`_filesShowToggle()`, called from `filesPanelSync()` and
+  `toggleFilesPanel()`); `chat.html` starts it `hidden`.
 - **Group chats** (1.8.0, `js/29-groups.js`): a group is a record in
   `state.groups` (`normalizeGroup()` in `js/04-state.js`: every group from
   saved state, sync or an import goes through it) and a chat started from
@@ -331,7 +340,12 @@ bash ./scripts/stage-web.sh && go test ./...                            # Go 1.2
 - **Go:** 1.25 or newer, no cgo. Run `scripts/stage-web.sh` before `go build`, or the
   binary has no chat page.
 - **ZIP:** `bash ./scripts/make-zip.sh` builds both servers and refuses to produce an
-  archive with a platform missing or a stale version stamp.
+  archive with a platform missing or a stale version stamp. It needs the pinned
+  OpenSSL 3 in `linux-amd64/openssl3` first (`bash ./scripts/fetch-openssl3.sh
+  linux-amd64/openssl3`), for the update archive too. `gobbonet-launch` puts that
+  folder on the library path only when the system's loader cannot find OpenSSL 3
+  (Fedora 45 and later), and writes `openssl=` into `engine-choice`
+  (`tests/test-openssl3.py`). The `.deb` and `.rpm` never carry it.
 - **Installers:** `installer-win/` (NSIS), `installer-linux/build-deb.sh`,
   `installer-fedora/build-rpm.sh`. All of them read `engine.sha256`.
   `installer-linux/build-appimage.sh` makes the AppImage from the `.deb`, so it

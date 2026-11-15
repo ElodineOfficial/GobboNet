@@ -45,6 +45,13 @@ Run `stop-gobbonet.bat` from the install folder, then start again — no reboot
 needed. It stops GobboNet's own processes and nothing else. Or end the holder
 in Task Manager: `gobbonet doctor` shows whether the port is in use.
 
+On Linux, setup's port step says `Port 9066 is already in use, by a GobboNet
+that is still running or by another program.` `pkill -x gobbonet` stops a
+GobboNet left running; `gobbonet doctor` shows whether the port is in use. Up
+to 1.8.0 setup also said this, as `[Errno 98] Address already in use`, for
+about a minute after GobboNet was closed, when the port was free; that was
+setup's check, not the port, and waiting a minute cleared it.
+
 **The port file could not be read.** `.gobbonet-port` must contain a single
 number. Earlier builds fell back to 9066 silently if it contained anything
 else, so a port chosen during setup could vanish with no explanation. The
@@ -166,6 +173,7 @@ window, so look in `~/.local/share/gobbonet/launch.log`.
 |---|---|
 | `port 9066 is already in use, so nothing was started` | Something holds the port, usually an earlier GobboNet — see the top of this page |
 | `port 9066 was refused on every address` | Not a busy port: a reserved range or policy — see below |
+| `libssl.so.3: cannot open shared object file` (Linux) | The engine needs OpenSSL 3, which Fedora 45 and later ship separately. From 1.8.1 the AppImage and ZIP bring their own; with an older one, or a hand-made install, `sudo dnf install openssl3-libs`. `gobbonet doctor` says which OpenSSL the engine uses |
 | `LAN ACCESS IS OFF` with `Network bind failed: ...` | Working, but this PC only — the network address was refused, so it fell back to this PC |
 | `access_secret ... is malformed`, or `no password is set` | Not a port problem at all — see *Password* below |
 

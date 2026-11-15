@@ -103,14 +103,19 @@ const SmallCardMiB = 3 * 1024
 
 // EngineChoice is what the Linux launcher wrote about the engine it picked
 // (installer-linux/gobbonet-launch, pick_engine): the GPU build, or the CPU
-// build and why. Windows has one build and no such file.
+// build and why, and since 1.8.1 whose OpenSSL 3 it loads. Windows has one
+// build and no such file.
 type EngineChoice struct {
 	Build  string // "gpu", "cpu" or "none"
 	Reason string // why the CPU build, in the launcher's words
+	// OpenSSL is "bundled" when this system has no OpenSSL 3 and the engine
+	// uses the AppImage's or ZIP's own copy (openssl3/), "system" when it
+	// uses the system's, and "" from a launcher older than 1.8.1.
+	OpenSSL string
 }
 
 // ParseEngineChoice reads the launcher's engine-choice file: key=value lines.
-// Only the two keys are taken, each cut to one line of 300 characters.
+// Only its three keys are taken, each cut to one line of 300 characters.
 func ParseEngineChoice(text string) EngineChoice {
 	var c EngineChoice
 	for _, line := range strings.Split(text, "\n") {
@@ -126,6 +131,10 @@ func ParseEngineChoice(text string) EngineChoice {
 			}
 		case "reason":
 			c.Reason = v
+		case "openssl":
+			if v == "system" || v == "bundled" {
+				c.OpenSSL = v
+			}
 		}
 	}
 	return c

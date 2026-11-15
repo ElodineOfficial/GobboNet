@@ -13,7 +13,9 @@
 # of a folder, the AppDir. Running it mounts the image and starts AppDir/AppRun.
 # The AppDir here is the .deb's own files, unpacked, so the AppImage carries
 # byte for byte what the package installs into /usr/lib/gobbonet -- the same
-# binary, engine, launcher and catalogue -- and nothing the package does not.
+# binary, engine, launcher and catalogue -- and one thing more: OpenSSL 3 in
+# openssl3/ (1.8.1), for a system without it, which the .deb gets from its
+# Depends and an AppImage cannot. See "OpenSSL 3" below.
 #
 # The approach is Deven-Eve's from issue #53: an AppImage made from the
 # official .deb, tested on CachyOS with KDE Plasma. Two things differ:
@@ -173,6 +175,24 @@ fi
 # The Debian control scripts did not come along (dpkg-deb -x leaves them out,
 # and so does the ar route), but say so rather than assume it.
 [ ! -e "$APPDIR/DEBIAN" ] || fail "DEBIAN/ found in the AppDir"
+
+# ---------------------------------------------------------------------------
+# OpenSSL 3 (1.8.1). The engine needs libssl.so.3 and libcrypto.so.3. The .deb
+# depends on libssl3 and the .rpm on openssl3-libs, but an AppImage installs
+# nothing, and Fedora 45 and later ship OpenSSL 4 with 3 as an extra package:
+# there the 1.8.0 AppImage's engine did not load. The pinned libraries go in
+# openssl3/ after the payload check above, which holds the AppDir to the .deb's
+# list. gobbonet-launch puts them on the library path only when the system's
+# loader cannot find its own, so wherever the system has OpenSSL 3 (every
+# Debian, Ubuntu, Arch, openSUSE and Fedora up to 44) it keeps using that.
+# ---------------------------------------------------------------------------
+bash "$ROOT/scripts/fetch-openssl3.sh" "$LIB/openssl3" "$VENDOR" \
+    || fail "could not put the pinned OpenSSL 3 in the AppDir (above)"
+[ -f "$LIB/openssl3/libssl.so.3" ] && [ -f "$LIB/openssl3/libcrypto.so.3" ] && [ -f "$LIB/openssl3/LICENSE.txt" ] \
+    || fail "openssl3/ in the AppDir is incomplete"
+grep -q 'LD_TRACE_LOADED_OBJECTS=1' "$LIB/gobbonet-launch" \
+    || fail "the .deb's gobbonet-launch is older than 1.8.1's OpenSSL fallback, so openssl3/ would never be used"
+say "OpenSSL 3 for systems without it: openssl3/ -- ok"
 
 # ---------------------------------------------------------------------------
 # Fetch and verify the runtime.

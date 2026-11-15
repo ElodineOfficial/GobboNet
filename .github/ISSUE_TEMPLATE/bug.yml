@@ -17,7 +17,7 @@ body:
     attributes:
       label: GobboNet version
       description: Shown in ABOUT in the app.
-      placeholder: "1.8.0"
+      placeholder: "1.8.1"
     validations:
       required: true
 

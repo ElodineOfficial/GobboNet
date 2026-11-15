@@ -42,6 +42,7 @@ type gpuView struct {
 	Linux        bool            `json:"linux"`
 	Build        string          `json:"engine_build,omitempty"`
 	BuildReason  string          `json:"engine_build_reason,omitempty"`
+	OpenSSL      string          `json:"engine_openssl,omitempty"` // "system" or "bundled" (1.8.1)
 	SmallCardMiB int             `json:"small_card_mib"`
 }
 
@@ -74,7 +75,7 @@ func (s *Server) gpuNow() gpuView {
 	if v.Linux {
 		if raw, err := os.ReadFile(config.EngineChoicePath()); err == nil {
 			c := engine.ParseEngineChoice(string(raw))
-			v.Build, v.BuildReason = c.Build, c.Reason
+			v.Build, v.BuildReason, v.OpenSSL = c.Build, c.Reason, c.OpenSSL
 		}
 	}
 	return v

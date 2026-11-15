@@ -1007,7 +1007,7 @@
           <div style="margin-top:6px;"><button type="button" class="btn btn-sm" onclick="resetLorePrompt()" title="Put the built-in prompt back in the box">RESET TO DEFAULT</button></div>
         </div>
         <div class="form-hint">What the model is told when it writes older messages into the lore.<button type="button" class="tip-btn" aria-label="More about the lore summary prompt" aria-describedby="tip-lore-prompt" aria-expanded="false">?</button></div>
-        <div class="tip-body" id="tip-lore-prompt" hidden>What the model is told when Lore System writes older messages down as one-line entries. Unticked, the built-in prompt is used: short, and it names no one. Whatever you write, each reply is kept to two sentences and added as one line, and a reply of exactly <code>SKIP</code> adds nothing. <code>{{char}}</code> and <code>{{user}}</code> work here. Avoid example names: small models copy them into the lore.</div>
+        <div class="tip-body" id="tip-lore-prompt" hidden>What the model is told when Lore System writes older messages down as one-line entries. Unticked, the built-in prompt is used: short, and it names no one. Whatever you write, each reply is kept to two sentences and added as one line, a reply of three words or fewer is thrown away and written again (twice at most, then nothing is added), and a reply of exactly <code>SKIP</code> adds nothing. <code>{{char}}</code> and <code>{{user}}</code> work here. Avoid example names: small models copy them into the lore.</div>
       </div>
 
       <div class="form-group">

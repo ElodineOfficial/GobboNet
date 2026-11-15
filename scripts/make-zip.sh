@@ -150,6 +150,10 @@ linux-amd64/gobbonet-launch
 linux-amd64/gobbonet-setup.py
 linux-amd64/wizard.html
 linux-amd64/models.ini
+linux-amd64/openssl3/libssl.so.3
+linux-amd64/openssl3/libcrypto.so.3
+linux-amd64/openssl3/LICENSE.txt
+linux-amd64/openssl3/SOURCE.txt
 internal/webui/assets/chat.html
 catalog/models.ini
 scripts/
@@ -183,6 +187,27 @@ if [ "$WITH_ENGINE" -eq 1 ]; then
         exit 1
     fi
 fi
+
+# OpenSSL 3 for the engine on a system without it (1.8.1): Fedora 45 and later
+# ship OpenSSL 4, and a ZIP cannot install openssl3-libs. gobbonet-launch uses
+# linux-amd64/openssl3 only when the system's dynamic loader cannot find its
+# own. In both archives, the update one too: a ZIP install updated from it has
+# no other way to get the libraries. Exactly the pinned files, or no archive.
+ossl="linux-amd64/openssl3"
+pin_of() { sed -n "s/^$1=//p" engine.sha256 | head -1; }
+for lib in libssl.so.3:LIBSSL3_SHA256 libcrypto.so.3:LIBCRYPTO3_SHA256; do
+    f="$ossl/${lib%%:*}"; want="$(pin_of "${lib#*:}")"
+    [ -n "$want" ] || { echo "ERROR: engine.sha256 has no ${lib#*:}" >&2; exit 1; }
+    [ -f "$f" ] || { echo "ERROR: $f is missing. Fetch the pinned OpenSSL 3 first:" >&2
+                     echo "       bash ./scripts/fetch-openssl3.sh $ossl" >&2; exit 1; }
+    got="$(sha256sum "$f" | cut -d' ' -f1)"
+    [ "$got" = "$want" ] || { echo "ERROR: $f does not match ${lib#*:} in engine.sha256 (got $got)." >&2
+                              echo "       Fetch it again: bash ./scripts/fetch-openssl3.sh $ossl" >&2; exit 1; }
+done
+[ -f "$ossl/LICENSE.txt" ] && [ -f "$ossl/SOURCE.txt" ] || { echo "ERROR: $ossl has no LICENSE.txt or SOURCE.txt; run bash ./scripts/fetch-openssl3.sh $ossl" >&2; exit 1; }
+# Only these files: anything else there did not come from the pin.
+extra="$(cd "$ossl" && ls -A | grep -vxE 'libssl\.so\.3|libcrypto\.so\.3|LICENSE\.txt|COPYRIGHT|SOURCE\.txt' || true)"
+[ -z "$extra" ] || { echo "ERROR: $ossl holds files that are not the pinned OpenSSL 3: $extra" >&2; exit 1; }
 
 echo "building $VERSION with $($GO version)"
 
@@ -394,5 +419,6 @@ if [ "$WITH_ENGINE" -eq 0 ]; then
 else
     echo "  engine:   bundled (linux-amd64/llama-cpp)"
 fi
+echo "  openssl3: $(pin_of OPENSSL3_DEB), for systems without OpenSSL 3 (linux-amd64/openssl3)"
 echo
 echo "  Other platforms (linux/arm64, darwin) come from scripts/build-release.sh."

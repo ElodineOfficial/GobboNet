@@ -2,7 +2,7 @@
 
 Install the package with dnf:
 
-    sudo dnf install ./gobbonet-1.8.0-*.fedora.x86_64.rpm
+    sudo dnf install ./gobbonet-1.8.1-*.fedora.x86_64.rpm
 
 Then run `gobbonet` as yourself (not with sudo), or open GobboNet from the
 application menu. The first launch opens the setup wizard in your browser.

@@ -7,6 +7,12 @@ ENTRY=os.environ.get('GOBBONET_TEST_ENTRY', str(PREFIX/'gobbonet-launch'))
 http=urllib.request.build_opener(urllib.request.ProxyHandler({}))
 def freeport():
     with socket.socket() as s: s.bind(('127.0.0.1',0)); return s.getsockname()[1]
+def time_wait_port():
+    # What a GobboNet closed with a tab open leaves: its end of each connection
+    # in TIME_WAIT on its port for about a minute (tests/test-setup-port.py).
+    srv=socket.socket();srv.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1);srv.bind(('127.0.0.1',0));srv.listen();port=srv.getsockname()[1]
+    tab=socket.create_connection(('127.0.0.1',port));conn,_=srv.accept();srv.close();conn.close();time.sleep(.05);tab.close();time.sleep(.1)
+    return port
 def test(lan):
     with tempfile.TemporaryDirectory(dir=ROOT) as t:
         d=pathlib.Path(t); env=os.environ.copy();env.update(XDG_CONFIG_HOME=str(d/'config'),XDG_DATA_HOME=str(d/'data'),DISPLAY=':99')
@@ -30,6 +36,13 @@ def test(lan):
             post('api/location',{'path':str(d/'chosen folder')})
             post('api/password',{'password':'test-only-password','confirm':'test-only-password'})
             post('api/port',{'port':11437},400)
+            # Setup run again just after closing GobboNet: its port, still in
+            # TIME_WAIT, is one GobboNet can listen on, so it is accepted. A port
+            # something is listening on is refused, in words.
+            post('api/port',{'port':time_wait_port()})
+            with socket.socket() as taken:
+                taken.bind(('127.0.0.1',0));taken.listen()
+                body=post('api/port',{'port':taken.getsockname()[1]},400);assert 'already in use' in body['error'],body
             port=freeport();post('api/port',{'port':port})
             post('api/backend',{'mode':'local'})
             post('api/finish',{'lan':lan},400)
@@ -47,7 +60,7 @@ def test(lan):
             assert repeat.returncode==0
             assert browser.read_text().splitlines()[-1]==urls[-1]
             assert (d/'chosen folder/setup-complete.json').exists()
-            print('PASS: first run, location with spaces, password, port rejection/custom port, missing-model guard, remote switch, '+('LAN' if lan else 'local')+', auto-open, repeat launch',flush=True)
+            print('PASS: first run, location with spaces, password, port rejection/custom port, port just closed vs taken, missing-model guard, remote switch, '+('LAN' if lan else 'local')+', auto-open, repeat launch',flush=True)
         finally:
             # The launcher may already be gone -- that is usually WHY we are in
             # here. killpg on a group with nothing left in it raises

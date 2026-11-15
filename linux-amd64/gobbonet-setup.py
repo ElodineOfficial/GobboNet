@@ -2,7 +2,9 @@
 """Linux setup shell around the Go password and verified model-download APIs.
 The Go engine remains the owner of configuration, authentication and downloads.
 """
+import errno
 import hashlib
+import html
 import http.server
 import json
 import os
@@ -116,6 +118,26 @@ def writable(folder, what):
         raise ValueError(f'GobboNet cannot write to the {what} folder {folder}: {e.strerror or e}. '
                          'Choose a folder you own.')
 
+def port_free(port):
+    """Raise ValueError unless GobboNet could listen on port right now.
+
+    It binds the way gobbonet serve does: Go sets SO_REUSEADDR on every
+    listener on Linux, so this asks the question the server will. Without it,
+    the connections a closed GobboNet leaves in TIME_WAIT -- one for each
+    request a browser tab had open -- made the port look taken for about a
+    minute after closing, when the server could have used it at once (1.7.9
+    and 1.8.0). A program still listening on the port is refused either way.
+    """
+    with socket.socket() as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.bind(('0.0.0.0', port))
+        except OSError as e:
+            if e.errno == errno.EADDRINUSE:
+                raise ValueError(f'Port {port} is already in use, by a GobboNet that is still running '
+                                 'or by another program. Stop it, or choose another port.') from None
+            raise
+
 def start():
     global child, upstream
     if child is not None:
@@ -172,16 +194,58 @@ def nomic():
         part.unlink(missing_ok=True)
         extra = dict(state='error', message=str(e))
 
+def appimage_file():
+    """The AppImage file this setup runs from, or '' when it is not one. The
+    runtime gives APPIMAGE and APPDIR to everything it starts; PREFIX has to
+    be inside APPDIR for them to be about GobboNet."""
+    image, appdir = os.environ.get('APPIMAGE', ''), os.environ.get('APPDIR', '')
+    if image and appdir and Path(appdir).resolve() in PREFIX.parents:
+        return image
+    return ''
+
 def login_program():
     """What the login entry starts: this launcher -- or from an AppImage, the
     AppImage file. PREFIX is then inside the image's temporary mount, which is
     gone once GobboNet closes, so an entry naming it did nothing at the next
-    login (1.7.8 to 1.8.0). The runtime gives APPIMAGE and APPDIR to everything
-    it starts; PREFIX has to be inside APPDIR for them to be about GobboNet."""
-    image, appdir = os.environ.get('APPIMAGE', ''), os.environ.get('APPDIR', '')
-    if image and appdir and Path(appdir).resolve() in PREFIX.parents:
-        return image
-    return str(PREFIX / 'gobbonet-launch')
+    login (1.7.8 to 1.8.0)."""
+    return appimage_file() or str(PREFIX / 'gobbonet-launch')
+
+# The Install location step's first sentence, as wizard.html has it: true of
+# the .deb, which installs into /usr/lib/gobbonet. The .rpm's build rewrites it
+# for its own path (installer-fedora/gobbonet.spec). The AppImage and the ZIP
+# run the same page, so setup says their own sentence instead when it serves
+# it (1.7.9 and 1.8.0 showed the Debian one).
+DEBIAN_PROGRAM_FILES = 'The Debian package manages program files in /usr/lib/gobbonet.'
+PACKAGE_PREFIXES = (Path('/usr/lib/gobbonet'), Path('/usr/lib64/gobbonet'))
+
+def install_kind():
+    """How this GobboNet was installed, and where its program files are:
+    ('appimage', the AppImage file), ('zip', the folder it was unpacked into)
+    or ('package', PREFIX) for the .deb and .rpm."""
+    image = appimage_file()
+    if image:
+        return 'appimage', image
+    if PREFIX in PACKAGE_PREFIXES:
+        return 'package', str(PREFIX)
+    # The ZIP keeps this file in linux-amd64/ inside the folder it unpacks to.
+    return 'zip', str(PREFIX.parent if PREFIX.name == 'linux-amd64' else PREFIX)
+
+def program_files_sentence():
+    """The sentence the Install location step opens with, or None to keep the
+    page's own (a package's, which is already right)."""
+    kind, where = install_kind()
+    if kind == 'appimage':
+        return f"GobboNet's program files stay inside the AppImage, {where}; nothing is installed."
+    if kind == 'zip':
+        return f"GobboNet's program files stay in the folder you unpacked, {where}."
+    return None
+
+def wizard_page():
+    page = (PREFIX / 'wizard.html').read_text(encoding='utf-8')
+    sentence = program_files_sentence()
+    if sentence:
+        page = page.replace(DEBIAN_PROGRAM_FILES, html.escape(sentence, quote=False))
+    return page.encode('utf-8')
 
 class Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self, *_):
@@ -204,7 +268,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_header('Content-Type', 'text/html; charset=utf-8')
             self.send_header('X-Frame-Options', 'DENY')
             self.end_headers()
-            self.wfile.write((PREFIX / 'wizard.html').read_bytes())
+            self.wfile.write(wizard_page())
             return
         try:
             route = urllib.parse.urlsplit(self.path)
@@ -227,6 +291,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 state.update(data_dir=get('data_dir'), listen_port=int(get('listen_port')),
                              model_dir=get('model_dir'))
                 state['models_found'], state['models_sub'] = count_models(Path(state['model_dir']))
+                state['install_kind'], state['program_files'] = install_kind()
                 self.reply(code, state)
             elif self.path in ('/api/download', '/api/gpu'):
                 self.reply(*proxy(self.path))
@@ -292,8 +357,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     port = int(req['port'])
                     if not 1024 <= port <= 65535 or port in (11436, 11437):
                         raise ValueError('Choose a port from 1024 to 65535, except engine ports 11436 and 11437.')
-                    with socket.socket() as sock:
-                        sock.bind(('0.0.0.0', port))
+                    port_free(port)
                     put('listen_port', port)
                     start()
                     self.reply(200, {'ok': True})

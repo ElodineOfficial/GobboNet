@@ -89,16 +89,16 @@ against the keys it already has.
 From a clean checkout of the release commit:
 
 ```sh
-bash ./scripts/make-zip.sh --no-engine        # dist/GobboNet-1_8_0-update.zip
+bash ./scripts/make-zip.sh --no-engine        # dist/GobboNet-1_8_1-update.zip
 bash ./scripts/make-update-manifest.sh --key ~/keys/gobbonet-update.key \
      --notes "One or two sentences for the update box." \
-     --notes-url https://github.com/ElodineOfficial/gobbonet/releases/tag/v1.8.0
+     --notes-url https://github.com/ElodineOfficial/gobbonet/releases/tag/v1.8.1
 ```
 
 Then attach these to the GitHub release, beside each other, with the names
 unchanged:
 
-- the ZIP (`GobboNet-1_8_0-update.zip`),
+- the ZIP (`GobboNet-1_8_1-update.zip`),
 - `dist/gobbonet-update.json`,
 - `dist/gobbonet-update.json.sig`.
 

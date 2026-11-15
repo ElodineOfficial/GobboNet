@@ -1,7 +1,49 @@
-GobboNet 1.8.0
+GobboNet 1.8.1
 
-Everything below is in this release. Details for each change are in
+1.8.1 is 1.8.0 with the fixes below. Coming from 1.7.9 or earlier,
+everything under GOBBONET 1.8.0 further down is new to you as well.
+Details for each change are in docs/changelog/CHANGELOG-1.8.1-*.md and
 docs/changelog/CHANGELOG-1.8.0-*.md.
+
+FIXED IN 1.8.1
+- On Fedora 45 and later, the AppImage's and the ZIP's engine did not
+  start: it needs OpenSSL 3, and those Fedoras ship OpenSSL 4 with 3 as a
+  separate package, openssl3-libs, which an AppImage or a ZIP cannot install.
+  The launcher blamed the GPU build and fell back to nothing. Both now carry
+  OpenSSL 3 (Ubuntu 22.04's, the system the engine is built on, pinned by
+  SHA-256 like the engine) and use it only when the system has none, so there
+  is nothing to install first; installing openssl3-libs makes them use the
+  system's again. gobbonet doctor and CONFIG > Performance say which.
+- Web search (the magnifier by the message box) switched on for every
+  device once one device switched it on: it was stored with the chats and
+  synced, so a phone that never touched it searched the web with each
+  message, its button lit only after a reload. The switch now belongs to
+  each browser, like the search key: off until it is switched on there.
+  After updating it is off everywhere; switch it on again where you want it.
+- The Files button (the page icon in the top bar) showed on every screen,
+  even with nothing to open. It shows only in a chat that has files, with
+  how many, and stays while the Files panel is open until you close it.
+- Lore System could store an entry of a word or two ("He left.", "Battle
+  continues"), which said nothing and was fed back as fact on every later
+  turn. An entry of three words or fewer is now thrown away and written
+  again, up to twice more; if it is still that short, nothing is stored and
+  the Lore notice in the chat says why. SKIP, the model's way of saying
+  nothing happened, is not affected.
+- On Linux, setup run again within about a minute of closing GobboNet said
+  its port was in use ("[Errno 98] Address already in use") when it was
+  free: the connections a closed GobboNet leaves behind for a minute were
+  enough to fail setup's check, though not GobboNet itself. Setup now checks
+  the port the way GobboNet listens on it, so only a program really using
+  the port is refused, and it says so in words. Since 1.7.9.
+- The AppImage's and the ZIP's setup said "The Debian package manages
+  program files in /usr/lib/gobbonet" on its Install location step. It
+  says where their program files really are now: inside the AppImage
+  file, or in the folder the ZIP was unpacked into. Since 1.7.9.
+- The version is 1.8.1 everywhere: the page, the program, ABOUT, the
+  installer and the packages. The Gobbonet Informant knows 1.8.1; if you
+  added it before, its tile on the home screen says UPDATE.
+
+GOBBONET 1.8.0
 
 NEW
 - Group chats. + GROUP in the sidebar starts a chat with several
@@ -15,14 +57,15 @@ NEW
   carry on by themselves. A group can carry a scene, choose how much the
   members know about each other and what a new chat opens with. One model
   plays everyone, one reply at a time, so a round of four is four replies.
-- The Files panel. The new button in the top bar opens a panel beside the
-  chat with every file in the conversation: what characters write as
-  files, text files you attach, and web pages or pictures written as code.
-  Writing the same file again makes a new version, with arrows to step
-  through them. Markdown and CSV show rendered; a web page previews in a
-  frame that cannot reach the internet or GobboNet, with its scripts off
-  until RUN SCRIPTS. EDIT a file, then USE IN MY NEXT MESSAGE hands your
-  version back; ASK ABOUT THE SELECTION asks about part of it.
+- The Files panel. The new button in the top bar, there once a chat has a
+  file, opens a panel beside the chat with every file in the conversation:
+  what characters write as files, text files you attach, and web pages or
+  pictures written as code. Writing the same file again makes a new version,
+  with arrows to step through them. Markdown and CSV show rendered; a web
+  page previews in a frame that cannot reach the internet or GobboNet, with
+  its scripts off until RUN SCRIPTS. EDIT a file, then USE IN MY NEXT
+  MESSAGE hands your version back; ASK ABOUT THE SELECTION asks about part
+  of it.
 - Auto Reroll. Give a character Off-limits words, and a reply that uses
   one is stopped and written again, up to the number of tries you choose.
   It reads the reply, never the thinking. Banned Phrases and Auto Reroll
@@ -84,8 +127,6 @@ NEW
 - My extensions has a switch for each stylesheet and script in it (from
   Larck Drakengold's commit 4db2469), so one that misbehaves can be turned
   off without the rest.
-- The Gobbonet Informant knows 1.8.0. If you added it before, its tile on
-  the home screen says UPDATE.
 
 FIXED
 - Macro names typed with braces (issue #69, PR #73). {{skip}} or skip: in
@@ -130,9 +171,9 @@ CHANGED
   and every documented build command works without the executable bit.
 
 WINDOWS UPDATE
-With the installer: close GobboNet and run GobboNetSetup-1_8_0.exe. It
-installs over your current copy, keeps your models, conversations and
-password, and deletes the old fileserver.ps1.
+With the installer: close GobboNet and run GobboNetSetup-1_8_1.exe. It
+installs over your current copy (1.8.0 or older), keeps your models,
+conversations and password, and deletes 1.7's old fileserver.ps1.
 With the zip: close GobboNet, extract this complete update over the
 GobboNet folder, and keep your configuration, engine, models and history.
 A zip cannot delete files, so fileserver.ps1 and fileserver.log stay in
@@ -144,15 +185,18 @@ ABOUT > CHECK FOR UPDATES does the update for you.
 
 LINUX UPDATE
 With the .deb or the .rpm: close GobboNet and install the new package over
-the old one, sudo apt install ./gobbonet_1.8.0*_amd64.deb or
-sudo dnf install ./gobbonet-1.8.0-*.fedora.x86_64.rpm, from the folder you
+the old one, sudo apt install ./gobbonet_1.8.1*_amd64.deb or
+sudo dnf install ./gobbonet-1.8.1-*.fedora.x86_64.rpm, from the folder you
 downloaded it to. Your settings, models and conversations are not part of the
 package, and stay.
 With the zip: close GobboNet, replace the linux-amd64 folder with the one
 from this zip, and keep your configuration, models and data. The full zip
 carries the llama.cpp engine (linux-amd64/llama-cpp, unchanged since
-1.7.8); the -update zip leaves it out (see NO-ENGINE-IN-THIS-ZIP.txt). From
-1.8.0 on, ABOUT > CHECK FOR UPDATES updates the zip and the AppImage.
+1.7.8); the -update zip leaves it out (see NO-ENGINE-IN-THIS-ZIP.txt). Both
+carry linux-amd64/openssl3, OpenSSL 3 for a system without it. From 1.8.0
+on, ABOUT > CHECK FOR UPDATES updates the zip and the AppImage. For the zip
+it replaces only the program, so on Fedora 45 or later extract a zip once to
+get openssl3 (the AppImage is replaced whole and has it).
 
 FOR THE GIT REPOSITORY
 Extracting a zip cannot delete files. In a 1.7.9 checkout, run
@@ -175,18 +219,28 @@ top; the ones that make throwaway chats or characters remove them.
   tests/console/1.8.0-round-9.js     (MCP servers; run it on the PC)
   tests/console/1.8.0-auto-reroll.js
   tests/console/1.8.0-files-panel.js
+  tests/console/1.8.1-files-button.js (the 📄 button only when a chat has
+                                      a file; goes home and back)
+  tests/console/1.8.1-setup-port.js  (Linux: on the SETUP page, not the
+                                      chat, just after closing GobboNet)
+  tests/console/1.8.1-search-and-lore.js  (web search per device, short
+                                      lore entries; on the PC and the phone)
+  tests/console/1.8.1-linux-setup-openssl.js  (Linux: on the setup page,
+                                      the Install location sentence; on the
+                                      chat page, whose OpenSSL 3 the engine uses)
   tests/console/1.8.0-update-button.js
   tests/console/1.8.0-group-chats.js
-  tests/console/1.8.0-version.js     (page, server and ABOUT say 1.8.0, the
-                                      Informant, and with GN_UPDATE_CHECK
-                                      the update key; asks GitHub only then)
+  tests/console/1.8.1-version.js     (page, server and ABOUT say 1.8.1, the
+                                      Informant, the 1.8.1 fixes a page shows,
+                                      and with GN_UPDATE_CHECK the update
+                                      key; asks GitHub only then)
 
 VALIDATION (run on Linux x64, Go 1.25.14, engine b10456)
 - Go: the 25 packages with tests pass; internal/version's check against the
-  release tag passes once v1.8.0 is tagged (docs/BUILDING.md). go vet clean
+  release tag passes once v1.8.1 is tagged (docs/BUILDING.md). go vet clean
   for linux and windows; the Windows test binaries compile; the race detector
   on cmd/gobbonet and internal/update.
-- JavaScript: 73 of 73 suites. Python: 40 of 40.
+- JavaScript: 74 of 74 suites. Python: 43 of 43.
 - Each feature's console check and live browser checks ran when it was built
   (each changelog has them): group chats 43 live checks in Chromium against a
   stand-in engine, the Files panel's preview isolation in Chromium, the
@@ -194,21 +248,25 @@ VALIDATION (run on Linux x64, Go 1.25.14, engine b10456)
   release list, a tampered build refused.
 - The update signing key: its public half is built in, and a file it signs
   verifies while a changed one does not.
-- The Windows installer, GobboNetSetup-1_8_0.exe (NSIS 3.12, large strings,
+- The Windows installer, GobboNetSetup-1_8_1.exe (NSIS 3.12, large strings,
   built from the v312 source with MinGW-w64 GCC):
   - The same toolchain rebuilds the official GobboNetSetup-1_7_9.exe from
-    the v1.7.9 script and its own payload byte for byte, and 1.8.0's stub and
-    plugins are 1.7.9's very files.
+    the v1.7.9 script and its own payload byte for byte. 1.8.1's installer
+    program and plugins are 1.7.9's very files; only its version resource
+    differs.
   - Its 66 files are byte-for-byte this zip's. Its file list is 1.7.9's
-    without fileserver.ps1, plus the six new page files.
-  - Decompressed and compared with the official 1.7.9, it differs only in the
-    version (title, DisplayVersion, version resource), fileserver.ps1 being
-    deleted instead of installed, and the six files. The uninstaller differs
-    only in removing what the update button leaves.
-  - Under Wine 9.0, page by page beside 1.7.9: only the version marks and the
-    install's size differ. A fresh install, an upgrade over 1.7.9 (models,
-    engine and password kept) and an uninstall after an update, which left
-    nothing behind.
+    without fileserver.ps1, plus the six page files new in 1.8.0.
+  - The script is 1.8.0's but for the version (APPVER 1.8.1, the file
+    name and the file version). The header still says v1.8, which covers
+    the 1.8.x line.
+  - Under Wine 9.0, page by page beside 1.7.9 and 1.8.0: only the version
+    marks and the install's size differ. A fresh install, an upgrade over
+    1.7.9 and over 1.8.0 (models, engine and password kept, fileserver.ps1
+    deleted), and an uninstall after an update, which left only the models
+    it was told to keep.
+The Linux packages below are 1.8.0's, checked as listed. 1.8.1's .deb,
+.rpm and AppImage are built from this zip next, checked the same way, and
+this list is updated with them.
 - The Linux .deb, gobbonet_1.8.0+go.<commit>-1_amd64.deb, built from this
   zip with the pinned engine:
   - The same way of building rebuilds the official 1.7.9 .deb byte for byte

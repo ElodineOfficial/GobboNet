@@ -203,7 +203,7 @@ Gobbonet is more than a plain chatbox. Here are the parts you'll actually use, i
 - **Characters.** It comes with a few built-in personalities (a terse coder, a wordy lore-keeper, a riddle-speaking oracle). You can switch between them or make your own — give it a name, a description, and a style, and the AI will play that role. You can also **bring in character cards you already have, and send yours back out** (the common `.png` cards used by other AI chat apps), so your existing collection works here too. Most cards carry over cleanly, though a few may need small tweaks after importing.
 - **lorebooks.** A character can carry a lorebook — lore, world details, backstory, notes, whatever you want it to know. Rather than cramming all of that into every single message, GobboNet works out which bits are actually relevant to what you're talking about right now and quietly slips those in. It means a character can "know" far more than would ever fit in one conversation.
 - **Threads.** Each conversation is saved separately in the sidebar, like chat history. You can rename them, pin favorites, and sort them into folders.
-- **Web search (optional).** There's a search button that lets the AI look things up online. It needs a free key — see below. Off unless you turn it on.
+- **Web search (optional).** There's a search button that lets the AI look things up online. It needs a free key — see below. Off unless you turn it on, and on each device separately: switching it on at your PC does not switch it on for your phone.
 - **Adding models (optional).** Config → **Add a Model** shows a catalogue you can download from without leaving GobboNet or working out HuggingFace's interface. GobboNet downloads the file, checks it, and puts it where it belongs. The list itself is a small public file fetched from goblincorps.com so it can be kept current — a plain download with nothing about you or your machine attached, cached for a day, and switchable off with `model_catalog_remote = false`. If it can't be reached, the list that shipped with GobboNet is used instead and downloading still works.
 - **Switching models.** If you've downloaded more than one model, you can switch between them from a dropdown at the top — no need to restart.
 - **Using a server you already run (optional).** If you already have llama.cpp or Ollama running, GobboNet can talk to that instead of starting its own engine. Open `config.toml` (on the PC running GobboNet, Config → Advanced → **Config File** opens it for you), set `server_exe = ""` and point `llm_url` at your server:
@@ -223,7 +223,7 @@ The search button needs a free key from Ollama:
 
 1. Go to **ollama.com**, make a free account, and get an **API key**.
 2. In Gobbonet, open **Settings** and paste the key into the API-key box.
-3. Now the search button works. (Searches go through Ollama; everything else stays on your machine.)
+3. Now the search button works. (Searches go through Ollama; everything else stays on your machine.) The key and the button's on/off belong to the browser you set them in: a phone or another browser has its own, and searches only once you switch it on there.
 
 If you never set this up, the chat still works perfectly — you just won't have the live-search button.
 
@@ -371,6 +371,12 @@ Nothing is listed right now. If you find something, open an issue on GitHub: the
 
 ### Recently fixed
 
+**The AppImage's and the ZIP's engine not starting on Fedora 45 and later** — *fixed in 1.8.1.* Those Fedoras keep OpenSSL 3 in a separate package, `openssl3-libs`, which an AppImage or a ZIP cannot install, and the engine needs it. Both now carry their own OpenSSL 3 and use it only when the system has none; `gobbonet doctor` and CONFIG > Model & Performance > Performance say which one the engine uses.
+
+**Web search switching on for every device** — *fixed in 1.8.1.* The 🔍 switch was saved with the chats and synced, so switching it on at the PC made a phone search the web with every message. It belongs to each browser now and starts off; after updating, switch it on again where you want it.
+
+**Lore entries of a word or two** — *fixed in 1.8.1.* Lore System could store an entry like "He left.", which said nothing and was fed back as fact on every later turn. An entry of three words or fewer is written again, up to twice more, and nothing is stored if it stays that short.
+
 **A model that won't load saying only "EXITING DUE TO MODEL LOADING ERROR"** — *fixed in 1.8.0.* That is llama.cpp's sign-off, not the reason, and the chat then said `llama-server returned 503`. The chat now shows the line that says why (out of memory, a damaged or unfinished download, a model this engine can't read) with what to try, and **CHECK FILE** in Add a Model tests the download against its checksum. Issue #67.
 
 **Setup making an empty models folder** — *fixed in 1.8.0.* Pointing the Linux setup at the folder your models were already in made a new, empty `models` folder inside it. Setup now asks for a data folder and a models folder separately, and says when a folder already holds GGUF models. Issue #68.
@@ -452,7 +458,7 @@ Everything GobboNet can do, grouped so it's easy to scan.
 - Branching conversations — fork a chat at any point to explore a different direction without losing the original.
 - Memory + summarization — older parts of a long chat are automatically summarized so the AI keeps remembering what matters.
 - Drag-and-drop file attachments — drag a file straight into the chat to attach it.
-- Files panel — the 📄 button opens a panel beside the chat with every file in the conversation: what characters write as files, text files you attach, and web pages or pictures written as code. Writing the same file again makes a new version, with arrows to step through them. Markdown and CSV show rendered, and web pages run as a preview that cannot reach the internet or GobboNet. Edit a file and hand your version back with your next message, or select part of it and ask about just that. Honest note: a preview's scripts start switched off; one click turns them on for that file.
+- Files panel — the 📄 button, in the top bar once a chat has a file, opens a panel beside the chat with every file in the conversation: what characters write as files, text files you attach, and web pages or pictures written as code. Writing the same file again makes a new version, with arrows to step through them. Markdown and CSV show rendered, and web pages run as a preview that cannot reach the internet or GobboNet. Edit a file and hand your version back with your next message, or select part of it and ask about just that. Honest note: a preview's scripts start switched off; one click turns them on for that file.
 
 **Characters & personas**
 - Default characters — comes with ready-made personalities to chat with right away, including the Gobbonet Informant, a guide that answers questions about GobboNet itself. When a newer version of one ships, its tile says **UPDATE**.

@@ -26,3 +26,26 @@ CPU_SHA256=d07b3f80f3a1ed1de46bfba5671b4af40a87417e1dbf35d0603ad2d623ddc577
 # Windows (`gobbonet engine install`; launch.bat carries its own pin)
 # llama-b10456-bin-win-vulkan-x64.zip
 WIN_GPU_SHA256=60f3d31cc7c2fe62de8f34f8d75ffd06655b4de83bcc5aa6f08df56be42ebb91
+
+# OpenSSL 3 for the AppImage and the ZIP (1.8.1; scripts/fetch-openssl3.sh).
+#
+# llama.cpp's libllama-common.so and libllama-server-impl.so need libssl.so.3
+# and libcrypto.so.3. Fedora 45 and later ship OpenSSL 4 and keep 3 as the
+# separate package openssl3-libs, which the .rpm depends on but nothing can
+# install for an AppImage or a ZIP: there the engine did not load at all.
+# Those two carry these two libraries in openssl3/, and gobbonet-launch uses
+# them only when the dynamic loader cannot find the system's own. The .deb and
+# the .rpm never carry them.
+#
+# The package is Ubuntu 22.04's, the system b10456 is built on, so the engine
+# gets the OpenSSL it was linked against; it needs glibc 2.34, the AppImage's
+# floor. Its hash was taken from jammy-updates' Packages index, whose own hash
+# is in the InRelease file signed by the Ubuntu Archive Automatic Signing Key
+# (2018), checked with gpgv against ubuntu-archive-keyring.gpg; jammy-security
+# lists the same file. Plain http, as apt uses it: the hash is what is trusted.
+# Moving to a newer build means the same check and all five values together.
+OPENSSL3_DEB=libssl3_3.0.2-0ubuntu1.30_amd64.deb
+OPENSSL3_DEB_URL=http://archive.ubuntu.com/ubuntu/pool/main/o/openssl/libssl3_3.0.2-0ubuntu1.30_amd64.deb
+OPENSSL3_DEB_SHA256=d1b4636e32ac6d3b95d583ac05ac548b1aa248414bae1c51b14f54be0f8fd7bc
+LIBSSL3_SHA256=51fc92556f11ddce62f3f988d3fe973fab8fb4742032e61a713688581c924262
+LIBCRYPTO3_SHA256=7cc817ff1841b59516d684f357bc0c3fc2cc52c3fa9b4ffb8ce8bdc215f02915

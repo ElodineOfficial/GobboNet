@@ -1,5 +1,5 @@
 /**
- * 1.8.0: the web search switch (🔍) belongs to this device.
+ * 1.8.1: the web search switch (🔍) belongs to this device.
  *
  * It used to ride in /state with everything else. Switching it on at the PC
  * switched it on for every phone and browser that opened GobboNet afterwards

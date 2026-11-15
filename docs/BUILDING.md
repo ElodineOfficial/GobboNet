@@ -55,8 +55,8 @@ It used to be the literal `-3`, left over from 1.7.3's three packaging repairs,
 which meant 1.7.4 shipped claiming two earlier Debian revisions that never
 existed.
 
-`VERSION` is the single input to all three. Tag `v` + `VERSION` (for 1.8.0,
-`v1.8.0`) before building, or `TestVersionFileMatchesUpstreamRelease` will fail:
+`VERSION` is the single input to all three. Tag `v` + `VERSION` (for 1.8.1,
+`v1.8.1`) before building, or `TestVersionFileMatchesUpstreamRelease` will fail:
 it compares `VERSION` against the nearest git tag, on purpose.
 
 Two places carry the number as a literal and move with `VERSION`. A test fails
@@ -120,6 +120,23 @@ the old `installer/vendor/`, with a look for `ggml-vulkan.dll` as the only check
 `.exe` and a `.deb` carrying the same version number could therefore contain
 different engines, with nothing recording which. That is precisely the question
 you want answered when one platform reproduces a bug and the other does not.
+
+**OpenSSL 3 for the AppImage and the ZIP (1.8.1).** The engine needs
+`libssl.so.3` and `libcrypto.so.3`; Fedora 45 and later ship OpenSSL 4. The
+`.deb` and `.rpm` get OpenSSL 3 from their dependencies; the AppImage and the
+ZIP carry it in `openssl3/`, used by `gobbonet-launch` only when the system's
+loader cannot find its own. `engine.sha256` pins the package (Ubuntu 22.04's
+`libssl3`, the system the engine is built on) and both libraries, and says how
+the pin was checked. `scripts/fetch-openssl3.sh DEST` downloads, checks and
+unpacks it; `make-zip.sh` needs it in `linux-amd64/openssl3` first, for the
+update archive too, and refuses anything else there; `build-appimage.sh` runs
+it itself. Ubuntu moves superseded builds out of its pool in time:
+`OPENSSL3_DEB_URL=... bash ./scripts/fetch-openssl3.sh DEST` takes the same
+file from a mirror, still checked against the pin.
+
+```sh
+bash ./scripts/fetch-openssl3.sh linux-amd64/openssl3   # once, before make-zip.sh
+```
 
 All three builders now fetch from GitHub releases and refuse a mismatch. The
 Windows payload also carries `llama-cpp/ENGINE.txt`, so the bundled engine is

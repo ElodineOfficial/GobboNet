@@ -247,5 +247,73 @@ console.log('\n=== 9. No /props: falls back to the card limit, still fits it ===
   check('outcome ok', ctx.__probe().kind === 'ok', ctx.__probe().kind);
 }
 
+console.log('\n=== 10. An entry of three words or fewer is culled and written again (1.8.1) ===');
+{
+  // The model answers in this order; a number is an HTTP status instead.
+  const answers = (...seq) => (ctx) => {
+    let i = 0;
+    ctx.privacyFetch = async (url, opts) => {
+      if (String(url).endsWith('/props')) {
+        return { ok: true, json: async () => ({ default_generation_settings: { n_ctx: 32768 } }) };
+      }
+      sent.push(JSON.parse(opts.body));
+      const a = seq[Math.min(i++, seq.length - 1)];
+      return typeof a === 'number' ? { ok: false, status: a, statusText: 'x' } : { ok: true, body: makeSSE(a) };
+    };
+  };
+  const run = async (...seq) => {
+    serverCtx = 32768; rejectFirst = false;
+    const ctx = build();
+    answers(...seq)(ctx);
+    const out = await ctx.__lore('- They left the capital.', [msg('user', 40), msg('assistant', 60)], '', 32768);
+    return { ctx, out, probe: ctx.__probe() };
+  };
+  const userText = (r) => r.messages[1].content;
+
+  let r = await run('He left.', 'Mara crossed the river at dawn with the stolen map.');
+  check('a short entry is written again', sent.length === 2, 'sent ' + sent.length);
+  check('the second, full entry is the one stored', r.out === '- They left the capital.\n- Mara crossed the river at dawn with the stolen map.', r.out);
+  check('nothing of the short one is kept', !/He left/.test(r.out), r.out);
+  check('the reroll runs warmer', sent[1].temperature > sent[0].temperature, sent.map(s => s.temperature));
+  check('and is told why', /too short/.test(userText(sent[1])) && !/too short/.test(userText(sent[0])));
+  check('otherwise the same prompt', userText(sent[1]).startsWith(userText(sent[0])));
+  check('outcome ok, naming what was culled', r.probe.kind === 'ok' && /"He left\."/.test(r.probe.outcome || ''), r.probe);
+  check('the indicator said so, and was cleared', indicators.some(s => /entry too short, writing it again \(1 of 2\)/.test(s)) && indicators[indicators.length - 1] === '', indicators);
+
+  r = await run('The end.', 'Battle continues', 'Still nothing here');
+  check('three short answers: three requests, no more', sent.length === 3, 'sent ' + sent.length);
+  check('none of them stored; the gap is recorded as for any failed pass',
+        /dropped without being summarised/.test(r.out) && !/The end|Battle|nothing here/.test(r.out), r.out);
+  check('outcome failed, quoting all three', r.probe.kind === 'failed' && /"The end\."/.test(r.probe.outcome) &&
+        /"Battle continues"/.test(r.probe.outcome) && /"Still nothing here"/.test(r.probe.outcome), r.probe.outcome);
+  check('the third try is warmer than the second', sent[2].temperature > sent[1].temperature, sent.map(s => s.temperature));
+
+  r = await run('They crossed the river.');
+  check('four words: stored at once', sent.length === 1 && /- They crossed the river\.$/.test(r.out), r.out);
+
+  r = await run('- The end .', 'The caravan reached Ashford before the storm broke.');
+  check('bullets and bare punctuation are not words', sent.length === 2 && /caravan reached Ashford/.test(r.out), r.out);
+
+  r = await run('SKIP');
+  check('SKIP is not rerolled', sent.length === 1 && r.probe.kind === 'skip', r.probe.kind);
+
+  r = await run('He left.', 500);
+  check('a reroll the server refuses: nothing stored, and the outcome says why',
+        sent.length === 2 && r.probe.kind === 'failed' && /HTTP 500/.test(r.probe.outcome) && !/He left/.test(r.out), r.probe.outcome);
+
+  const ctx = build();
+  const words = (t) => vm.runInContext('loreEntryWords(' + JSON.stringify(t) + ')', ctx);
+  check('word count: "Battle continues" is 2', words('Battle continues') === 2);
+  check('"It rained, then stopped." is 4', words('It rained, then stopped.') === 4);
+  check('a dash alone is 0', words('— . !') === 0);
+  check('any script counts', words('Он ушёл домой сегодня') === 4);
+  check('scripts without spaces count characters: a Japanese sentence is not one word',
+        words('彼は家に帰った') === 7 && words('終わり') === 3 && words('เขากลับบ้านแล้ว') > 3, [words('彼は家に帰った'), words('終わり')]);
+  r = await run('彼は家に帰った。');
+  check('so a Japanese entry is stored, not culled', sent.length === 1 && /彼は家に帰った/.test(r.out), r.out);
+  r = await run('終わり。', '彼らは夜明けに川を渡った。');
+  check('and a three-character one is written again', sent.length === 2 && /夜明けに川を渡った/.test(r.out), r.out);
+}
+
 console.log('\n' + pass + ' passed, ' + fail + ' failed\n');
 process.exit(fail ? 1 : 0);

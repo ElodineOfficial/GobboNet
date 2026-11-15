@@ -42,6 +42,35 @@ func TestDoctorSaysTheLauncherFellBackToTheCPU(t *testing.T) {
 	}
 }
 
+// 1.8.1: on a system without OpenSSL 3 (Fedora 45 and later), the AppImage's
+// and the ZIP's launcher gives the engine GobboNet's own copy; doctor says so,
+// and says nothing when the engine uses the system's.
+func TestDoctorSaysWhoseOpenSSL(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("the launcher's engine-choice note is Linux only")
+	}
+	dir := t.TempDir()
+	choice := filepath.Join(dir, "engine-choice")
+	withProbe(t, nil, nil)
+	cfg := config.Default()
+	cfg.DataDir = dir
+	var out bytes.Buffer
+	os.WriteFile(choice, []byte("build=gpu\nreason=\nopenssl=bundled\n"), 0o600)
+	reportGPU(&out, cfg, "/x/llama-cpp/llama-server", choice)
+	if got := out.String(); !strings.Contains(got, "openssl:      GobboNet's own OpenSSL 3 -- this system has none") ||
+		!strings.Contains(got, "openssl3-libs") {
+		t.Errorf("bundled OpenSSL not reported:\n%s", got)
+	}
+	for _, text := range []string{"build=gpu\nreason=\nopenssl=system\n", "build=gpu\nreason=\n"} {
+		out.Reset()
+		os.WriteFile(choice, []byte(text), 0o600)
+		reportGPU(&out, cfg, "/x/llama-cpp/llama-server", choice)
+		if strings.Contains(out.String(), "openssl:") {
+			t.Errorf("%q: doctor mentioned OpenSSL:\n%s", text, out.String())
+		}
+	}
+}
+
 func TestDoctorListsDevicesAndWhatGPUDeviceDoes(t *testing.T) {
 	dir := t.TempDir()
 	devs := []engine.Device{

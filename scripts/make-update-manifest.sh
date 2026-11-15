@@ -7,7 +7,7 @@
 #   dist/gobbonet-update.json.sig   its ed25519 signature
 #
 #   bash ./scripts/make-update-manifest.sh --key PATH
-#        [--zip dist/GobboNet-1_8_0-update.zip]
+#        [--zip dist/GobboNet-1_8_1-update.zip]
 #        [--appimage installer-linux/dist/GobboNet-<version>-x86_64.AppImage]
 #        [--notes "one or two sentences"] [--notes-file FILE] [--notes-url URL]
 #

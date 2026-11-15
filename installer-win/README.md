@@ -206,6 +206,24 @@ details):
   `fileserver.ps1` deleted) and an uninstall after an update, which leaves
   nothing behind where 1.7.9's left the folder.
 
+## 1.8.1: the same installer, for the 1.8.1 payload
+
+1.8.0's script with the version moved: `APPVER` 1.8.1, `OutFile`
+`GobboNetSetup-1_8_1.exe` and `VIProductVersion` 1.8.1.0. Nothing else in the
+script, the pages or the art changed; the header keeps `v1.8`, which covers the
+1.8.x line. Built the same way, from the extracted 1.8.1 update ZIP, with the
+stub and plugins carrying 1.7.9's link times.
+
+How it was checked: the same toolchain first rebuilt the official
+`GobboNetSetup-1_7_9.exe` byte for byte from the `v1.7.9` script and that
+installer's own payload (art and icon given the times recorded in it). Then,
+for 1.8.1: every section of the stub but the version resource is 1.7.9's; the
+payload is the ZIP's byte for byte, and its file list is 1.7.9's without
+`fileserver.ps1`, plus 1.8.0's six page files; under Wine 9.0 each page
+matches 1.7.9's and 1.8.0's but for the version marks and the install's size;
+a fresh install, an upgrade over 1.7.9 and over 1.8.0, and an uninstall after
+an update. `docs/changelog/CHANGELOG-1.8.1-version-bump.md` has the details.
+
 ## Not to be confused with `installer/`
 
 `installer/gobbonet.nsi` is a different, unreleased script for a Go-server

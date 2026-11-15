@@ -154,3 +154,6 @@ legacy-import.json
 
 # Bundled Linux engine binaries
 /linux-amd64/llama-cpp/
+# OpenSSL 3 for the AppImage and ZIP: fetched by scripts/fetch-openssl3.sh,
+# pinned in engine.sha256, never committed (1.8.1).
+/linux-amd64/openssl3/

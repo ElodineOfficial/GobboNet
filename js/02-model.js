@@ -1093,6 +1093,9 @@ function updateGpuNote() {
       (v.engine_build_reason ? ' (' + v.engine_build_reason.replace(/^the GPU build would not start:\s*/, '') + ')' : '') +
       '. Usually that is a missing Vulkan driver.');
   }
+  if (v.engine_openssl === 'bundled') {
+    lines.push('This system has no OpenSSL 3, so the engine uses the copy that comes with GobboNet. Installing your distribution\'s (openssl3-libs on Fedora) makes it use that instead.');
+  }
   if (v.probe_error) lines.push('The engine could not list its devices: ' + v.probe_error);
   else if (!(v.devices || []).length) lines.push('The engine sees no GPU, so the model runs on the processor.');
   if (v.warning && sel.value === _gpuLoaded.setting) lines.push(v.warning.replace(/^gpu_device = /, 'The saved choice, ') + '.');

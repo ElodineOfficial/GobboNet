@@ -359,6 +359,33 @@ function mergeLoreAfterPass(thread, before, after) {
 // supposed to free up in the first place.
 const LORE_MAX_CHARS = 2400;
 
+/* SHORT ENTRIES (1.8.1). An entry of LORE_MIN_WORDS words or fewer -- "He
+   left.", "Battle continues", "The end" -- records nothing a later turn can
+   use, and stored it is read back as fact on every turn after. Such an entry
+   is culled and written again, up to LORE_SHORT_REROLLS more times, each try
+   a little warmer and reminded to write a full sentence, so the same prompt
+   does not hand the same fragment back. If every try is that short, nothing
+   is stored and the pass counts as failed, as any other pass that writes no
+   entry does. SKIP is not an entry -- it is the model saying nothing happened
+   -- and is left alone. tests/test-lore-compression.mjs, section 10. */
+const LORE_MIN_WORDS = 3;
+const LORE_SHORT_REROLLS = 2;
+
+/** Words in an entry as a reader counts them: bullets, dashes and bare
+ *  punctuation are not words. Scripts written without spaces between words
+ *  (Chinese, Japanese, Thai, ...) count each of their characters, or a
+ *  whole Japanese sentence would be one "word" and culled every time. */
+const _LORE_UNSPACED = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Thai}\p{Script=Lao}\p{Script=Khmer}\p{Script=Myanmar}]/gu;
+function loreEntryWords(text) {
+  let n = 0;
+  for (const w of String(text || '').split(/\s+/)) {
+    if (!/[\p{L}\p{N}]/u.test(w)) continue;
+    const unspaced = (w.match(_LORE_UNSPACED) || []).length;
+    n += unspaced || 1;
+  }
+  return n;
+}
+
 /* ================================================================
    THE LORE PROMPT
 
@@ -968,8 +995,12 @@ async function summarizeForLore(existingLore, messagesToSummarize, authoredLore,
   const _loreTimer = setTimeout(() => _loreAbort.abort(), _loreTimeoutMs);
 
   /* One send. Extracted so the 400 handler can re-fit and try again
-     without duplicating the request body. */
-  function _loreSend(f) {
+     without duplicating the request body, and so a too-short entry can be
+     written again (reroll 1, 2, ...: warmer, and told why). */
+  function _loreSend(f, reroll) {
+    const again = reroll > 0
+      ? '\n\nYour last entry was too short to record anything. Write one complete sentence about what happened.'
+      : '';
     return privacyFetch(LLAMA_URL + '/v1/chat/completions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -978,7 +1009,7 @@ async function summarizeForLore(existingLore, messagesToSummarize, authoredLore,
         model: getRequestModelName(),
         messages: [
           { role: 'system', content: sys },
-          { role: 'user',   content: f.body }
+          { role: 'user',   content: f.body + again }
         ],
         // Stream so we don't block the UI for ~30s with zero feedback.
         // The tokens are dropped on the floor — we just want progress.
@@ -994,8 +1025,9 @@ async function summarizeForLore(existingLore, messagesToSummarize, authoredLore,
         // sampler settings; this request was sending temperature alone,
         // which is the classic degenerate-loop recipe.
         repeat_penalty: 1.1,
-        // Low temperature: we want stable, repeatable summaries.
-        temperature: 0.3
+        // Low temperature: we want stable, repeatable summaries. A reroll of
+        // a too-short entry runs warmer, or it would get the same one back.
+        temperature: reroll > 0 ? Math.min(0.9, 0.3 + 0.25 * reroll) : 0.3
       })
     });
   }
@@ -1048,61 +1080,81 @@ async function summarizeForLore(existingLore, messagesToSummarize, authoredLore,
     // server-split reasoning_content — gets routed to tmpMsg.reasoning,
     // and the actual answer to tmpMsg.content. We then throw away
     // .reasoning. This is the fix that keeps CoT out of lore.
-    const tmpMsg = { role: 'assistant', content: '', reasoning: '' };
-    const reader = resp.body.getReader();
-    const decoder = new TextDecoder();
-    let buf = '';
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += decoder.decode(value, { stream: true });
-      const lines = buf.split('\n');
-      buf = lines.pop() || '';
-      for (const line of lines) {
-        const tok = extractTokenFromLine(line);
-        if (tok) processStreamDelta(tmpMsg, tok.text, tok.field);
-      }
-    }
-    // Flush held-back buffer and scrub stray format markers.
-    finalizeStreamMessage(tmpMsg);
-
-    renderLoreIndicator('');
-
-    // If parsing produced nothing, keep the prior lore rather than
-    // overwriting it with an empty string (which would silently lose
-    // every earlier summary).
-    let summary = (tmpMsg.content || '').trim();
-
-    // Recover text that the thinking-format parser filed as reasoning.
     //
-    // Both of its reparent guards require state.phase === 'pre'
-    // (03-generation.js:888 and :1031). Two branches leave that phase and
-    // never come back: the server-split branch sets 'thinking_done' when
-    // llama-server returns reasoning_content -- which it does, because
-    // launch.bat starts it with --reasoning-format auto -- and gemma's
-    // header branch sets 'thinking'. Either way the whole reply lands in
-    // .reasoning with nothing to rescue it, and the summariser returned
-    // the previous lore unchanged while the model was answering perfectly.
-    //
-    // For a summary the distinction does not matter. There is no user
-    // watching a chain-of-thought block here; there is a paragraph we
-    // asked for and we want it out of whichever bucket it landed in.
-    if (!summary) {
-      const reasoned = (tmpMsg.reasoning || '').trim();
-      if (reasoned) {
-        summary = reasoned;
-        _loreLastOutcome = 'recovered ' + reasoned.length +
-                           ' chars the parser had filed as reasoning';
-        console.warn('[lore] content was empty; recovered ' + reasoned.length +
-                     ' chars from reasoning. Parser filed the whole reply as ' +
-                     'chain-of-thought.');
+    // An entry of LORE_MIN_WORDS words or fewer is culled and written again
+    // (SHORT ENTRIES, beside LORE_MAX_CHARS), so up to 1 + LORE_SHORT_REROLLS
+    // answers are read here, each through the same parser and cleaner.
+    let tmpMsg, summary;
+    const culled = [];        // the too-short entries, in the order they came
+    let lastShort = false;    // the answer we ended on was one of them
+    let rerollStatus = 0;     // HTTP status of a reroll the server refused
+    for (let reroll = 0; ; reroll++) {
+      tmpMsg = { role: 'assistant', content: '', reasoning: '' };
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split('\n');
+        buf = lines.pop() || '';
+        for (const line of lines) {
+          const tok = extractTokenFromLine(line);
+          if (tok) processStreamDelta(tmpMsg, tok.text, tok.field);
+        }
       }
-    }
+      // Flush held-back buffer and scrub stray format markers.
+      finalizeStreamMessage(tmpMsg);
 
-    // Reduce whatever came back to one clean beat. Deliberately aggressive:
-    // a bad line here is appended permanently, and every later pass reads it
-    // as established fact.
-    summary = _cleanLoreBeat(summary);
+      renderLoreIndicator('');
+
+      // If parsing produced nothing, keep the prior lore rather than
+      // overwriting it with an empty string (which would silently lose
+      // every earlier summary).
+      summary = (tmpMsg.content || '').trim();
+
+      // Recover text that the thinking-format parser filed as reasoning.
+      //
+      // Both of its reparent guards require state.phase === 'pre'
+      // (03-generation.js:888 and :1031). Two branches leave that phase and
+      // never come back: the server-split branch sets 'thinking_done' when
+      // llama-server returns reasoning_content -- which it does, because
+      // launch.bat starts it with --reasoning-format auto -- and gemma's
+      // header branch sets 'thinking'. Either way the whole reply lands in
+      // .reasoning with nothing to rescue it, and the summariser returned
+      // the previous lore unchanged while the model was answering perfectly.
+      //
+      // For a summary the distinction does not matter. There is no user
+      // watching a chain-of-thought block here; there is a paragraph we
+      // asked for and we want it out of whichever bucket it landed in.
+      if (!summary) {
+        const reasoned = (tmpMsg.reasoning || '').trim();
+        if (reasoned) {
+          summary = reasoned;
+          _loreLastOutcome = 'recovered ' + reasoned.length +
+                             ' chars the parser had filed as reasoning';
+          console.warn('[lore] content was empty; recovered ' + reasoned.length +
+                       ' chars from reasoning. Parser filed the whole reply as ' +
+                       'chain-of-thought.');
+        }
+      }
+
+      // Reduce whatever came back to one clean beat. Deliberately aggressive:
+      // a bad line here is appended permanently, and every later pass reads it
+      // as established fact.
+      summary = _cleanLoreBeat(summary);
+
+      lastShort = !!summary && !/^skip\b/i.test(summary) && !_loreEchoesTemplate(summary)
+                  && loreEntryWords(summary) <= LORE_MIN_WORDS;
+      if (lastShort) culled.push(summary);
+      if (!lastShort || reroll >= LORE_SHORT_REROLLS) break;
+      console.warn('[lore] entry too short (' + loreEntryWords(summary) + ' words), culled: "' + summary
+                   + '". Writing it again (' + (reroll + 1) + ' of ' + LORE_SHORT_REROLLS + ').');
+      renderLoreIndicator('entry too short, writing it again (' + (reroll + 1) + ' of ' + LORE_SHORT_REROLLS + ')...');
+      resp = await _loreSend(fitted, reroll + 1);
+      if (!resp.ok) { rerollStatus = resp.status; renderLoreIndicator(''); break; }
+    }
 
     // The template, not an entry. Stored, it would be read back as fact on
     // every later turn, so it is treated as the failed pass it is.
@@ -1148,6 +1200,25 @@ async function summarizeForLore(existingLore, messagesToSummarize, authoredLore,
       _loreLastKind = 'skip';
       _loreLastOutcome = 'nothing worth recording this pass (SKIP)';
       return existingLore || '';
+    }
+
+    // Still LORE_MIN_WORDS words or fewer after every reroll: culled for good.
+    // Nothing is stored, and the batch counts as unsummarised, the same as any
+    // other pass that writes no entry.
+    if (lastShort) {
+      const quoted = culled.map(c => '"' + c + '"').join(', ');
+      _loreLastKind = 'failed';
+      _loreLastOutcome = 'the model wrote only entries of ' + LORE_MIN_WORDS + ' words or fewer ('
+        + quoted + ')' + (rerollStatus ? ', then its reroll failed with HTTP ' + rerollStatus : '')
+        + '; none was stored. The ' + archivedCount + ' oldest message'
+        + (archivedCount === 1 ? ' was' : 's were') + ' dropped from context without being summarised.';
+      console.warn('[lore] every try was too short; nothing stored:', culled);
+      return _appendLoreGapMarker(existingLore, archivedCount);
+    }
+    if (culled.length) {
+      _loreLastOutcome = 'wrote the entry again after ' + culled.length + ' too-short '
+        + (culled.length === 1 ? 'try' : 'tries') + ' (culled: ' + culled.map(c => '"' + c + '"').join(', ') + ')';
+      console.warn('[lore]', _loreLastOutcome);
     }
 
     // APPEND, never rewrite. This is the design change.

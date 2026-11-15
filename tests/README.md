@@ -583,6 +583,27 @@ test switches to a remote backend before anything would load a model. To run the
 same first run through an extracted ZIP's front door, also set
 `GOBBONET_TEST_ENTRY` to that ZIP's top-level `./gobbonet`.
 
+`test-openssl3.py` covers the OpenSSL 3 the AppImage and the ZIP carry for a
+system without one (Fedora 45 and later). The wiring is checked statically;
+then the real launcher runs on this system and on a simulated one without
+OpenSSL 3: in a private mount namespace the system's `libssl.so.3` and
+`libcrypto.so.3` are covered by an ELF header for another CPU, which the
+loader skips, so they are "not found". It needs `linux-amd64/gobbonet`, the
+engine, `linux-amd64/openssl3` (`scripts/fetch-openssl3.sh`) and `unshare` with
+permission to mount (root, or user namespaces); what it cannot run, it skips
+and says so.
+
+`test-setup-program-files.py` covers the Install location step's first
+sentence: the AppImage file, the unpacked ZIP folder, or a package's own.
+
+`test-setup-port.py` covers the Linux setup's port step run again just after
+GobboNet was closed. It runs `port_free()` out of both copies of
+`gobbonet-setup.py` against real sockets: free, listened on (with and without
+`SO_REUSEADDR`), and left in TIME_WAIT by a server that closed first -- after
+checking that 1.8.0's plain bind refuses that one, so the case is reproduced.
+It needs nothing built. `test-linux-onboarding.py` sends the same two cases
+through the real setup page.
+
 `test-version-strings.py` holds the release number's literal copies to
 `VERSION`: `installer-win/gobbonet.nsi`'s `APPVER`, `OutFile` and
 `VIProductVersion`, and `installer/gobbonet.nsi`'s use of its define. It also

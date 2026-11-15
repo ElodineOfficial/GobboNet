@@ -89,4 +89,16 @@ func TestParseEngineChoice(t *testing.T) {
 	if c := ParseEngineChoice("build=rocket\nreason=" + strings.Repeat("x", 1000)); c.Build != "" || len(c.Reason) > 303 {
 		t.Errorf("an unknown build or an overlong reason got through: %+v", c)
 	}
+	// 1.8.1: whose OpenSSL 3 the engine loads. A file from an older launcher
+	// has no such line, and says nothing about it.
+	for text, want := range map[string]string{
+		"build=gpu\nreason=\nopenssl=bundled\n": "bundled",
+		"build=gpu\nreason=\nopenssl=system\n":  "system",
+		"build=gpu\nreason=\n":                   "",
+		"build=gpu\nopenssl=/usr/lib/evil\n":     "",
+	} {
+		if c := ParseEngineChoice(text); c.OpenSSL != want || c.Build != "gpu" {
+			t.Errorf("%q: OpenSSL = %q, want %q", text, c.OpenSSL, want)
+		}
+	}
 }

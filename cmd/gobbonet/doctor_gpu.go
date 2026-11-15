@@ -41,6 +41,11 @@ func reportGPU(w io.Writer, cfg config.Config, enginePath, choicePath string) {
 			case "none":
 				fmt.Fprintln(w, "  engine build: none bundled")
 			}
+			if c.OpenSSL == "bundled" {
+				fmt.Fprintln(w, "  openssl:      GobboNet's own OpenSSL 3 -- this system has none (Fedora 45 and")
+				fmt.Fprintln(w, "                later ship OpenSSL 4). Installing openssl3-libs makes the engine use")
+				fmt.Fprintln(w, "                the system's instead, kept up to date by dnf.")
+			}
 		}
 	}
 

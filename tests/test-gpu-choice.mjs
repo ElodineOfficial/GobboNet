@@ -122,6 +122,21 @@ console.log('\n=== B. the note ===');
   ok(off.els['perf-prime-row'].style.display === 'none', 'never off Linux');
 }
 {
+  // 1.8.1: on a system without OpenSSL 3 the AppImage's or ZIP's launcher gives
+  // the engine GobboNet's own copy; the box says so, and says nothing otherwise.
+  const base = { devices: HYBRID.devices, gpu_device: 'auto', gpu_prime_offload: false, linux: true, small_card_mib: 3072, engine_build: 'gpu' };
+  const own = build(Object.assign({}, base, { engine_openssl: 'bundled' }));
+  await own.ctx.loadGpuChoice();
+  const text = own.els['perf-device-note'].textContent;
+  ok(/This system has no OpenSSL 3, so the engine uses the copy that comes with GobboNet\. Installing your distribution's \(openssl3-libs on Fedora\) makes it use that instead\./.test(text),
+     'GobboNet\'s own OpenSSL 3 is said, with how to use the system\'s', text);
+  for (const v of ['system', undefined]) {
+    const t = build(Object.assign({}, base, v ? { engine_openssl: v } : {}));
+    await t.ctx.loadGpuChoice();
+    ok(!/OpenSSL/.test(t.els['perf-device-note'].textContent), `engine_openssl ${v || 'absent'}: nothing about OpenSSL`);
+  }
+}
+{
   const t = build({ devices: [], probe_error: 'the engine took longer than 20s to list its devices', gpu_device: 'auto', linux: true, small_card_mib: 3072 });
   await t.ctx.loadGpuChoice();
   ok(/could not list its devices: the engine took longer/.test(t.els['perf-device-note'].textContent), 'a probe that failed is said');

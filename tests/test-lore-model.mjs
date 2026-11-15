@@ -19,6 +19,8 @@ let toasts = [];
 let compressCalls = 0;
 let compressThrows = false;
 
+// The fake summariser writes a full sentence: since 1.8.1 an entry of three words
+// or fewer is culled and written again (js/07-prompt.js, SHORT ENTRIES).
 function makeSSE(text) {
   const enc = new TextEncoder();
   const body = text.split(' ').map(w =>
@@ -70,7 +72,7 @@ function build() {
       compressCalls++;
       if (compressThrows) throw new TypeError('Failed to fetch');
       // Whichever model is loaded is the one that answers.
-      return { ok: true, body: makeSSE('Summary from ' + loaded) };
+      return { ok: true, body: makeSSE('The summary was written by ' + loaded) };
     },
   };
   ctx.globalThis = ctx; ctx.window = ctx;
@@ -98,7 +100,7 @@ console.log('\n=== 1. No model chosen: nothing swaps, behaviour unchanged ===');
   check('zero swaps', swaps.length === 0, swaps.join(','));
   check('compression still ran', compressCalls === 1, String(compressCalls));
   check('chat model still loaded', loaded === 'chat-24b.gguf', loaded);
-  check('produced a beat', /Summary from/.test(out), out);
+  check('produced a beat', /The summary was written by/.test(out), out);
 }
 
 console.log('\n=== 2. A different model chosen: borrow, compress, give back ===');
@@ -110,7 +112,7 @@ console.log('\n=== 2. A different model chosen: borrow, compress, give back ==='
   check('swapped out then back', swaps.join(',') === 'tiny-1b.gguf,chat-24b.gguf', swaps.join(','));
   check('chat model restored', loaded === 'chat-24b.gguf', loaded);
   check('the SUMMARISER produced it, not the chat model',
-        /Summary from tiny-1b/.test(out), out);
+        /The summary was written by tiny-1b/.test(out), out);
   check('outcome ok', ctx.__probe().kind === 'ok', ctx.__probe().kind);
 }
 
@@ -135,7 +137,7 @@ console.log('\n=== 4. Borrow FAILS: compress anyway, never lose the messages ===
   check('chat model untouched', loaded === 'chat-24b.gguf', loaded);
   check('compressed on the chat model instead', compressCalls === 1, String(compressCalls));
   check('a real beat, not a gap marker',
-        /Summary from chat-24b/.test(out) && !/dropped without being/.test(out), out);
+        /The summary was written by chat-24b/.test(out) && !/dropped without being/.test(out), out);
 }
 
 console.log('\n=== 5. Compression throws mid-borrow: model STILL comes back ===');
@@ -179,7 +181,7 @@ console.log('\n=== 7. file:// mode: no file server, so no swap attempt ===');
   const out = await ctx.__run('', [msg(30)], '', 32768,
     { loreEnabled: true, loreModelFile: 'tiny-1b.gguf' });
   check('no swap attempted', swaps.length === 0, swaps.join(','));
-  check('compression still ran on the chat model', /Summary from chat-24b/.test(out), out);
+  check('compression still ran on the chat model', /The summary was written by chat-24b/.test(out), out);
 }
 
 console.log('\n=== 8. Legacy cards (field absent) ===');

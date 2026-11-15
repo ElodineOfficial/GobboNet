@@ -5,6 +5,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -52,6 +54,32 @@ func TestGPUListsTheEnginesDevices(t *testing.T) {
 	}
 	if v.PrimeOffered {
 		t.Error("PRIME offered with a dedicated GPU in the list")
+	}
+}
+
+// 1.8.1: the launcher's note on whose OpenSSL 3 the engine loads reaches the
+// page, which says so in CONFIG > Performance when it is GobboNet's own.
+func TestGPUSaysWhoseOpenSSL(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("the launcher's engine-choice note is Linux only")
+	}
+	data := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", data)
+	srv, _ := gpuServer(t, hybrid, nil)
+	if err := os.MkdirAll(filepath.Dir(config.EngineChoicePath()), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for text, want := range map[string]string{
+		"build=gpu\nreason=\nopenssl=bundled\n": "bundled",
+		"build=gpu\nreason=\nopenssl=system\n":  "system",
+		"build=gpu\nreason=\n":                   "",
+	} {
+		if err := os.WriteFile(config.EngineChoicePath(), []byte(text), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if v := gpuGet(t, srv); v.OpenSSL != want || v.Build != "gpu" {
+			t.Errorf("%q: engine_openssl = %q, want %q", text, v.OpenSSL, want)
+		}
 	}
 }
 

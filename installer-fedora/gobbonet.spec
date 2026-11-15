@@ -328,6 +328,16 @@ fi
 %{_datadir}/icons/hicolor/256x256/apps/gobbonet.png
 
 %changelog
+* Fri Nov 13 2026 GobboNet - 1.8.1-1
+- 1.8.1, fixes to 1.8.0. Same package layout and engine (llama.cpp b10456).
+- Setup run again within a minute of closing GobboNet no longer says its
+  port is in use; only a program really using the port is refused.
+- Web search is switched on per device; it no longer turns on for every
+  device once one switches it on.
+- Lore System writes an entry of three words or fewer again, and stores
+  nothing if it stays that short.
+- The Files button shows only when the chat has files.
+
 * Tue Nov 10 2026 GobboNet - 1.8.0-1
 - 1.8.0. Same package layout and engine (llama.cpp b10456).
 - Setup asks for a data folder and a models folder, and a folder that

@@ -166,7 +166,8 @@ bash ./build-deb.sh && bash ./build-appimage.sh   # dist/GobboNet-<deb version, 
 Made from the `.deb`, so it carries the same files: `build-appimage.sh` unpacks
 the package into an AppDir, adds `AppRun`, a copy of the menu entry with
 `Exec=gobbonet` and the icon, and appends a zstd squashfs of it to the AppImage
-type 2 runtime. Nothing else is added. The one change to the package's files
+type 2 runtime. Nothing else is added but OpenSSL 3 in `usr/lib/gobbonet/openssl3/`
+(1.8.1, below). The one change to the package's files
 is `usr/bin/gobbonet`: in the `.deb` it is an absolute link to
 `/usr/lib/gobbonet`, which inside an image would point at the host, so it is
 made relative.
@@ -189,9 +190,14 @@ for updates on its own.
 
 On the user's machine it needs x86_64, glibc 2.34 or newer (the engine's
 floor, as for the `.deb`), bash, `fusermount`, and python3 for the first-run
-setup. The engine's other libraries (libstdc++, libgomp, OpenSSL 3) come from
-the host as they do for the package; bundling libstdc++ would fight the host's
-Vulkan driver, which loads the host's own. When python3 is missing, the
+setup. The engine's other libraries (libstdc++, libgomp) come from the host as
+they do for the package; bundling libstdc++ would fight the host's Vulkan
+driver, which loads the host's own. OpenSSL 3 is the exception (1.8.1): Fedora
+45 and later have only OpenSSL 4 unless `openssl3-libs` is installed, and an
+AppImage cannot install it, so the AppImage carries the pinned copy in
+`usr/lib/gobbonet/openssl3/` (`scripts/fetch-openssl3.sh`; the one thing in the
+AppDir the `.deb` does not install). The launcher uses it only when the host's
+loader finds no OpenSSL 3 of its own. When python3 is missing, the
 launcher says so in a dialog instead of failing the first run.
 
 The approach is Deven-Eve's from issue #53.
