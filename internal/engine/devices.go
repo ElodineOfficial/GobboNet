@@ -21,6 +21,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -88,6 +89,7 @@ var (
 	integratedAny   = regexp.MustCompile(`(?i)UHD Graphics|\bHD Graphics\b|\bIris\b|Vega \d+ Graphics|Microsoft Basic|Adreno|\bMali\b|llvmpipe`)
 	integratedIntel = regexp.MustCompile(`(?i)Intel\s+Graphics|Arc\s+Graphics|Arc\s+\d{3}V`)
 	integratedAMD   = regexp.MustCompile(`(?i)Radeon\s+Graphics\s*$|\b[6-9]\d{2}M\b|Radeon\s*8\d{3}S|RADV\s*(PHOENIX|REMBRANDT|RAPHAEL|VANGOGH|RENOIR|CEZANNE|STRIX)`)
+	integratedApple = regexp.MustCompile(`(?i)^Apple\s+M[0-9]`)
 	// Names no integrated GPU carries. NVIDIA has no integrated GPU on a PC;
 	// Radeon RX and Arc A/B are discrete lines. Checked before the share-of-RAM
 	// signal below, which on its own would call an 8 GB card in an 8 GB
@@ -107,6 +109,12 @@ func looksIntegrated(name string, totalMiB, ramMiB int) bool {
 		return true
 	}
 	if vendorAMDMatch.MatchString(n) && integratedAMD.MatchString(n) {
+		return true
+	}
+	// Apple Silicon has one unified memory pool. llama.cpp reports the amount
+	// Metal may use, not separate VRAM, so presenting it as a dedicated card
+	// makes the model-fit warning compare two names for the same RAM.
+	if integratedApple.MatchString(n) {
 		return true
 	}
 	if discreteName.MatchString(n) {
@@ -161,6 +169,23 @@ func DedicatedGPU(devs []Device) *Device {
 	return best
 }
 
+// AppleUnifiedGPU returns the largest Apple Silicon Metal device. Its reported
+// total is a usable unified-memory budget, not separate VRAM, but it is still
+// the honest number to compare with a model's fit requirement.
+func AppleUnifiedGPU(devs []Device) *Device {
+	var best *Device
+	for i := range devs {
+		d := &devs[i]
+		if !d.Integrated || d.TotalMiB <= 0 || !integratedApple.MatchString(strings.TrimSpace(d.Name)) {
+			continue
+		}
+		if best == nil || d.TotalMiB > best.TotalMiB {
+			best = d
+		}
+	}
+	return best
+}
+
 // probeTimeout bounds --list-devices. A wedged GPU driver can hang device
 // enumeration; the Windows probe met exactly that, and the answer then is "not
 // known", never a wizard stuck waiting.
@@ -204,7 +229,7 @@ func ProbeDevices(exe string) ([]Device, error) {
 	case runErr != nil && !strings.Contains(stdout.String(), "Available devices"):
 		probeDevs, probeErr = nil, fmt.Errorf("could not list devices: %w", runErr)
 	default:
-		probeDevs, probeErr = ParseDeviceList(stdout.String(), stderr.String(), systemRAMMiB()), nil
+		probeDevs, probeErr = ParseDeviceList(stdout.String(), stderr.String(), SystemRAMMiB()), nil
 	}
 	probeStamp = stamp
 	return probeDevs, probeErr
@@ -227,8 +252,17 @@ func (l *limited) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// systemRAMMiB is MemTotal from /proc/meminfo, or 0 where there is none.
-func systemRAMMiB() int {
+// SystemRAMMiB is this machine's physical memory, or 0 when it cannot be read.
+// Linux exposes MemTotal in /proc. macOS exposes the byte count through
+// sysctl; using the command keeps this package cgo-free.
+func SystemRAMMiB() int {
+	if runtime.GOOS == "darwin" {
+		out, err := exec.Command("sysctl", "-n", "hw.memsize").Output()
+		if err != nil {
+			return 0
+		}
+		return ramMiBFromSysctl(string(out))
+	}
 	f, err := os.Open("/proc/meminfo")
 	if err != nil {
 		return 0
@@ -243,4 +277,12 @@ func systemRAMMiB() int {
 		}
 	}
 	return 0
+}
+
+func ramMiBFromSysctl(text string) int {
+	bytes, err := strconv.ParseUint(strings.TrimSpace(text), 10, 64)
+	if err != nil || bytes == 0 {
+		return 0
+	}
+	return int(bytes / (1024 * 1024))
 }

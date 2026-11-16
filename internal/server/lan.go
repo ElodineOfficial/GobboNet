@@ -252,6 +252,9 @@ func portProbeMessage(port int, err error) string {
 		return fmt.Sprintf("Port %d is being used by another program right now, so GobboNet could not start on it. Pick another.", port)
 	}
 	if errors.Is(err, syscall.EACCES) || isWSAErr(err, 10013) {
+		if runtime.GOOS != "windows" {
+			return fmt.Sprintf("This Mac or PC will not let GobboNet use port %d. Pick another.", port)
+		}
 		return fmt.Sprintf("This PC will not let GobboNet use port %d (Windows reserves some ranges for Hyper-V, WSL and Docker). Pick another.", port)
 	}
 	return fmt.Sprintf("GobboNet could not open port %d to check it. Pick another.", port)

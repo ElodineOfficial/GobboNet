@@ -74,6 +74,7 @@ func TestIntegratedIsNotVRAM(t *testing.T) {
 		{"AMD Radeon 8060S Graphics", 98304, 131072, true},
 		{"llvmpipe (LLVM 17.0.6, 256 bits)", 65536, 0, true},
 		{"Some Unknown GPU", 30000, 32768, true}, // holds most of system RAM
+		{"Apple M1 Max", 25559, 32768, true},     // Metal reports unified memory, not VRAM
 		{"Intel(R) Arc(TM) A770 Graphics", 16256, 32768, false},
 		{"NVIDIA GeForce RTX 4090", 24564, 65536, false},
 		{"AMD Radeon RX 7800 XT", 16368, 32768, false},
@@ -90,6 +91,31 @@ func TestIntegratedIsNotVRAM(t *testing.T) {
 	only := ParseDeviceList("  Vulkan0: AMD Radeon 780M Graphics (29696 MiB, 28000 MiB free)\n", "", 32768)
 	if DedicatedGPU(only) != nil {
 		t.Error("an integrated GPU alone was offered as the VRAM figure")
+	}
+}
+
+func TestAppleMetalFixtureUsesUnifiedMemory(t *testing.T) {
+	stdout := "Available devices:\n  MTL0: Apple M1 Max (25559 MiB, 25558 MiB free)\n  BLAS: Accelerate (0 MiB, 0 MiB free)\n"
+	devs := ParseDeviceList(stdout, "", 32768)
+	if len(devs) != 1 || devs[0].ID != "MTL0" || !devs[0].Integrated {
+		t.Fatalf("devices = %+v", devs)
+	}
+	if DedicatedGPU(devs) != nil {
+		t.Fatal("Apple unified memory was presented as dedicated VRAM")
+	}
+	if d := AppleUnifiedGPU(devs); d == nil || d.ID != "MTL0" || d.TotalMiB != 25559 {
+		t.Fatalf("AppleUnifiedGPU = %+v", d)
+	}
+}
+
+func TestMacSysctlMemoryBytesBecomeMiB(t *testing.T) {
+	if got := ramMiBFromSysctl("34359738368\n"); got != 32768 {
+		t.Fatalf("32 GiB sysctl value = %d MiB", got)
+	}
+	for _, bad := range []string{"", "not-a-number", "0"} {
+		if got := ramMiBFromSysctl(bad); got != 0 {
+			t.Errorf("ramMiBFromSysctl(%q) = %d", bad, got)
+		}
 	}
 }
 

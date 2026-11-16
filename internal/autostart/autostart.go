@@ -17,10 +17,19 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
 const entryName = "gobbonet.desktop"
+
+var platformGOOS = runtime.GOOS
+
+// Available reports whether this build can create a native per-user login
+// entry. macOS uses LaunchAgents rather than the XDG desktop entry this
+// package manages, so the Mac app keeps this choice off until that support is
+// implemented instead of writing a file the operating system will ignore.
+func Available() bool { return platformGOOS != "darwin" }
 
 // Dir is the XDG autostart directory for the current user.
 func Dir() string {
@@ -117,6 +126,9 @@ func execQuote(path string) string {
 
 // Enable writes the autostart entry.
 func Enable() error {
+	if !Available() {
+		return fmt.Errorf("start at login is not available in the macOS package yet")
+	}
 	if err := os.MkdirAll(Dir(), 0o700); err != nil {
 		return fmt.Errorf("could not create %s: %w", Dir(), err)
 	}

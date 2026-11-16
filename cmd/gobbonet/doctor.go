@@ -164,6 +164,8 @@ func cmdDoctor(argv []string) error {
 		reportFirewall(os.Stdout, cfg.ListenPort)
 	case "linux":
 		reportLinuxFirewall(os.Stdout, cfg.ListenPort)
+	case "darwin":
+		reportDarwinFirewall(os.Stdout)
 	}
 	fmt.Println()
 
@@ -195,6 +197,16 @@ func cmdDoctor(argv []string) error {
 		reportLegacyLeftovers(os.Stdout, installDir())
 	}
 	return nil
+}
+
+// reportDarwinFirewall is deliberately explicit about the boundary of this
+// diagnostic. macOS's Application Firewall is program-based rather than a
+// readable per-port rule set like the two platforms above, and doctor must not
+// claim that silence means the app is allowed.
+func reportDarwinFirewall(w io.Writer) {
+	fmt.Fprintln(w, "  firewall:    macOS Application Firewall status is not inspected here.")
+	fmt.Fprintln(w, "               If LAN access is blocked, allow GobboNet in System Settings")
+	fmt.Fprintln(w, "               > Network > Firewall > Options, then try the address again.")
 }
 
 // reportPortOwner answers "is anything on this port, and is it us".

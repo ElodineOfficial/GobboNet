@@ -145,7 +145,7 @@ func (r *ringBuffer) failure() *LoadError {
 const logRunMarker = "=== GobboNet: starting llama-server for "
 
 // listeningMarkers are llama-server's words for a load that worked.
-var listeningMarkers = []string{"server is listening on", "main: model loaded"}
+var listeningMarkers = []string{"server is listening on", "llama_server: listening on", "main: model loaded"}
 
 // LastRun is what llama-server.log says about the most recent engine run.
 type LastRun struct {

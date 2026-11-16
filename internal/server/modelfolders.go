@@ -318,5 +318,8 @@ func exampleFolder() string {
 	if runtime.GOOS == "windows" {
 		return `D:\Models`
 	}
+	if runtime.GOOS == "darwin" {
+		return "~/Models"
+	}
 	return "/home/you/models"
 }

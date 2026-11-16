@@ -918,7 +918,7 @@ func pinnedHost(host string) bool {
 func (s *Server) Listen() (*Bind, error) {
 	host := s.cfg.ListenHost
 	port := s.cfg.ListenPort
-	ln, err := net.Listen("tcp", net.JoinHostPort(host, fmt.Sprintf("%d", port)))
+	ln, err := listenTCP("tcp", net.JoinHostPort(host, fmt.Sprintf("%d", port)))
 	if err == nil {
 		b := &Bind{Listener: ln, Host: host, Port: port}
 		if pinnedHost(host) {
@@ -926,7 +926,7 @@ func (s *Server) Listen() (*Bind, error) {
 			// odd but not fatal: the pinned address -- the one the user asked
 			// for -- is bound, and the banner says which address to use here.
 			lb := loopbackFor(host)
-			if lln, lerr := net.Listen("tcp", net.JoinHostPort(lb, fmt.Sprintf("%d", port))); lerr == nil {
+			if lln, lerr := listenTCP("tcp", net.JoinHostPort(lb, fmt.Sprintf("%d", port))); lerr == nil {
 				b.Listener = joinListeners(ln, lln)
 				b.Loopback = lb
 			} else {
@@ -946,7 +946,7 @@ func (s *Server) Listen() (*Bind, error) {
 
 	wideErr := err
 	fallbackHost := loopbackFor(host)
-	ln, err = net.Listen("tcp", net.JoinHostPort(fallbackHost, fmt.Sprintf("%d", port)))
+	ln, err = listenTCP("tcp", net.JoinHostPort(fallbackHost, fmt.Sprintf("%d", port)))
 	if err != nil {
 		// Both failed. The wide error is the one that describes the user's
 		// actual problem; the loopback attempt was diagnosis, and saying so
@@ -961,6 +961,8 @@ func (s *Server) Listen() (*Bind, error) {
 		WideErr:  wideErr,
 	}, nil
 }
+
+var listenTCP = net.Listen
 
 // recoverableOnLoopback reports whether a wide-bind failure is the kind that a
 // loopback bind might survive.

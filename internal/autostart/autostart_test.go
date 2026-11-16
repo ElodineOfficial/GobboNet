@@ -9,9 +9,28 @@ import (
 
 func isolate(t *testing.T) string {
 	t.Helper()
+	original := platformGOOS
+	platformGOOS = "linux"
+	t.Cleanup(func() { platformGOOS = original })
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", dir)
 	return dir
+}
+
+func TestMacEnableIsHonestlyUnavailable(t *testing.T) {
+	original := platformGOOS
+	platformGOOS = "darwin"
+	t.Cleanup(func() { platformGOOS = original })
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if Available() {
+		t.Fatal("macOS reported XDG autostart as available")
+	}
+	if err := Enable(); err == nil || !strings.Contains(err.Error(), "not available") {
+		t.Fatalf("Enable error = %v, want an explicit unavailable result", err)
+	}
+	if Enabled() {
+		t.Fatal("failed Mac enable left an entry behind")
+	}
 }
 
 func TestDisabledByDefault(t *testing.T) {

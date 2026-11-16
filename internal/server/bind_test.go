@@ -81,32 +81,34 @@ func TestConfiguredLoopbackIsNotAFallback(t *testing.T) {
 	}
 }
 
-// TestBothBindsDeniedReportsTheWideError covers a privileged port, where the
-// fallback cannot help: port 1 needs root on loopback too, so both attempts
-// fail.
+// TestBothBindsDeniedReportsTheWideError covers a policy denial where the
+// fallback cannot help: both the configured address and loopback are refused.
 //
 // What matters is WHICH error comes back. The loopback attempt is diagnosis,
 // not the user's configuration — reporting its failure would describe an
 // address they never asked for. The wide error is the one that names what they
 // set, so that is the one returned.
-//
-// Skipped as root, where the bind succeeds and there is no denial to observe.
 func TestBothBindsDeniedReportsTheWideError(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("running as root: a privileged bind succeeds, so there is no denial to test")
+	original := listenTCP
+	t.Cleanup(func() { listenTCP = original })
+	listenTCP = func(network, address string) (net.Listener, error) {
+		addr, _ := net.ResolveTCPAddr(network, address)
+		return nil, &net.OpError{Op: "listen", Net: network, Addr: addr, Err: os.NewSyscallError("bind", syscall.EACCES)}
 	}
-	s := bindServer(t, "0.0.0.0", 1)
+	s := bindServer(t, "0.0.0.0", 9066)
 	b, err := s.Listen()
 	if err == nil {
-		b.Listener.Close()
-		t.Fatal("bind succeeded on port 1 as an unprivileged user")
+		if b != nil {
+			b.Listener.Close()
+		}
+		t.Fatal("bind succeeded despite both injected policy denials")
 	}
 	if !errors.Is(err, syscall.EACCES) {
 		t.Errorf("error = %v, want EACCES", err)
 	}
 	// The wide address, not the loopback one the fallback tried.
-	if !strings.Contains(err.Error(), "0.0.0.0:1") {
-		t.Errorf("error names %q; want the configured 0.0.0.0:1", err.Error())
+	if !strings.Contains(err.Error(), "0.0.0.0:9066") {
+		t.Errorf("error names %q; want the configured 0.0.0.0:9066", err.Error())
 	}
 	if strings.Contains(err.Error(), "127.0.0.1") {
 		t.Errorf("error reports the diagnostic loopback attempt: %v", err)

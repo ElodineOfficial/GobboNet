@@ -35,7 +35,7 @@ func reportEmbedding(w io.Writer, cfg config.Config) {
 		if !found {
 			fmt.Fprintf(w, "  model:       MISSING -- expected at %s\n", path)
 			fmt.Fprintln(w, "               Semantic search stays off until it is there. The Windows first run")
-			fmt.Fprintln(w, "               (launch.bat) and the Linux setup wizard download it.")
+			fmt.Fprintln(w, "               (launch.bat), the macOS app and the Linux setup wizard download it.")
 		} else {
 			fmt.Fprintf(w, "  model:       %s\n", path)
 			switch got, err := hashFile(path); {

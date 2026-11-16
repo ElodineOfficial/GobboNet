@@ -6,7 +6,7 @@
 > through the whole of 1.7.x. `VERSION` is the one place a release number
 > belongs.
 
-Three artefacts, three commands, in this order. Everything below was verified
+Four artefacts, four commands. Everything below was verified
 against the tree as it ships except where marked.
 
 ---
@@ -20,7 +20,15 @@ bash ./scripts/build-release.sh               # Go binaries, stamped from VERSIO
 # Windows: installer-win/ -- stage the payload, then makensis (installer-win/README.md)
 cd installer-linux && bash ./build-deb.sh  # gobbonet_<VERSION>+go.<sha>-1_amd64.deb
 bash ./build-appimage.sh                   # GobboNet-<deb version, no +>-x86_64.AppImage, from that .deb
+cd ../ && bash ./installer-mac/build-app.sh dist  # unsigned GobboNet.app ZIP (run on macOS)
 ```
+
+The macOS builder compiles the app for the Mac it runs on (`arm64` or `amd64`).
+It packages no engine: the app's first launch calls the pinned
+`gobbonet engine install` path, which downloads the matching upstream macOS
+tarball, checks SHA-256, and preserves its dylib symlinks. The resulting ZIP is
+unsigned and not notarized; `MAC-START-HERE.md` says exactly what that
+means and links Apple's current opening procedure.
 
 The AppImage is made from the `.deb`, not beside it, so the two carry the same
 files. `build-appimage.sh` unpacks the newest `dist/gobbonet_*_amd64.deb` (or

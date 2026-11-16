@@ -236,7 +236,7 @@ func (e *Embedder) attempt(gen uint64, state string) error {
 
 	if st, err := os.Stat(e.opts.Model); err != nil || !st.Mode().IsRegular() {
 		return &errPermanent{fmt.Sprintf("no embedding model at %s. Semantic search stays off until it is there: "+
-			"the Windows first run (launch.bat) and the Linux setup wizard download it", e.opts.Model)}
+			"the Windows first run (launch.bat), the macOS app and the Linux setup wizard download it", e.opts.Model)}
 	}
 	if e.opts.Pin != "" {
 		got, err := fileSHA256(e.opts.Model)

@@ -1,10 +1,13 @@
 package engine
 
 import (
+	"archive/tar"
 	"archive/zip"
 	"bytes"
+	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -28,6 +31,9 @@ reaches GitHub is a test that fails on a train.
 // fakeArchive builds a zip shaped like upstream's: everything under build/bin/.
 func fakeArchive(t *testing.T) []byte {
 	t.Helper()
+	if runtime.GOOS == "darwin" {
+		return fakeTarArchive(t)
+	}
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
 	name := "llama-server"
@@ -49,6 +55,49 @@ func fakeArchive(t *testing.T) []byte {
 		}
 	}
 	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+func fakeTarArchive(t *testing.T) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	files := map[string]string{
+		"llama-b10456/llama-server":         "#!/bin/sh\necho llama\n",
+		"llama-b10456/libggml.0.20.0.dylib": "Mach-O",
+		"llama-b10456/LICENSE":              "MIT",
+	}
+	for name, body := range files {
+		mode := int64(0o644)
+		if strings.HasSuffix(name, "llama-server") || strings.HasSuffix(name, ".dylib") {
+			mode = 0o755
+		}
+		if err := tw.WriteHeader(&tar.Header{Name: name, Mode: mode, Size: int64(len(body)), Typeflag: tar.TypeReg}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write([]byte(body)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.WriteHeader(&tar.Header{
+		Name: "llama-b10456/libggml.0.dylib", Linkname: "libggml.0.20.0.dylib",
+		Mode: 0o777, Typeflag: tar.TypeSymlink,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.WriteHeader(&tar.Header{
+		Name: "llama-b10456/libggml.dylib", Linkname: "libggml.0.dylib",
+		Mode: 0o777, Typeflag: tar.TypeSymlink,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
 		t.Fatal(err)
 	}
 	return buf.Bytes()
@@ -98,7 +147,8 @@ func pinFor(t *testing.T, dir string, archive []byte) Pin {
 	t.Helper()
 	s := sum(archive)
 	// Every hash key, so the pin parses on whichever platform the test runs on.
-	writePin(t, dir, "LLAMA_BUILD=b10456\nGPU_SHA256="+s+"\nWIN_GPU_SHA256="+s+"\nCPU_SHA256="+s+"\n")
+	writePin(t, dir, "LLAMA_BUILD=b10456\nGPU_SHA256="+s+"\nWIN_GPU_SHA256="+s+
+		"\nDARWIN_ARM64_SHA256="+s+"\nDARWIN_AMD64_SHA256="+s+"\nCPU_SHA256="+s+"\n")
 	pin, err := ParsePin(filepath.Join(dir, "engine.sha256"))
 	if err != nil {
 		t.Fatalf("ParsePin: %v", err)
@@ -112,6 +162,8 @@ func TestParsePinReadsTheSharedFile(t *testing.T) {
 LLAMA_BUILD=b10456
 GPU_SHA256=AABBCC
 WIN_GPU_SHA256=DDEEFF
+DARWIN_ARM64_SHA256=112233
+DARWIN_AMD64_SHA256=445566
 `)
 	pin, err := ParsePin(filepath.Join(dir, "engine.sha256"))
 	if err != nil {
@@ -166,9 +218,19 @@ func TestInstallVerifiesAndFlattens(t *testing.T) {
 	if filepath.Dir(exe) != dest {
 		t.Errorf("llama-server landed at %s, want directly in %s", exe, dest)
 	}
-	for _, name := range []string{"libggml.so", "LICENSE"} {
+	wantFiles := []string{"libggml.so", "LICENSE"}
+	if runtime.GOOS == "darwin" {
+		wantFiles = []string{"libggml.0.20.0.dylib", "libggml.0.dylib", "libggml.dylib", "LICENSE"}
+	}
+	for _, name := range wantFiles {
 		if _, err := os.Stat(filepath.Join(dest, name)); err != nil {
 			t.Errorf("%s was not extracted: %v", name, err)
+		}
+	}
+	if runtime.GOOS == "darwin" {
+		got, err := os.Readlink(filepath.Join(dest, "libggml.dylib"))
+		if err != nil || got != "libggml.0.dylib" {
+			t.Errorf("dylib symlink = %q, %v", got, err)
 		}
 	}
 	// The archive is a build artifact, not something to leave lying around.
@@ -286,13 +348,150 @@ func TestDiscoverPinLooksBesideTheProgramThenTheWorkingDirectory(t *testing.T) {
 	if _, err := DiscoverPin(exe, wd); err == nil {
 		t.Error("found a pin where there is none")
 	}
-	writePin(t, wd, "LLAMA_BUILD=b1\nGPU_SHA256=aa\nWIN_GPU_SHA256=aa\n")
+	writePin(t, wd, "LLAMA_BUILD=b1\nGPU_SHA256=aa\nWIN_GPU_SHA256=aa\nDARWIN_ARM64_SHA256=aa\nDARWIN_AMD64_SHA256=aa\n")
 	pin, err := DiscoverPin(exe, wd)
 	if err != nil {
 		t.Fatalf("DiscoverPin: %v", err)
 	}
 	if pin.Build != "b1" {
 		t.Errorf("build = %q", pin.Build)
+	}
+}
+
+func TestUntarGzipRefusesUnsafeSymlinks(t *testing.T) {
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	if err := tw.WriteHeader(&tar.Header{
+		Name: "build/libbad.dylib", Linkname: "../outside", Mode: 0o777, Typeflag: tar.TypeSymlink,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	archive := filepath.Join(t.TempDir(), "bad.tar.gz")
+	if err := os.WriteFile(archive, buf.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := untarGzip(archive, t.TempDir()); err == nil || !strings.Contains(err.Error(), "unsafe symlink") {
+		t.Fatalf("unsafe symlink error = %v", err)
+	}
+}
+
+func TestUntarGzipRefusesUnsafeMemberPaths(t *testing.T) {
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	body := []byte("outside")
+	if err := tw.WriteHeader(&tar.Header{Name: "../outside", Mode: 0o644, Size: int64(len(body)), Typeflag: tar.TypeReg}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write(body); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	archive := filepath.Join(t.TempDir(), "bad-path.tar.gz")
+	if err := os.WriteFile(archive, buf.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := untarGzip(archive, t.TempDir()); err == nil || !strings.Contains(err.Error(), "unsafe path") {
+		t.Fatalf("unsafe path error = %v", err)
+	}
+}
+
+// On macOS the install runs the engine once, so the operating system's slow
+// first-run check is over before GobboNet's own short start-up probes meet it.
+// A first run that fails means the install failed: an engine that cannot start
+// is not "ready".
+func TestInstallRunsTheEngineOnceOnMacOS(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("the first-run check is macOS only")
+	}
+	original := firstRun
+	t.Cleanup(func() { firstRun = original })
+
+	archive := fakeArchive(t)
+	var ran []string
+	firstRun = func(exe string) error { ran = append(ran, exe); return nil }
+	dest := filepath.Join(t.TempDir(), "llama-cpp")
+	pin := pinFor(t, t.TempDir(), archive)
+	pin.URL = serve(t, archive)
+	exe, err := Install(pin, dest, nil)
+	if err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	if len(ran) != 1 || ran[0] != exe {
+		t.Errorf("first run = %v, want exactly one run of %s", ran, exe)
+	}
+
+	firstRun = func(string) error { return errors.New("killed") }
+	if _, err := Install(pin, filepath.Join(t.TempDir(), "llama-cpp"), nil); err == nil || !strings.Contains(err.Error(), "did not start") {
+		t.Errorf("an engine that cannot start was reported installed: %v", err)
+	}
+}
+
+// Installing a second time (a new pin, or the same one again) meets the links
+// and files the first install left. The first version of this extractor failed
+// there with "file exists", which would have made every engine update on a Mac
+// a dead end.
+func TestUntarGzipInstallsOverAnEarlierInstall(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("creating symlinks needs privileges on Windows, and the tar.gz engine is macOS only")
+	}
+	archive := filepath.Join(t.TempDir(), "engine.tar.gz")
+	if err := os.WriteFile(archive, fakeTarArchive(t), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dest := t.TempDir()
+	for i := 1; i <= 2; i++ {
+		if err := untarGzip(archive, dest); err != nil {
+			t.Fatalf("install %d: %v", i, err)
+		}
+	}
+	if got, err := os.Readlink(filepath.Join(dest, "libggml.dylib")); err != nil || got != "libggml.0.dylib" {
+		t.Errorf("after reinstalling, libggml.dylib -> %q, %v", got, err)
+	}
+	if body, err := os.ReadFile(filepath.Join(dest, "libggml.0.20.0.dylib")); err != nil || string(body) != "Mach-O" {
+		t.Errorf("after reinstalling, the library reads %q, %v", body, err)
+	}
+}
+
+// A name that was a symlink in the old engine and is a plain file in the new
+// one must become that file. Written through the old link, the new bytes would
+// land in whatever the link pointed at instead.
+func TestUntarGzipDoesNotWriteThroughAnOldSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("creating symlinks needs privileges on Windows, and the tar.gz engine is macOS only")
+	}
+	dest := t.TempDir()
+	victim := filepath.Join(dest, "kept.txt")
+	if err := os.WriteFile(victim, []byte("untouched"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("kept.txt", filepath.Join(dest, "LICENSE")); err != nil {
+		t.Fatal(err)
+	}
+	archive := filepath.Join(t.TempDir(), "engine.tar.gz")
+	if err := os.WriteFile(archive, fakeTarArchive(t), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := untarGzip(archive, dest); err != nil {
+		t.Fatal(err)
+	}
+	if body, _ := os.ReadFile(victim); string(body) != "untouched" {
+		t.Errorf("the old link's target was overwritten: %q", body)
+	}
+	if st, err := os.Lstat(filepath.Join(dest, "LICENSE")); err != nil || st.Mode()&os.ModeSymlink != 0 {
+		t.Errorf("LICENSE is still a symlink after the install (%v)", err)
 	}
 }
 

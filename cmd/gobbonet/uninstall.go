@@ -410,6 +410,13 @@ func removeHint(goos, exe, appImage string) []string {
 			"  The program files themselves belong to the uninstaller:",
 			"  Settings > Apps > GobboNet > Uninstall.",
 		}
+	case goos == "darwin" && strings.Contains(strings.ToLower(exe), ".app/contents/macos/"):
+		i := strings.Index(strings.ToLower(exe), ".app/contents/macos/")
+		app := exe[:i+len(".app")]
+		return []string{
+			"  The program is the macOS app bundle:",
+			"  delete " + app,
+		}
 	// The .rpm's program directory (%{_libdir}/gobbonet in gobbonet.spec).
 	case strings.HasPrefix(exe, "/usr/lib64/gobbonet/"):
 		return []string{"  The program files themselves are the package manager's:  sudo dnf remove gobbonet"}

@@ -7,6 +7,7 @@ import (
 	"golang.org/x/term"
 	"io"
 	"os"
+	"path/filepath"
 	"runtime"
 )
 
@@ -20,6 +21,18 @@ import (
 var (
 	panelGOOS       = runtime.GOOS
 	panelOnTerminal = func() bool { return term.IsTerminal(int(os.Stdout.Fd())) }
+	// panelProgram is the process name `pkill -x` has to be given. It is
+	// "gobbonet" in every package except the macOS app, whose program file is
+	// gobbonet-bin: the bundle's own executable is the launcher script, and
+	// the two cannot differ only by case on a default Mac disk.
+	panelProgram = func() string {
+		if exe, err := os.Executable(); err == nil {
+			if base := filepath.Base(exe); base == "gobbonet-bin" {
+				return base
+			}
+		}
+		return "gobbonet"
+	}
 )
 
 // Present the socket we actually bound, not a configured address that failed.
@@ -91,7 +104,7 @@ func printReadyPanel(w io.Writer, cfg config.Config, bind *server.Bind, addrs []
 		// llama-server included. The Linux launcher waiting on it then exits,
 		// and its EXIT trap stops the embedding engine too.
 		fmt.Fprintln(w, "  Running in the background, with no terminal attached.")
-		fmt.Fprintln(w, "  To stop it: pkill -x gobbonet")
+		fmt.Fprintf(w, "  To stop it: pkill -x %s\n", panelProgram())
 	}
 	fmt.Fprintln(w, " ====================================================")
 	fmt.Fprintln(w)

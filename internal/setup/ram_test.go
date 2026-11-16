@@ -51,6 +51,12 @@ func TestRAMFromMeminfoNeverInventsMuchRAM(t *testing.T) {
 	}
 }
 
+func TestNominalRAMFromMacSysctlValue(t *testing.T) {
+	if got := nominalRAMGB(float64(32768) / 1024); got != 32 {
+		t.Fatalf("32768 MiB read as %d GB", got)
+	}
+}
+
 func TestGPUResponseCarriesSystemRAM(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("/proc/meminfo is Linux only")

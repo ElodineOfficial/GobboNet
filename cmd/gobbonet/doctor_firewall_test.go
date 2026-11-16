@@ -229,6 +229,17 @@ func TestFirewalldAllowsPort(t *testing.T) {
 	}
 }
 
+func TestDarwinFirewallReportNamesItsLimit(t *testing.T) {
+	var out bytes.Buffer
+	reportDarwinFirewall(&out)
+	got := out.String()
+	for _, want := range []string{"not inspected", "System Settings", "Firewall > Options"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in:\n%s", want, got)
+		}
+	}
+}
+
 // 1.7.9 (PR #7): the rule no longer covers Public networks unless asked, and
 // Windows often calls a home network Public. doctor must say so, because
 // every other line it prints would read as a working firewall.

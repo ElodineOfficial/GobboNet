@@ -21,7 +21,10 @@
 package engine
 
 import (
+	"archive/tar"
 	"archive/zip"
+	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -29,8 +32,10 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -87,6 +92,15 @@ func ParsePin(path string) (Pin, error) {
 		asset, shaKey = "llama-"+build+"-bin-win-vulkan-x64.zip", "WIN_GPU_SHA256"
 	case "linux":
 		asset, shaKey = "llama-"+build+"-bin-ubuntu-vulkan-x64.zip", "GPU_SHA256"
+	case "darwin":
+		switch runtime.GOARCH {
+		case "arm64":
+			asset, shaKey = "llama-"+build+"-bin-macos-arm64.tar.gz", "DARWIN_ARM64_SHA256"
+		case "amd64":
+			asset, shaKey = "llama-"+build+"-bin-macos-x64.tar.gz", "DARWIN_AMD64_SHA256"
+		default:
+			return Pin{}, fmt.Errorf("no pinned llama.cpp build for darwin/%s", runtime.GOARCH)
+		}
 	default:
 		return Pin{}, fmt.Errorf("no pinned llama.cpp build for %s; install one yourself and "+
 			"point server_exe at it", runtime.GOOS)
@@ -152,7 +166,12 @@ func Install(pin Pin, dir string, progress func(string)) (string, error) {
 	part := archive + ".part"
 	_ = os.Remove(part)
 
-	say("downloading %s (about 300 MB; this is the only large download)", pin.Asset)
+	if runtime.GOOS == "darwin" {
+		// The macOS archive is about a thirtieth the size of the Vulkan ones.
+		say("downloading %s", pin.Asset)
+	} else {
+		say("downloading %s (about 300 MB; this is the only large download)", pin.Asset)
+	}
 	if err := download(pin.URL, part, say); err != nil {
 		_ = os.Remove(part)
 		return "", err
@@ -180,7 +199,7 @@ func Install(pin Pin, dir string, progress func(string)) (string, error) {
 	defer os.Remove(archive)
 
 	say("extracting")
-	if err := unzip(archive, dir); err != nil {
+	if err := extractArchive(archive, dir); err != nil {
 		return "", err
 	}
 
@@ -199,8 +218,49 @@ func Install(pin Pin, dir string, progress func(string)) (string, error) {
 			"verified:        yes (sha256 matches the pin)\n"+
 			"installed by:    gobbonet engine install\n"), 0o644)
 
+	// macOS checks a program the first time it runs, and for a freshly unpacked
+	// engine that is slow: 13.7 s for `llama-server --help` on an M1 Max, measured,
+	// against 0.08 s for the second run. GobboNet's own start-up probes do not
+	// wait that long -- the memory-fitting check allows 10 s and remembers a
+	// failure -- so the first model load after an install was killed mid-check
+	// and stayed failed until GobboNet was restarted. Pay for that first run
+	// here, where a short wait is expected, and learn now if the engine cannot
+	// start at all.
+	if runtime.GOOS == "darwin" {
+		say("letting macOS check the new engine (its first run can take a little while)")
+		if err := firstRun(exe); err != nil {
+			return "", fmt.Errorf("the engine was unpacked but did not start: %w", err)
+		}
+	}
+
 	say("engine ready: %s", exe)
 	return exe, nil
+}
+
+// firstRunTimeout bounds the engine's first run. It is generous on purpose: the
+// wait belongs to the operating system, not the engine, and an install that
+// gives up early leaves the same trap for the first model load.
+const firstRunTimeout = 3 * time.Minute
+
+// firstRun starts the engine once and waits for it to exit. A variable so the
+// tests can watch it without waiting on a real program.
+var firstRun = func(exe string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), firstRunTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, exe, "--version")
+	cmd.Stdout, cmd.Stderr = io.Discard, io.Discard
+	return cmd.Run()
+}
+
+func extractArchive(archive, dir string) error {
+	switch {
+	case strings.HasSuffix(strings.ToLower(archive), ".zip"):
+		return unzip(archive, dir)
+	case strings.HasSuffix(strings.ToLower(archive), ".tar.gz"):
+		return untarGzip(archive, dir)
+	default:
+		return fmt.Errorf("unsupported engine archive %s", filepath.Base(archive))
+	}
 }
 
 func download(url, dest string, say func(string, ...any)) error {
@@ -325,4 +385,136 @@ func modeFor(f *zip.File) os.FileMode {
 		return 0o755
 	}
 	return 0o644
+}
+
+// untarGzip extracts a macOS engine archive into dir, flattening its one
+// top-level folder just as unzip does. The dylibs use relative symlinks, so
+// those links must survive: copying their link text as a regular file produces
+// an engine that unpacks cleanly and then fails at launch.
+func untarGzip(archive, dir string) error {
+	f, err := os.Open(archive)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		return err
+	}
+	defer gz.Close()
+
+	type link struct{ name, target string }
+	var links []link
+	seen := map[string]bool{}
+	tr := tar.NewReader(gz)
+	for {
+		h, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+		name, ok := safeArchiveBase(h.Name)
+		if !ok {
+			return fmt.Errorf("engine archive contains unsafe path %s", strconv.Quote(h.Name))
+		}
+		if h.Typeflag == tar.TypeDir {
+			continue
+		}
+		if seen[name] {
+			return fmt.Errorf("engine archive contains duplicate file name %s", name)
+		}
+		seen[name] = true
+		target := filepath.Join(dir, name)
+		switch h.Typeflag {
+		case tar.TypeReg, tar.TypeRegA:
+			mode := os.FileMode(h.Mode).Perm()
+			if mode == 0 {
+				mode = 0o644
+			}
+			// An earlier engine may have left a symlink under this name.
+			// Opening it would write through the link into another file.
+			if err := clearForReplace(target); err != nil {
+				return err
+			}
+			out, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode)
+			if err != nil {
+				return err
+			}
+			_, copyErr := io.Copy(out, tr)
+			closeErr := out.Close()
+			if copyErr != nil {
+				return copyErr
+			}
+			if closeErr != nil {
+				return closeErr
+			}
+		case tar.TypeSymlink:
+			linkTarget, ok := safeRelativeLink(h.Linkname)
+			if !ok {
+				return fmt.Errorf("engine archive contains unsafe symlink %s -> %s", h.Name, strconv.Quote(h.Linkname))
+			}
+			links = append(links, link{name: name, target: linkTarget})
+		default:
+			return fmt.Errorf("engine archive contains unsupported entry %s (type %d)", h.Name, h.Typeflag)
+		}
+	}
+	// Create links after reading every member. A link may name another link (the
+	// real macOS archive uses versioned two-link chains), but every target must
+	// name an archive member in this same flattened directory, never the host.
+	for _, l := range links {
+		if !seen[l.target] {
+			return fmt.Errorf("engine archive symlink %s names missing target %s", l.name, l.target)
+		}
+		linkPath := filepath.Join(dir, l.name)
+		// Installing over an earlier engine (a new pin, or a repeated install)
+		// meets the old links; os.Symlink refuses a name that is taken.
+		if err := clearForReplace(linkPath); err != nil {
+			return err
+		}
+		if err := os.Symlink(l.target, linkPath); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// clearForReplace removes the file or symlink an earlier install left at path.
+// It never removes a directory: the engine folder is flat, so a directory
+// under one of the archive's names is not something this code put there.
+func clearForReplace(path string) error {
+	st, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if st.IsDir() {
+		return fmt.Errorf("%s is a folder, and the engine archive has a file by that name", path)
+	}
+	return os.Remove(path)
+}
+
+func safeArchiveBase(name string) (string, bool) {
+	name = strings.ReplaceAll(name, "\\", "/")
+	if strings.HasPrefix(name, "/") {
+		return "", false
+	}
+	for _, part := range strings.Split(name, "/") {
+		if part == ".." {
+			return "", false
+		}
+	}
+	base := filepath.Base(filepath.Clean(name))
+	return base, base != "." && base != ".." && base != ""
+}
+
+func safeRelativeLink(target string) (string, bool) {
+	target = strings.ReplaceAll(target, "\\", "/")
+	if strings.HasPrefix(target, "/") || strings.Contains(target, "/") || target == "." || target == ".." || target == "" {
+		return "", false
+	}
+	return target, true
 }
