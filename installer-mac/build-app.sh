@@ -84,8 +84,15 @@ EOF
 chmod 0644 "$APP/Contents/Info.plist"
 
 plutil -lint "$APP/Contents/Info.plist" >/dev/null
-"$MACOS/gobbonet" version | grep -F "$VERSION" >/dev/null || fail "the binary does not carry the package version"
-"$MACOS/gobbonet" engine --dir "$STAGE/no-engine" status >/dev/null 2>&1 && fail "engine status found an engine in an empty folder"
+VERIFY_CONFIG="$STAGE/verify-config"
+VERIFY_DATA="$STAGE/verify-data"
+mkdir -p "$VERIFY_CONFIG" "$VERIFY_DATA"
+XDG_CONFIG_HOME="$VERIFY_CONFIG" XDG_DATA_HOME="$VERIFY_DATA" \
+    "$MACOS/gobbonet" version | grep -F "$VERSION" >/dev/null \
+    || fail "the binary does not carry the package version"
+XDG_CONFIG_HOME="$VERIFY_CONFIG" XDG_DATA_HOME="$VERIFY_DATA" \
+    "$MACOS/gobbonet" engine --dir "$STAGE/no-engine" status >/dev/null 2>&1 \
+    && fail "engine status found an engine in an empty folder"
 
 ditto -c -k --sequesterRsrc --keepParent "$ROOT" "$ZIP"
 unzip -tq "$ZIP" >/dev/null || fail "the ZIP does not pass unzip's integrity check"
