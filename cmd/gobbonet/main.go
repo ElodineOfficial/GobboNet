@@ -674,13 +674,22 @@ func lanBindHelpFor(goos string, cfg config.Config) []string {
 			"  2. Run setup-lan.bat as Administrator to open the firewall.",
 		}
 	}
-	// Loopback bound and the wide address did not: on Linux and macOS that is
-	// a port below 1024, or another program holding the port on one of this
-	// machine's addresses.
-	holder := fmt.Sprintf("       ss -ltnp | grep :%d", cfg.ListenPort)
 	if goos == "darwin" {
-		holder = fmt.Sprintf("       lsof -nP -iTCP:%d -sTCP:LISTEN", cfg.ListenPort)
+		return []string{
+			"To reach this from your phone, try, in order:",
+			"",
+			"  1. Pick a different unoccupied port:",
+			setPort,
+			"",
+			"  2. See whether another program holds the port on another address:",
+			fmt.Sprintf("       lsof -nP -iTCP:%d -sTCP:LISTEN", cfg.ListenPort),
+			"",
+			"  3. Run gobbonet doctor: it checks the bind and explains macOS firewall limits.",
+		}
 	}
+	// Loopback bound and the wide address did not: on Linux that is usually a
+	// privileged port or another program holding the port on another address.
+	holder := fmt.Sprintf("       ss -ltnp | grep :%d", cfg.ListenPort)
 	return []string{
 		"To reach this from your phone, try, in order:",
 		"",
@@ -708,6 +717,10 @@ func lanBindHelpFor(goos string, cfg config.Config) []string {
 // explanation for a permission or bad-address failure would send the reader
 // after the wrong thing.
 func bindError(cfg config.Config, err error) error {
+	return bindErrorFor(runtime.GOOS, cfg, err)
+}
+
+func bindErrorFor(goos string, cfg config.Config, err error) error {
 	switch {
 	case isAddrInUse(err):
 		return fmt.Errorf(`port %d is already in use, so nothing was started.
@@ -723,6 +736,15 @@ func bindError(cfg config.Config, err error) error {
   Original error: %w`, cfg.ListenPort, cfg.Path, err)
 
 	case isPermissionDenied(err):
+		if goos == "darwin" {
+			return fmt.Errorf(`port %d was refused on every address, so nothing was started.
+
+  macOS refused this port. Pick another:
+      gobbonet config set listen_port 9067      (writes %s)
+      GOBBONET_LISTEN_PORT=9067 gobbonet serve  (just this run)
+
+  Original error: %w`, cfg.ListenPort, cfg.Path, err)
+		}
 		// Reaching here means loopback was refused too — Listen falls back on
 		// its own and only surfaces an error when both addresses failed. A
 		// refusal that follows the port across every address is the signature

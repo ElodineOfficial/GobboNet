@@ -27,6 +27,14 @@ CPU_SHA256=d07b3f80f3a1ed1de46bfba5671b4af40a87417e1dbf35d0603ad2d623ddc577
 # llama-b10456-bin-win-vulkan-x64.zip
 WIN_GPU_SHA256=60f3d31cc7c2fe62de8f34f8d75ffd06655b4de83bcc5aa6f08df56be42ebb91
 
+# macOS (`gobbonet engine install` and installer-mac/build-app.sh)
+# Each digest was checked two independent ways: SHA-256 of the downloaded
+# release asset, and the digest GitHub's release API reports for that asset.
+# llama-b10456-bin-macos-arm64.tar.gz
+DARWIN_ARM64_SHA256=5ab514e2b1c8b0276af2536ea2b58643952b6fe79c9bc83bb2e1a336b4ddeb6f
+# llama-b10456-bin-macos-x64.tar.gz
+DARWIN_AMD64_SHA256=5913d3975299438980ea932b3538954e0c99a42ceae497dfb5085677ed21f489
+
 # OpenSSL 3 for the AppImage and the ZIP (1.8.1; scripts/fetch-openssl3.sh).
 #
 # llama.cpp's libllama-common.so and libllama-server-impl.so need libssl.so.3

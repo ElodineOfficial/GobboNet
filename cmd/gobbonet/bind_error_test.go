@@ -40,7 +40,7 @@ func TestWSAEACCESIsNotReportedAsInUse(t *testing.T) {
 		t.Error("WSAEACCES not classified as a permission failure")
 	}
 
-	msg := bindError(config.Default(), err).Error()
+	msg := bindErrorFor("windows", config.Default(), err).Error()
 	if strings.Contains(msg, "already in use") {
 		t.Errorf("permission failure reported as in-use:\n%s", msg)
 	}
@@ -75,7 +75,7 @@ func TestEACCESIsPermissionDenied(t *testing.T) {
 	if !isPermissionDenied(err) {
 		t.Fatal("EACCES not classified as a permission failure")
 	}
-	msg := bindError(config.Default(), err).Error()
+	msg := bindErrorFor("linux", config.Default(), err).Error()
 	if !strings.Contains(msg, "below 1024") {
 		t.Errorf("permission failure omits the privileged-port note:\n%s", msg)
 	}
@@ -142,10 +142,17 @@ func TestLanBindHelpIsPerPlatform(t *testing.T) {
 				t.Errorf("%s help mentions %q:\n%s", goos, bad, got)
 			}
 		}
-		for _, want := range []string{"below 1024", holder, "gobbonet doctor"} {
+		wants := []string{holder, "gobbonet doctor"}
+		if goos == "linux" {
+			wants = append(wants, "below 1024")
+		}
+		for _, want := range wants {
 			if !strings.Contains(got, want) {
 				t.Errorf("%s help is missing %q:\n%s", goos, want, got)
 			}
 		}
+	}
+	if got := strings.Join(lanBindHelpFor("darwin", cfg), "\n"); strings.Contains(got, "below 1024") {
+		t.Errorf("macOS help claims low ports require root:\n%s", got)
 	}
 }

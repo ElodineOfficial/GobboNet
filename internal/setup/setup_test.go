@@ -515,11 +515,15 @@ func TestAutostartIsSetWhenRequested(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("finish: got %d (%s)", rec.Code, rec.Body)
 	}
-	if !autostart.Enabled() {
-		t.Error("setup did not write the login entry when asked to")
-	}
-	if !strings.Contains(rec.Body.String(), `"autostart":true`) {
-		t.Errorf("finish did not report the autostart decision back: %s", rec.Body)
+	if autostart.Available() {
+		if !autostart.Enabled() {
+			t.Error("setup did not write the login entry when asked to")
+		}
+		if !strings.Contains(rec.Body.String(), `"autostart":true`) {
+			t.Errorf("finish did not report the autostart decision back: %s", rec.Body)
+		}
+	} else if autostart.Enabled() || !strings.Contains(rec.Body.String(), `"autostart":false`) {
+		t.Errorf("unsupported autostart was not kept off: enabled=%v body=%s", autostart.Enabled(), rec.Body)
 	}
 }
 
@@ -529,7 +533,19 @@ func TestAutostartAcceptsStringForm(t *testing.T) {
 	s := newTestServer(t)
 	post(t, s, "/api/password", `{"password":"hunter2222","confirm":"hunter2222"}`)
 	post(t, s, "/api/finish", `{"lan":"off","autostart":"on"}`)
-	if !autostart.Enabled() {
+	if autostart.Available() && !autostart.Enabled() {
 		t.Error(`autostart:"on" was not honoured`)
+	} else if !autostart.Available() && autostart.Enabled() {
+		t.Error(`autostart:"on" created a non-native entry on an unsupported platform`)
+	}
+}
+
+func TestStateReportsAutostartAvailability(t *testing.T) {
+	s := newTestServer(t)
+	w := httptest.NewRecorder()
+	s.handleState(w, httptest.NewRequest(http.MethodGet, "/api/state", nil))
+	want := fmt.Sprintf(`"autostart_available":%t`, autostart.Available())
+	if !strings.Contains(w.Body.String(), want) {
+		t.Errorf("state = %s, want %s", w.Body, want)
 	}
 }

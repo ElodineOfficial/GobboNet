@@ -207,12 +207,14 @@ func (s *server) startGPUProbe() {
 // gpuResponse is what the wizard compares a model's min_vram against.
 //
 // Known is false whenever there is nothing honest to compare: no engine, a
-// probe that failed or timed out, no GPU listed, or only an integrated GPU,
-// whose memory is a share of system RAM. The wizard then says nothing --
-// launch.bat's rule: never block on a failed probe.
+// probe that failed or timed out, no GPU listed, or only an ordinary integrated
+// GPU whose usable share is not known. Apple Metal is the exception: llama.cpp
+// reports its usable unified-memory budget, so that number is compared while
+// remaining explicitly marked as unified. A failed probe never blocks.
 type gpuResponse struct {
-	Known  bool `json:"known"`
-	VRAMGB int  `json:"vram_gb"`
+	Known   bool `json:"known"`
+	VRAMGB  int  `json:"vram_gb"`
+	Unified bool `json:"unified_memory,omitempty"`
 	// RAMGB is system RAM in nominal GB, 0 when unknown. A Mixture-of-Experts
 	// model fits a smaller card when this covers its min_ram (issue #65).
 	RAMGB   int             `json:"ram_gb"`
@@ -249,6 +251,11 @@ func (s *server) handleGPU(w http.ResponseWriter, r *http.Request) {
 		resp.Note = s.gpuErr.Error()
 	case d != nil:
 		resp.Known, resp.VRAMGB, resp.Device = true, engine.NominalGB(d.TotalMiB), d.Name
+	case engine.AppleUnifiedGPU(s.gpuDevs) != nil:
+		d := engine.AppleUnifiedGPU(s.gpuDevs)
+		resp.Known, resp.VRAMGB, resp.Device = true, engine.NominalGB(d.TotalMiB), d.Name
+		resp.Unified = true
+		resp.Note = "Metal uses unified system memory"
 	case len(s.gpuDevs) == 0:
 		resp.Note = "the engine lists no GPU"
 	default:
@@ -267,15 +274,16 @@ func (s *server) handleIndex(w http.ResponseWriter, r *http.Request) {
 }
 
 type stateResponse struct {
-	PasswordSet bool               `json:"password_set"`
-	MinPassword int                `json:"min_password"`
-	BackendMode string             `json:"backend_mode"`
-	Models      []catalogModel     `json:"models"`
-	Default     int                `json:"default"`
-	CPUOnly     int                `json:"cpu_only"`
-	HasEngine   bool               `json:"has_engine"`
-	FreeGB      float64            `json:"free_gb"`
-	Download    *modelfetch.Status `json:"download,omitempty"`
+	PasswordSet        bool               `json:"password_set"`
+	MinPassword        int                `json:"min_password"`
+	BackendMode        string             `json:"backend_mode"`
+	Models             []catalogModel     `json:"models"`
+	Default            int                `json:"default"`
+	CPUOnly            int                `json:"cpu_only"`
+	HasEngine          bool               `json:"has_engine"`
+	AutostartAvailable bool               `json:"autostart_available"`
+	FreeGB             float64            `json:"free_gb"`
+	Download           *modelfetch.Status `json:"download,omitempty"`
 }
 
 type catalogModel struct {
@@ -294,13 +302,14 @@ func (s *server) handleState(w http.ResponseWriter, r *http.Request) {
 	defer s.mu.Unlock()
 
 	resp := stateResponse{
-		PasswordSet: s.passwordSet,
-		MinPassword: s.minPasswordLength(),
-		BackendMode: s.backendMode,
-		Default:     s.cat.Default,
-		CPUOnly:     s.cat.CPUOnly,
-		HasEngine:   s.opts.ServerExe != "",
-		FreeGB:      float64(modelfetch.FreeBytes(s.modelDir())) / (1 << 30),
+		PasswordSet:        s.passwordSet,
+		MinPassword:        s.minPasswordLength(),
+		BackendMode:        s.backendMode,
+		Default:            s.cat.Default,
+		CPUOnly:            s.cat.CPUOnly,
+		HasEngine:          s.opts.ServerExe != "",
+		AutostartAvailable: autostart.Available(),
+		FreeGB:             float64(modelfetch.FreeBytes(s.modelDir())) / (1 << 30),
 	}
 	for _, e := range s.cat.Entries {
 		resp.Models = append(resp.Models, catalogModel{
@@ -617,7 +626,8 @@ func (s *server) completeSetup(w http.ResponseWriter, r *http.Request) ([]byte, 
 	// do it, and would be wrong to. A failure here does not fail setup:
 	// everything else is already saved, and losing a working install over a
 	// login convenience would be a poor trade.
-	if err := autostart.Set(bool(req.Autostart)); err != nil {
+	autostartOn := bool(req.Autostart) && autostart.Available()
+	if err := autostart.Set(autostartOn); err != nil {
 		fmt.Fprintf(s.out, "  [WARN] could not set the login entry: %v\n", err)
 	}
 
@@ -640,7 +650,7 @@ func (s *server) completeSetup(w http.ResponseWriter, r *http.Request) ([]byte, 
 		"ok":        true,
 		"port":      s.cfg.ListenPort,
 		"host":      host,
-		"autostart": bool(req.Autostart),
+		"autostart": autostartOn,
 	})
 
 	s.finishedBody = body

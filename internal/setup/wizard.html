@@ -163,16 +163,18 @@
         <div class="t">Allow devices on my network</div>
         <div class="d">Binds 0.0.0.0. Anyone on the LAN who knows the password can connect.</div>
       </div>
-      <h2 style="margin-top:26px">Start at login</h2>
-      <p>Off by default. GobboNet is a server, and one that starts itself every
-         time you sign in should be something you asked for.</p>
-      <div class="choice sel" id="c-asoff" data-as="off">
-        <div class="t">Only when I open it</div>
-        <div class="d">Nothing runs until you click GobboNet.</div>
-      </div>
-      <div class="choice" id="c-ason" data-as="on">
-        <div class="t">Start it when I log in</div>
-        <div class="d">Starts the server quietly. No browser window opens by itself.</div>
+      <div id="autostart-options">
+        <h2 style="margin-top:26px">Start at login</h2>
+        <p>Off by default. GobboNet is a server, and one that starts itself every
+           time you sign in should be something you asked for.</p>
+        <div class="choice sel" id="c-asoff" data-as="off">
+          <div class="t">Only when I open it</div>
+          <div class="d">Nothing runs until you click GobboNet.</div>
+        </div>
+        <div class="choice" id="c-ason" data-as="on">
+          <div class="t">Start it when I log in</div>
+          <div class="d">Starts the server quietly. No browser window opens by itself.</div>
+        </div>
       </div>
       <div class="row"><button id="b5">Finish</button></div>
     </div>
@@ -239,6 +241,10 @@
       mode = "remote";
       $("remote-fields").style.display = "block";
     }
+    if (!s.autostart_available) {
+      $("autostart-options").style.display = "none";
+      auto = "off";
+    }
     $("freenote").textContent = "About " + s.free_gb.toFixed(1) + " GB free on this disk.";
     var box = $("models");
     s.models.forEach(function (m) {
@@ -290,8 +296,9 @@
   /* Roadmap 1.7.7 #8a: launch.bat's "heads up" before a model too big for the
      GPU, through the browser's own confirm(), as every other confirmation in
      GobboNet does. /api/gpu answers from the engine's own --list-devices.
-     Anything short of a known figure -- no engine, no GPU, only an integrated
-     one, a probe that failed -- asks nothing: a failed probe never blocks. */
+     Anything short of a known figure -- no engine, no GPU, an ordinary
+     integrated one, a probe that failed -- asks nothing. Apple Metal reports
+     a usable unified-memory budget, so that one remains comparable. */
   function confirmFit(m) {
     if (!m || !(m.min_vram > 0)) return Promise.resolve(true);
     return fetch("/api/gpu").then(function (r) { return r.ok ? r.json() : null; })
@@ -305,9 +312,12 @@
         if (moe && g.vram_gb >= m.moe_min_vram && g.ram_gb >= m.min_ram) return true;
         return window.confirm(
           m.display + " wants about " + m.min_vram + " GB of GPU memory, but only " +
-          g.vram_gb + " GB was detected" + (g.device ? " (" + g.device + ")" : "") + ".\n\n" +
-          "It may run far more slowly than a model that fits: whatever does not fit " +
-          "on the GPU runs from system memory instead." +
+          g.vram_gb + " GB was detected" + (g.device ? " (" + g.device + ")" : "") +
+          (g.unified_memory ? " as Metal's unified-memory budget" : "") + ".\n\n" +
+          (g.unified_memory
+            ? "It may not fit in Metal's usable share of unified memory."
+            : "It may run far more slowly than a model that fits: whatever does not fit " +
+              "on the GPU runs from system memory instead.") +
           (moe ? "\n\nIt is a Mixture-of-Experts model, so a card with at least " +
             m.moe_min_vram + " GB also runs it well beside " + m.min_ram +
             " GB of system RAM" + (g.ram_gb > 0 ? "; this machine has " + g.ram_gb + " GB." : ".") : "") +

@@ -2,9 +2,10 @@ package setup
 
 import (
 	"bufio"
-	"os"
 	"strconv"
 	"strings"
+
+	"github.com/ElodineOfficial/GobboNet/internal/engine"
 )
 
 // System RAM for the wizard's fit check (issue #65).
@@ -34,26 +35,29 @@ func ramGBFromMeminfo(text string) int {
 		if err != nil || kb <= 0 {
 			return 0
 		}
-		gib := kb / (1024 * 1024)
-		for _, std := range standardRAMGB {
-			if float64(std) < gib {
-				continue
-			}
-			if (float64(std)-gib)/float64(std) <= 0.08 {
-				return std
-			}
-			break
-		}
-		return int(gib)
+		return nominalRAMGB(kb / (1024 * 1024))
 	}
 	return 0
 }
 
+func nominalRAMGB(gib float64) int {
+	for _, std := range standardRAMGB {
+		if float64(std) < gib {
+			continue
+		}
+		if (float64(std)-gib)/float64(std) <= 0.08 {
+			return std
+		}
+		break
+	}
+	return int(gib)
+}
+
 // systemRAMGB is this machine's RAM in nominal GB, or 0 when unknown.
 func systemRAMGB() int {
-	b, err := os.ReadFile("/proc/meminfo")
-	if err != nil {
+	mib := engine.SystemRAMMiB()
+	if mib <= 0 {
 		return 0
 	}
-	return ramGBFromMeminfo(string(b))
+	return nominalRAMGB(float64(mib) / 1024)
 }

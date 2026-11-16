@@ -22,6 +22,8 @@ const (
 	KindReadOnly = "readonly"
 	// KindUnknown: the program's own path could not be found.
 	KindUnknown = "unknown"
+	// KindUnsupported: the platform has no published, in-place update format.
+	KindUnsupported = "unsupported"
 )
 
 // Place is where this install's program file is and what replaces it.
@@ -58,6 +60,15 @@ func Locate() Place {
 func locate(goos, goarch, exe, appImage, appDir string, writable func(string) bool) Place {
 	if exe == "" {
 		return Place{Kind: KindUnknown, Reason: "GobboNet could not find its own program file, so it cannot replace it."}
+	}
+	// A macOS release is an application bundle, not a bare executable. Replacing
+	// Contents/MacOS/gobbonet would leave the rest of the bundle stale and would
+	// also invalidate any future code signature. Until signed Mac bundles are in
+	// the update manifest, the honest result is manual rather than treating the
+	// inner binary like a Linux ZIP install.
+	if goos == "darwin" {
+		return Place{Kind: KindUnsupported, Path: exe,
+			Reason: "Automatic updates are not available for macOS yet. Download the new Mac package from the release page and replace GobboNet.app; your chats, models and settings are kept."}
 	}
 	if goos == "linux" {
 		if img := appImageOf(exe, appImage, appDir); img != "" {
