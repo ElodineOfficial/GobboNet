@@ -164,7 +164,12 @@ func Install(pin Pin, dir string, progress func(string)) (string, error) {
 	part := archive + ".part"
 	_ = os.Remove(part)
 
-	say("downloading %s", pin.Asset)
+	if runtime.GOOS == "darwin" {
+		// The macOS archive is about a thirtieth the size of the Vulkan ones.
+		say("downloading %s", pin.Asset)
+	} else {
+		say("downloading %s (about 300 MB; this is the only large download)", pin.Asset)
+	}
 	if err := download(pin.URL, part, say); err != nil {
 		_ = os.Remove(part)
 		return "", err
@@ -396,6 +401,11 @@ func untarGzip(archive, dir string) error {
 			if mode == 0 {
 				mode = 0o644
 			}
+			// An earlier engine may have left a symlink under this name.
+			// Opening it would write through the link into another file.
+			if err := clearForReplace(target); err != nil {
+				return err
+			}
 			out, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode)
 			if err != nil {
 				return err
@@ -425,11 +435,34 @@ func untarGzip(archive, dir string) error {
 		if !seen[l.target] {
 			return fmt.Errorf("engine archive symlink %s names missing target %s", l.name, l.target)
 		}
-		if err := os.Symlink(l.target, filepath.Join(dir, l.name)); err != nil {
+		linkPath := filepath.Join(dir, l.name)
+		// Installing over an earlier engine (a new pin, or a repeated install)
+		// meets the old links; os.Symlink refuses a name that is taken.
+		if err := clearForReplace(linkPath); err != nil {
+			return err
+		}
+		if err := os.Symlink(l.target, linkPath); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// clearForReplace removes the file or symlink an earlier install left at path.
+// It never removes a directory: the engine folder is flat, so a directory
+// under one of the archive's names is not something this code put there.
+func clearForReplace(path string) error {
+	st, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if st.IsDir() {
+		return fmt.Errorf("%s is a folder, and the engine archive has a file by that name", path)
+	}
+	return os.Remove(path)
 }
 
 func safeArchiveBase(name string) (string, bool) {

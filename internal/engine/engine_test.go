@@ -407,6 +407,62 @@ func TestUntarGzipRefusesUnsafeMemberPaths(t *testing.T) {
 	}
 }
 
+// Installing a second time (a new pin, or the same one again) meets the links
+// and files the first install left. The first version of this extractor failed
+// there with "file exists", which would have made every engine update on a Mac
+// a dead end.
+func TestUntarGzipInstallsOverAnEarlierInstall(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("creating symlinks needs privileges on Windows, and the tar.gz engine is macOS only")
+	}
+	archive := filepath.Join(t.TempDir(), "engine.tar.gz")
+	if err := os.WriteFile(archive, fakeTarArchive(t), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dest := t.TempDir()
+	for i := 1; i <= 2; i++ {
+		if err := untarGzip(archive, dest); err != nil {
+			t.Fatalf("install %d: %v", i, err)
+		}
+	}
+	if got, err := os.Readlink(filepath.Join(dest, "libggml.dylib")); err != nil || got != "libggml.0.dylib" {
+		t.Errorf("after reinstalling, libggml.dylib -> %q, %v", got, err)
+	}
+	if body, err := os.ReadFile(filepath.Join(dest, "libggml.0.20.0.dylib")); err != nil || string(body) != "Mach-O" {
+		t.Errorf("after reinstalling, the library reads %q, %v", body, err)
+	}
+}
+
+// A name that was a symlink in the old engine and is a plain file in the new
+// one must become that file. Written through the old link, the new bytes would
+// land in whatever the link pointed at instead.
+func TestUntarGzipDoesNotWriteThroughAnOldSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("creating symlinks needs privileges on Windows, and the tar.gz engine is macOS only")
+	}
+	dest := t.TempDir()
+	victim := filepath.Join(dest, "kept.txt")
+	if err := os.WriteFile(victim, []byte("untouched"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("kept.txt", filepath.Join(dest, "LICENSE")); err != nil {
+		t.Fatal(err)
+	}
+	archive := filepath.Join(t.TempDir(), "engine.tar.gz")
+	if err := os.WriteFile(archive, fakeTarArchive(t), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := untarGzip(archive, dest); err != nil {
+		t.Fatal(err)
+	}
+	if body, _ := os.ReadFile(victim); string(body) != "untouched" {
+		t.Errorf("the old link's target was overwritten: %q", body)
+	}
+	if st, err := os.Lstat(filepath.Join(dest, "LICENSE")); err != nil || st.Mode()&os.ModeSymlink != 0 {
+		t.Errorf("LICENSE is still a symlink after the install (%v)", err)
+	}
+}
+
 // The shipped pin must parse on the platforms the project builds for. This is
 // the one test that reads the real file, because a pin that this code cannot
 // read is a downloader that cannot run.

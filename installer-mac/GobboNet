@@ -37,8 +37,11 @@ case "${1:-}" in
     *) exec "$BIN" "$@" ;;
 esac
 
-NO_BROWSER=()
-[ "${1:-}" = "--no-browser" ] && NO_BROWSER=(--no-browser)
+# A plain string, not an array: macOS still ships bash 3.2, where expanding an
+# EMPTY array under `set -u` is an "unbound variable" error, and an ordinary
+# double-click is exactly the launch that has no arguments.
+NO_BROWSER=""
+[ "${1:-}" = "--no-browser" ] && NO_BROWSER="--no-browser"
 
 printf '=== %s launching GobboNet ===\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 
@@ -50,8 +53,8 @@ ENGINE="$ENGINE_DIR/llama-server"
 [ -x "$ENGINE" ] || die "llama-server is missing after engine installation"
 
 if ! "$BIN" setup --status >/dev/null 2>&1; then
-    "$BIN" setup --catalog "$CATALOG" --server-exe "$ENGINE" "${NO_BROWSER[@]}" \
+    "$BIN" setup --catalog "$CATALOG" --server-exe "$ENGINE" ${NO_BROWSER:+"$NO_BROWSER"} \
         || die "first-run setup did not finish"
 fi
 
-exec "$BIN" launch "${NO_BROWSER[@]}"
+exec "$BIN" launch ${NO_BROWSER:+"$NO_BROWSER"}
