@@ -24,6 +24,7 @@ import (
 	"archive/tar"
 	"archive/zip"
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -31,6 +32,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -216,8 +218,38 @@ func Install(pin Pin, dir string, progress func(string)) (string, error) {
 			"verified:        yes (sha256 matches the pin)\n"+
 			"installed by:    gobbonet engine install\n"), 0o644)
 
+	// macOS checks a program the first time it runs, and for a freshly unpacked
+	// engine that is slow: 13.7 s for `llama-server --help` on an M1 Max, measured,
+	// against 0.08 s for the second run. GobboNet's own start-up probes do not
+	// wait that long -- the memory-fitting check allows 10 s and remembers a
+	// failure -- so the first model load after an install was killed mid-check
+	// and stayed failed until GobboNet was restarted. Pay for that first run
+	// here, where a short wait is expected, and learn now if the engine cannot
+	// start at all.
+	if runtime.GOOS == "darwin" {
+		say("letting macOS check the new engine (its first run can take a little while)")
+		if err := firstRun(exe); err != nil {
+			return "", fmt.Errorf("the engine was unpacked but did not start: %w", err)
+		}
+	}
+
 	say("engine ready: %s", exe)
 	return exe, nil
+}
+
+// firstRunTimeout bounds the engine's first run. It is generous on purpose: the
+// wait belongs to the operating system, not the engine, and an install that
+// gives up early leaves the same trap for the first model load.
+const firstRunTimeout = 3 * time.Minute
+
+// firstRun starts the engine once and waits for it to exit. A variable so the
+// tests can watch it without waiting on a real program.
+var firstRun = func(exe string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), firstRunTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, exe, "--version")
+	cmd.Stdout, cmd.Stderr = io.Discard, io.Discard
+	return cmd.Run()
 }
 
 func extractArchive(archive, dir string) error {

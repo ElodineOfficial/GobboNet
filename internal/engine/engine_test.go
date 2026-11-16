@@ -7,6 +7,7 @@ import (
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -404,6 +405,37 @@ func TestUntarGzipRefusesUnsafeMemberPaths(t *testing.T) {
 	}
 	if err := untarGzip(archive, t.TempDir()); err == nil || !strings.Contains(err.Error(), "unsafe path") {
 		t.Fatalf("unsafe path error = %v", err)
+	}
+}
+
+// On macOS the install runs the engine once, so the operating system's slow
+// first-run check is over before GobboNet's own short start-up probes meet it.
+// A first run that fails means the install failed: an engine that cannot start
+// is not "ready".
+func TestInstallRunsTheEngineOnceOnMacOS(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("the first-run check is macOS only")
+	}
+	original := firstRun
+	t.Cleanup(func() { firstRun = original })
+
+	archive := fakeArchive(t)
+	var ran []string
+	firstRun = func(exe string) error { ran = append(ran, exe); return nil }
+	dest := filepath.Join(t.TempDir(), "llama-cpp")
+	pin := pinFor(t, t.TempDir(), archive)
+	pin.URL = serve(t, archive)
+	exe, err := Install(pin, dest, nil)
+	if err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	if len(ran) != 1 || ran[0] != exe {
+		t.Errorf("first run = %v, want exactly one run of %s", ran, exe)
+	}
+
+	firstRun = func(string) error { return errors.New("killed") }
+	if _, err := Install(pin, filepath.Join(t.TempDir(), "llama-cpp"), nil); err == nil || !strings.Contains(err.Error(), "did not start") {
+		t.Errorf("an engine that cannot start was reported installed: %v", err)
 	}
 }
 

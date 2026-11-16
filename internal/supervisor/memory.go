@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -48,7 +49,7 @@ func (s *Supervisor) memoryCapabilities() (result error) {
 		return s.memoryHelpErr
 	}
 	defer func() { s.memoryHelpStamp = stamp; s.memoryHelpErr = result }()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), memoryProbeTimeout(runtime.GOOS))
 	defer cancel()
 	cmd := exec.CommandContext(ctx, s.opts.ServerExe, "--help")
 	cmd.WaitDelay = time.Second
@@ -64,4 +65,17 @@ func (s *Supervisor) memoryCapabilities() (result error) {
 		}
 	}
 	return nil
+}
+
+// memoryProbeTimeout is how long `llama-server --help` may take. Ten seconds
+// is ample for a program the system has run before. macOS checks a program on
+// its first run, and that alone took 13.7 s for this engine on an M1 Max; the
+// installer now pays for that run itself, but an engine placed by hand, or the
+// first start after the system forgets it, would otherwise be killed mid-check
+// and the failure remembered for the life of the process.
+func memoryProbeTimeout(goos string) time.Duration {
+	if goos == "darwin" {
+		return time.Minute
+	}
+	return 10 * time.Second
 }
