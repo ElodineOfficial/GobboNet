@@ -58,12 +58,12 @@ mkdir -p "$MACOS"
 
 bash ./scripts/go-floor.sh go
 bash ./scripts/stage-web.sh
-CGO_ENABLED=0 GOOS=darwin GOARCH="$ARCH" go build -trimpath -ldflags "$LDFLAGS" -o "$MACOS/gobbonet" ./cmd/gobbonet
+CGO_ENABLED=0 GOOS=darwin GOARCH="$ARCH" go build -trimpath -ldflags "$LDFLAGS" -o "$MACOS/gobbonet-bin" ./cmd/gobbonet
 cp installer-mac/GobboNet "$MACOS/GobboNet"
 cp engine.sha256 "$MACOS/engine.sha256"
 cp catalog/models.ini "$MACOS/models.ini"
 cp docs/MAC-START-HERE.md "$ROOT/MAC-START-HERE.md"
-chmod 0755 "$MACOS/GobboNet" "$MACOS/gobbonet"
+chmod 0755 "$MACOS/GobboNet" "$MACOS/gobbonet-bin"
 chmod 0644 "$MACOS/engine.sha256" "$MACOS/models.ini" "$ROOT/MAC-START-HERE.md"
 
 cat > "$APP/Contents/Info.plist" <<EOF
@@ -88,15 +88,15 @@ VERIFY_CONFIG="$STAGE/verify-config"
 VERIFY_DATA="$STAGE/verify-data"
 mkdir -p "$VERIFY_CONFIG" "$VERIFY_DATA"
 XDG_CONFIG_HOME="$VERIFY_CONFIG" XDG_DATA_HOME="$VERIFY_DATA" \
-    "$MACOS/gobbonet" version | grep -F "$VERSION" >/dev/null \
+    "$MACOS/gobbonet-bin" version | grep -F "$VERSION" >/dev/null \
     || fail "the binary does not carry the package version"
 XDG_CONFIG_HOME="$VERIFY_CONFIG" XDG_DATA_HOME="$VERIFY_DATA" \
-    "$MACOS/gobbonet" engine --dir "$STAGE/no-engine" status >/dev/null 2>&1 \
+    "$MACOS/gobbonet-bin" engine --dir "$STAGE/no-engine" status >/dev/null 2>&1 \
     && fail "engine status found an engine in an empty folder"
 
 ditto -c -k --sequesterRsrc --keepParent "$ROOT" "$ZIP"
 unzip -tq "$ZIP" >/dev/null || fail "the ZIP does not pass unzip's integrity check"
-unzip -Z1 "$ZIP" | grep -qx "GobboNet-$VERSION-macOS-$ARCH/GobboNet.app/Contents/MacOS/gobbonet" \
+unzip -Z1 "$ZIP" | grep -qx "GobboNet-$VERSION-macOS-$ARCH/GobboNet.app/Contents/MacOS/gobbonet-bin" \
     || fail "the ZIP is missing the GobboNet binary"
 
 say "built $(basename "$ZIP")"

@@ -25,9 +25,13 @@ class MacPackage(unittest.TestCase):
             self.assertIn(required, build)
 
         launch = launcher.read_text()
+        self.assertIn('BIN="$HERE/gobbonet-bin"', launch)
         self.assertRegex(launch, r'engine --dir "\$ENGINE_DIR" install')
         self.assertIn('setup --catalog "$CATALOG" --server-exe "$ENGINE"', launch)
         self.assertIn('exec "$BIN" launch', launch)
+        # Default APFS volumes are case-insensitive. The Finder entry point and
+        # Go payload must not differ only by case or one overwrites the other.
+        self.assertNotEqual("GobboNet".casefold(), "gobbonet-bin".casefold())
 
     def test_package_sources_are_public_safe(self):
         files = [

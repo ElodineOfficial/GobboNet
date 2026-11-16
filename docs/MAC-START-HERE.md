@@ -54,7 +54,7 @@ starts and stops them with itself. To remove GobboNet's data as well as the app,
 run:
 
 ```sh
-/Applications/GobboNet.app/Contents/MacOS/gobbonet uninstall
+/Applications/GobboNet.app/Contents/MacOS/gobbonet-bin uninstall
 ```
 
 The command asks before removing data unless you pass an explicit confirmation

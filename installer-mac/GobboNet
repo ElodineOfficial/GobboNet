@@ -7,7 +7,7 @@ set -uo pipefail
 export PATH="/usr/bin:/bin:/usr/sbin:/sbin"
 
 HERE="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)"
-BIN="$HERE/gobbonet"
+BIN="$HERE/gobbonet-bin"
 CATALOG="$HERE/models.ini"
 DATA_ROOT="${XDG_DATA_HOME:-$HOME/.local/share}"
 DATA_DIR="$DATA_ROOT/gobbonet"
