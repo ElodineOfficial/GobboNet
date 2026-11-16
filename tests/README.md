@@ -3,6 +3,11 @@
 Developer tooling. Nothing here ships, and nothing here is needed to run
 GobboNet.
 
+`test-mac-package.py` pins the unsigned macOS app builder's inputs and its
+first-launch sequence: checked engine install, local setup, then the normal
+launcher. Archive extraction, symlink safety and Metal classification are
+covered by the Go suites under `internal/engine`.
+
 ## Frontend suites (`*.mjs`)
 
 Plain Node, no framework and no install step. They read the real files out of

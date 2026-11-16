@@ -1,0 +1,57 @@
+#!/bin/bash
+# Finder entry point for GobboNet.app. The app contains GobboNet itself, but
+# downloads the pinned llama.cpp engine on first launch so the engine archive
+# is checked by the same code used by `gobbonet engine install`.
+
+set -uo pipefail
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin"
+
+HERE="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)"
+BIN="$HERE/gobbonet"
+CATALOG="$HERE/models.ini"
+DATA_ROOT="${XDG_DATA_HOME:-$HOME/.local/share}"
+DATA_DIR="$DATA_ROOT/gobbonet"
+ENGINE_DIR="$DATA_DIR/llama-cpp"
+LOG="$DATA_DIR/launch.log"
+
+mkdir -p "$DATA_DIR" || exit 1
+chmod 700 "$DATA_DIR" 2>/dev/null || true
+if [ -t 1 ]; then
+    exec > >(tee -a "$LOG") 2>&1
+else
+    exec >>"$LOG" 2>&1
+fi
+
+die() {
+    printf 'ERROR: %s\nDetails are in %s\n' "$1" "$LOG"
+    /usr/bin/osascript -e 'display alert "GobboNet could not start" message "Open launch.log in GobboNet’s data folder for details." as critical' >/dev/null 2>&1 || true
+    exit 1
+}
+
+[ -x "$BIN" ] || die "the app bundle has no executable GobboNet binary"
+
+# App arguments are CLI commands except for --no-browser, which is the quiet
+# form of a normal app launch (used by harnesses and future login integration).
+case "${1:-}" in
+    ""|--no-browser) ;;
+    *) exec "$BIN" "$@" ;;
+esac
+
+NO_BROWSER=()
+[ "${1:-}" = "--no-browser" ] && NO_BROWSER=(--no-browser)
+
+printf '=== %s launching GobboNet ===\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+
+if ! "$BIN" engine --dir "$ENGINE_DIR" status >/dev/null 2>&1; then
+    printf ' [..] Installing the pinned llama.cpp engine for this Mac.\n'
+    "$BIN" engine --dir "$ENGINE_DIR" install || die "the pinned llama.cpp engine did not install"
+fi
+ENGINE="$ENGINE_DIR/llama-server"
+[ -x "$ENGINE" ] || die "llama-server is missing after engine installation"
+
+if ! "$BIN" setup --status >/dev/null 2>&1; then
+    "$BIN" setup --catalog "$CATALOG" --server-exe "$ENGINE" "${NO_BROWSER[@]}" \
+        || die "first-run setup did not finish"
+fi
+
+exec "$BIN" launch "${NO_BROWSER[@]}"
