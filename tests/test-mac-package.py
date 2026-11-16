@@ -6,7 +6,9 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
+import time
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -57,6 +59,9 @@ class MacPackage(unittest.TestCase):
         # Default Mac disks are case-insensitive: the Finder entry point and
         # the Go payload must not differ only by case, or one overwrites the
         # other in the bundle. Read both names out of the builder.
+        # No Dock icon: the program has no window to answer Quit, and a Dock
+        # icon that cannot be quit is an invitation to Force Quit.
+        self.assertIn("<key>LSUIElement</key><true/>", build)
         entry = re.search(r"<key>CFBundleExecutable</key><string>([^<]+)</string>", build).group(1)
         payload = re.search(r'-o "\$MACOS/([^"]+)"', build).group(1)
         self.assertNotEqual(entry.casefold(), payload.casefold())
@@ -83,6 +88,10 @@ class MacPackage(unittest.TestCase):
                 stub = macos / "gobbonet-bin"
                 stub.write_text(STUB)
                 stub.chmod(0o755)
+                # The retrieval model is already in place, so this run fetches nothing.
+                embeddings = tmp / "data/gobbonet/embeddings"
+                embeddings.mkdir(parents=True)
+                (embeddings / "nomic-embed-text-v1.5.Q8_0.gguf").write_text("stand-in")
                 calls = tmp / "calls.txt"
                 env = {"HOME": str(tmp), "XDG_DATA_HOME": str(tmp / "data"), "CALLS": str(calls)}
                 result = subprocess.run(["/bin/bash", str(macos / "GobboNet"), *args],
@@ -97,8 +106,101 @@ class MacPackage(unittest.TestCase):
                     "engine --dir " + engine + " install",
                     "setup --status",
                     "setup --catalog " + str(macos / "models.ini") + " --server-exe " + engine + "/llama-server" + tail,
+                    "config get embed_mode",
                     "launch" + tail,
                 ], detail)
+
+    # ---- opened again, stopped, and started after a forced quit ------------
+    #
+    # A stand-in that really runs: the system's own `sleep`, started under the
+    # program's command line (bash's `exec -a`), so `ps` shows what the launcher
+    # looks for. A COPY of a system program will not do: macOS kills those when
+    # they run from anywhere but the system volume. Nor will Python: the
+    # framework build re-executes itself and loses the name.
+
+    def _bundle(self, tmp):
+        macos = tmp / "GobboNet.app/Contents/MacOS"
+        macos.mkdir(parents=True)
+        shutil.copy(ROOT / "installer-mac/GobboNet", macos / "GobboNet")
+        (macos / "models.ini").write_text("")
+        (macos / "gobbonet-bin").write_text(STUB)
+        (macos / "gobbonet-bin").chmod(0o755)
+        engine_dir = tmp / "data/gobbonet/llama-cpp"
+        engine_dir.mkdir(parents=True)
+        embeddings = tmp / "data/gobbonet/embeddings"
+        embeddings.mkdir(parents=True)
+        (embeddings / "nomic-embed-text-v1.5.Q8_0.gguf").write_text("stand-in")
+        env = {"HOME": str(tmp), "XDG_DATA_HOME": str(tmp / "data"), "CALLS": str(tmp / "calls.txt"),
+               "GOBBONET_MAC_CHOICE": "open"}
+        return macos, engine_dir, env
+
+    def _standin(self, command_line):
+        proc = subprocess.Popen(["/bin/bash", "-c", 'exec -a "$0" /bin/sleep 600', command_line],
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        def reap():
+            if proc.poll() is None:
+                proc.kill()
+            proc.wait()
+        self.addCleanup(reap)
+        return proc
+
+    @unittest.skipUnless(sys.platform == "darwin", "matches processes the way macOS ps prints them")
+    def test_opened_again_while_running_starts_nothing_and_can_stop_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(os.path.realpath(tmp))
+            macos, engine_dir, env = self._bundle(tmp)
+            server = self._standin(str(macos / "gobbonet-bin") + " launch")
+            engine = self._standin(str(engine_dir / "llama-server") + " --port 11437")
+            time.sleep(0.5)
+            self.assertIsNone(server.poll(), "the stand-in server did not start")
+
+            # A quiet launch (a harness, or a login item one day) leaves it alone.
+            quiet = subprocess.run(["/bin/bash", str(macos / "GobboNet"), "--no-browser"],
+                                   env=env, capture_output=True, text=True)
+            self.assertEqual(quiet.returncode, 0, quiet.stderr)
+            self.assertIsNone(server.poll(), "a second quiet launch stopped the running server")
+
+            # "Stop GobboNet": the server and this install's engine are asked to stop.
+            stop = subprocess.run(["/bin/bash", str(macos / "GobboNet")],
+                                  env=dict(env, GOBBONET_MAC_CHOICE="stop"), capture_output=True, text=True)
+            self.assertEqual(stop.returncode, 0, stop.stderr)
+            self.assertIsNotNone(server.wait(timeout=5), "the server was not stopped")
+            self.assertIsNotNone(engine.wait(timeout=5), "the engine was not stopped")
+            # Asked to stop, never killed: SIGKILL is what orphans an engine.
+            self.assertEqual(server.returncode, -15)
+            self.assertEqual(engine.returncode, -15)
+
+    @unittest.skipUnless(sys.platform == "darwin", "matches processes the way macOS ps prints them")
+    def test_an_engine_left_by_a_forced_quit_is_stopped_before_starting(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(os.path.realpath(tmp))
+            macos, engine_dir, env = self._bundle(tmp)
+            # The engine file exists (so nothing is installed again) and a
+            # process is running under its name.
+            (engine_dir / "llama-server").write_text("#!/bin/sh\n")
+            (engine_dir / "llama-server").chmod(0o755)
+            orphan = self._standin(str(engine_dir / "llama-server") + " --port 11437")
+            # Somebody else's llama-server, somewhere else: never ours to stop.
+            other = self._standin(str(tmp / "elsewhere/llama-server") + " --port 8080")
+            time.sleep(0.5)
+            self.assertIsNone(orphan.poll(), "the stand-in engine did not start")
+
+            result = subprocess.run(["/bin/bash", str(macos / "GobboNet"), "--no-browser"],
+                                    env=env, capture_output=True, text=True)
+            log = (tmp / "data/gobbonet/launch.log").read_text()
+            self.assertEqual(result.returncode, 0, result.stderr + log)
+            self.assertIsNotNone(orphan.wait(timeout=5), "the leftover engine is still running")
+            self.assertIsNone(other.poll(), "a llama-server outside this install was stopped")
+            self.assertIn("still running; stopping it", log)
+            # The engine file is there, so nothing is installed again; the rest is a normal start.
+            engine = str(engine_dir)
+            self.assertEqual((tmp / "calls.txt").read_text().splitlines(), [
+                "engine --dir " + engine + " status",
+                "setup --status",
+                "setup --catalog " + str(macos / "models.ini") + " --server-exe " + engine + "/llama-server --no-browser",
+                "config get embed_mode",
+                "launch --no-browser",
+            ], log)
 
     def test_documented_unsigned_status_is_unambiguous(self):
         guide = (ROOT / "MAC-START-HERE.md").read_text()

@@ -22,13 +22,60 @@ else
     exec >>"$LOG" 2>&1
 fi
 
+# A plain string, not an array: macOS still ships bash 3.2, where expanding an
+# EMPTY array under `set -u` is an "unbound variable" error, and an ordinary
+# double-click is exactly the launch that has no arguments.
+NO_BROWSER=""
+[ "${1:-}" = "--no-browser" ] && NO_BROWSER="--no-browser"
+
 die() {
     printf 'ERROR: %s\nDetails are in %s\n' "$1" "$LOG"
-    /usr/bin/osascript -e 'display alert "GobboNet could not start" message "Open launch.log in GobboNet’s data folder for details." as critical' >/dev/null 2>&1 || true
+    # The alert waits for a click, so it is only for a person who opened the
+    # app: never for a quiet launch (--no-browser) or the tests.
+    if [ -z "$NO_BROWSER" ] && [ -z "${GOBBONET_MAC_CHOICE:-}" ]; then
+        /usr/bin/osascript -e 'display alert "GobboNet could not start" message "Open launch.log in GobboNet’s data folder for details." as critical' >/dev/null 2>&1 || true
+    fi
     exit 1
 }
 
 [ -x "$BIN" ] || die "the app bundle has no executable GobboNet binary"
+ENGINE="$ENGINE_DIR/llama-server"
+
+# pids_starting TEXT: the processes whose command line begins with TEXT. This
+# launcher and GobboNet start everything by absolute path, so a command line
+# that begins with this bundle's own program, or this install's own engine,
+# can only belong to this install -- never to another copy of GobboNet or to a
+# llama-server somebody runs themselves.
+pids_starting() {
+    /bin/ps -axo pid=,command= | /usr/bin/awk -v want="$1" \
+        '{ pid = $1; sub(/^[ \t]*[0-9]+[ \t]+/, ""); if (index($0, want) == 1) print pid }'
+}
+
+# stop_pids "PID PID...": ask them to stop (SIGTERM, which GobboNet treats as
+# Ctrl+C: it stops its engines and exits) and wait up to 20 seconds. Never
+# SIGKILL: that is what leaves an engine behind in the first place.
+stop_pids() {
+    [ -n "${1// /}" ] || return 0
+    for pid in $1; do kill -TERM "$pid" 2>/dev/null; done
+    tries=0
+    while [ "$tries" -lt 40 ]; do
+        alive=""
+        for pid in $1; do still_running "$pid" && alive=1; done
+        [ -z "$alive" ] && return 0
+        sleep 0.5
+        tries=$((tries + 1))
+    done
+    return 1
+}
+
+# still_running PID: a process that has exited but whose parent has not yet
+# collected it (state Z) still answers `kill -0`. It is gone for every purpose
+# here -- it holds no port and no memory -- so it is not waited for.
+still_running() {
+    state="$(/bin/ps -o stat= -p "$1" 2>/dev/null)"
+    case "$state" in ""|Z*) return 1 ;; esac
+    return 0
+}
 
 # App arguments are CLI commands except for --no-browser, which is the quiet
 # form of a normal app launch (used by harnesses and future login integration).
@@ -37,24 +84,87 @@ case "${1:-}" in
     *) exec "$BIN" "$@" ;;
 esac
 
-# A plain string, not an array: macOS still ships bash 3.2, where expanding an
-# EMPTY array under `set -u` is an "unbound variable" error, and an ordinary
-# double-click is exactly the launch that has no arguments.
-NO_BROWSER=""
-[ "${1:-}" = "--no-browser" ] && NO_BROWSER="--no-browser"
+# Opened while it is already running. The app has no window and no Dock icon
+# (LSUIElement), so opening it again is how someone comes back to it -- and the
+# one place to offer a clean stop. Without this the only ways to stop GobboNet
+# were Terminal and Force Quit, and a Force Quit (SIGKILL) cannot run GobboNet's
+# cleanup: the engine stays behind with the model in memory, and the next start
+# finds its port taken.
+SERVERS="$(pids_starting "$BIN launch") $(pids_starting "$BIN serve")"
+if [ -n "${SERVERS// /}" ]; then
+    [ -n "$NO_BROWSER" ] && exit 0
+    PORT="$("$BIN" config get listen_port 2>/dev/null || true)"
+    case "$PORT" in ""|*[!0-9]*) PORT=9066 ;; esac
+    # GOBBONET_MAC_CHOICE answers the question for the tests, with no dialog.
+    CHOICE="${GOBBONET_MAC_CHOICE:-}"
+    if [ -z "$CHOICE" ]; then
+        CHOICE="$(/usr/bin/osascript -e 'button returned of (display dialog "GobboNet is already running." buttons {"Stop GobboNet", "Open the chat"} default button "Open the chat" with title "GobboNet")' 2>/dev/null || true)"
+    fi
+    case "$CHOICE" in
+        "Stop GobboNet"|stop)
+            printf '=== %s stopping GobboNet ===\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+            stop_pids "$SERVERS"
+            stop_pids "$(pids_starting "$ENGINE ")"
+            [ -n "${GOBBONET_MAC_CHOICE:-}" ] || /usr/bin/osascript -e 'display notification "GobboNet has stopped." with title "GobboNet"' >/dev/null 2>&1 || true
+            ;;
+        *)
+            /usr/bin/open "http://127.0.0.1:$PORT/" >/dev/null 2>&1 || true
+            ;;
+    esac
+    exit 0
+fi
+if [ -n "$(pids_starting "$BIN setup ")" ]; then
+    [ -n "$NO_BROWSER" ] || [ -n "${GOBBONET_MAC_CHOICE:-}" ] || /usr/bin/osascript -e 'display dialog "GobboNet is still being set up. Finish the setup page in your browser." buttons {"OK"} default button "OK" with title "GobboNet"' >/dev/null 2>&1 || true
+    exit 0
+fi
 
 printf '=== %s launching GobboNet ===\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+
+# GobboNet is not running, but an engine from this install is: GobboNet was
+# force-quit or crashed, and nothing was left to stop its engine. Started as it
+# is, GobboNet would report "engine port is already occupied" and load nothing.
+LEFT="$(pids_starting "$ENGINE ")"
+if [ -n "$LEFT" ]; then
+    printf ' [*]  An engine from an earlier GobboNet was still running; stopping it.\n'
+    stop_pids "$LEFT" || die "an engine from an earlier GobboNet would not stop"
+fi
 
 if ! "$BIN" engine --dir "$ENGINE_DIR" status >/dev/null 2>&1; then
     printf ' [..] Installing the pinned llama.cpp engine for this Mac.\n'
     "$BIN" engine --dir "$ENGINE_DIR" install || die "the pinned llama.cpp engine did not install"
 fi
-ENGINE="$ENGINE_DIR/llama-server"
 [ -x "$ENGINE" ] || die "llama-server is missing after engine installation"
 
 if ! "$BIN" setup --status >/dev/null 2>&1; then
     "$BIN" setup --catalog "$CATALOG" --server-exe "$ENGINE" ${NO_BROWSER:+"$NO_BROWSER"} \
         || die "first-run setup did not finish"
+fi
+
+# The small retrieval model (about 146 MB, once): what lets a character find the
+# relevant part of its lore by meaning. The Windows first run and the Linux
+# setup wizard download this same pinned file; nothing did on a Mac, so
+# semantic search stayed off. The pin, the name and the address are the ones in
+# internal/config/embed.go, and tests/test-embed-supervisor.py holds them
+# equal. A failed download never stops the chat from starting.
+EMBED_FILE="nomic-embed-text-v1.5.Q8_0.gguf"
+EMBED_SHA256="3e24342164b3d94991ba9692fdc0dd08e3fd7362e0aacc396a9a5c54a544c3b7"
+EMBED_URL="https://huggingface.co/nomic-ai/nomic-embed-text-v1.5-GGUF/resolve/main/$EMBED_FILE"
+EMBED_DIR="$DATA_DIR/embeddings"
+EMBED_PART="$EMBED_DIR/${EMBED_FILE%.gguf}.part"
+EMBED_MODE="$("$BIN" config get embed_mode 2>/dev/null || true)"
+if [ "$EMBED_MODE" != "off" ] && [ ! -f "$EMBED_DIR/$EMBED_FILE" ] && [ ! -f "$DATA_DIR/models/$EMBED_FILE" ]; then
+    printf ' [..] Fetching the retrieval model (about 146 MB, one time).\n'
+    if mkdir -p "$EMBED_DIR" \
+            && /usr/bin/curl -fL --retry 2 -sS -o "$EMBED_PART" "$EMBED_URL" \
+            && [ "$(/usr/bin/shasum -a 256 "$EMBED_PART" | /usr/bin/awk '{print $1}')" = "$EMBED_SHA256" ]; then
+        mv "$EMBED_PART" "$EMBED_DIR/$EMBED_FILE"
+        printf ' [OK] Retrieval model downloaded and checked against its pin.\n'
+    else
+        rm -f "$EMBED_PART"
+        printf ' [*]  The retrieval model was not downloaded, or did not match its pin, so\n'
+        printf '      nothing was kept. Semantic search stays off; chat is unaffected. It\n'
+        printf '      is tried again the next time GobboNet is opened.\n'
+    fi
 fi
 
 exec "$BIN" launch ${NO_BROWSER:+"$NO_BROWSER"}

@@ -24,10 +24,11 @@ const DefaultEmbedCtx = 2048
 // GobboNet's own embedding model, its download address and its pin.
 //
 // The pin is the SHA-256 HuggingFace records for the file. It is written in
-// three other places, each checked equal to this one by
+// four other places, each checked equal to this one by
 // tests/test-embed-supervisor.py: launch.bat (EMBED_PIN_SHA256, the Windows
-// first-run download) and installer-linux/gobbonet-setup.py with its
-// linux-amd64 copy (the Linux setup wizard's download).
+// first-run download), installer-linux/gobbonet-setup.py with its
+// linux-amd64 copy (the Linux setup wizard's download), and
+// installer-mac/GobboNet (EMBED_SHA256, the macOS app's first launch).
 const (
 	EmbedModelFile   = "nomic-embed-text-v1.5.Q8_0.gguf"
 	EmbedModelURL    = "https://huggingface.co/nomic-ai/nomic-embed-text-v1.5-GGUF/resolve/main/" + EmbedModelFile

@@ -79,6 +79,7 @@ cat > "$APP/Contents/Info.plist" <<EOF
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>$RELEASE</string>
   <key>CFBundleVersion</key><string>$SERIAL</string>
+  <key>LSUIElement</key><true/>
 </dict></plist>
 EOF
 chmod 0644 "$APP/Contents/Info.plist"

@@ -54,6 +54,7 @@ def main():
     go = read("internal/config/embed.go")
     setup = read("installer-linux/gobbonet-setup.py")
     launch = read("installer-linux/gobbonet-launch")
+    mac = read("installer-mac/GobboNet")
 
     print("the launchers start no embedding server")
     check("launch.bat has no --embeddings command line", "--embeddings" not in bat_code)
@@ -82,6 +83,7 @@ def main():
         "launch.bat": re.findall(r'set "EMBED_PIN_SHA256=([0-9a-f]{64})"', bat),
         "internal/config/embed.go": re.findall(r'EmbedModelSHA256 = "([0-9a-f]{64})"', go),
         "gobbonet-setup.py": re.findall(r"expected = '([0-9a-f]{64})'", setup),
+        "installer-mac/GobboNet": re.findall(r'^EMBED_SHA256="([0-9a-f]{64})"', mac, re.M),
     }
     flat = [p for v in pins.values() for p in v]
     check("each place has exactly one pin", all(len(v) == 1 for v in pins.values()), pins)
@@ -90,14 +92,18 @@ def main():
         "launch.bat": re.findall(r'set "EMBED_MODEL_GGUF=([^"]+)"', bat),
         "embed.go": re.findall(r'EmbedModelFile += "([^"]+)"', go),
         "gobbonet-setup.py": re.findall(r"final = dest / '([^']+)'", setup),
+        "installer-mac/GobboNet": re.findall(r'^EMBED_FILE="([^"]+)"', mac, re.M),
     }
     check("the file name is the same everywhere", len({n for v in names.values() for n in v}) == 1, names)
     bat_url = re.findall(r'set "EMBED_MODEL_URL=([^"?]+)', bat)
     go_url = re.findall(r'EmbedModelURL += "([^"]+)" \+ EmbedModelFile', go)
     setup_url = re.findall(r"url = '([^']+)' \+ final\.name", setup)
+    mac_url = re.findall(r'^EMBED_URL="([^"$]+)\$EMBED_FILE"', mac, re.M)
     check("and so is where it comes from",
-          bat_url and go_url and setup_url and bat_url[0] == go_url[0] + names["embed.go"][0] == setup_url[0] + names["embed.go"][0],
-          (bat_url, go_url, setup_url))
+          bat_url and go_url and setup_url and mac_url
+          and bat_url[0] == go_url[0] + names["embed.go"][0] == setup_url[0] + names["embed.go"][0]
+          and mac_url[0] == go_url[0],
+          (bat_url, go_url, setup_url, mac_url))
 
     print("\nthe settings and the report")
     toml = read("internal/config/file.go")
