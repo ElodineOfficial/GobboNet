@@ -27,7 +27,7 @@ The macOS builder compiles the app for the Mac it runs on (`arm64` or `amd64`).
 It packages no engine: the app's first launch calls the pinned
 `gobbonet engine install` path, which downloads the matching upstream macOS
 tarball, checks SHA-256, and preserves its dylib symlinks. The resulting ZIP is
-unsigned and not notarized; `docs/MAC-START-HERE.md` says exactly what that
+unsigned and not notarized; `MAC-START-HERE.md` says exactly what that
 means and links Apple's current opening procedure.
 
 The AppImage is made from the `.deb`, not beside it, so the two carry the same

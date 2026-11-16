@@ -89,6 +89,7 @@ func TestRemoveHintFollowsTheInstall(t *testing.T) {
 		{"linux", "/usr/lib64/gobbonet/gobbonet", "sudo dnf remove gobbonet", "apt"},
 		{"linux", "/usr/lib/gobbonet/gobbonet", "sudo apt remove gobbonet", "dnf"},
 		{"windows", `C:\Users\a\AppData\Local\GobboNet\gobbonet.exe`, "Settings > Apps > GobboNet > Uninstall", "sudo"},
+		{"darwin", "/Applications/GobboNet.app/Contents/MacOS/gobbonet-bin", "delete /Applications/GobboNet.app", "unpacked"},
 		{"linux", "/home/a/Downloads/GobboNet/linux-amd64/gobbonet", "/home/a/Downloads/GobboNet/linux-amd64", "sudo"},
 		{"linux", "", "delete the folder you unpacked GobboNet into", "sudo"},
 		// Prefixes, not substrings: a ZIP unpacked somewhere whose path merely

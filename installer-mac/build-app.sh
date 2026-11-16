@@ -45,13 +45,13 @@ case "$(uname -m)" in
     *) fail "unsupported Mac architecture: $(uname -m)" ;;
 esac
 
-ZIP="$OUT/GobboNet-$VERSION-macOS-$ARCH.zip"
+ZIP="$OUT/GobboNet-$VERSION-macos-$ARCH.zip"
 [ ! -e "$ZIP" ] || fail "$ZIP already exists; move it aside before rebuilding"
 
 STAGE="$(mktemp -d "${TMPDIR:-/tmp}/gobbonet-mac.XXXXXX")"
 cleanup() { rm -R "$STAGE"; }
 trap cleanup EXIT
-ROOT="$STAGE/GobboNet-$VERSION-macOS-$ARCH"
+ROOT="$STAGE/GobboNet-$VERSION-macos-$ARCH"
 APP="$ROOT/GobboNet.app"
 MACOS="$APP/Contents/MacOS"
 mkdir -p "$MACOS"
@@ -62,7 +62,7 @@ CGO_ENABLED=0 GOOS=darwin GOARCH="$ARCH" go build -trimpath -ldflags "$LDFLAGS" 
 cp installer-mac/GobboNet "$MACOS/GobboNet"
 cp engine.sha256 "$MACOS/engine.sha256"
 cp catalog/models.ini "$MACOS/models.ini"
-cp docs/MAC-START-HERE.md "$ROOT/MAC-START-HERE.md"
+cp MAC-START-HERE.md "$ROOT/MAC-START-HERE.md"
 chmod 0755 "$MACOS/GobboNet" "$MACOS/gobbonet-bin"
 chmod 0644 "$MACOS/engine.sha256" "$MACOS/models.ini" "$ROOT/MAC-START-HERE.md"
 
@@ -96,7 +96,7 @@ XDG_CONFIG_HOME="$VERIFY_CONFIG" XDG_DATA_HOME="$VERIFY_DATA" \
 
 ditto -c -k --sequesterRsrc --keepParent "$ROOT" "$ZIP"
 unzip -tq "$ZIP" >/dev/null || fail "the ZIP does not pass unzip's integrity check"
-unzip -Z1 "$ZIP" | grep -qx "GobboNet-$VERSION-macOS-$ARCH/GobboNet.app/Contents/MacOS/gobbonet-bin" \
+unzip -Z1 "$ZIP" | grep -qx "GobboNet-$VERSION-macos-$ARCH/GobboNet.app/Contents/MacOS/gobbonet-bin" \
     || fail "the ZIP is missing the GobboNet binary"
 
 say "built $(basename "$ZIP")"

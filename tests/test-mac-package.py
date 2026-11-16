@@ -37,14 +37,14 @@ class MacPackage(unittest.TestCase):
         files = [
             ROOT / "installer-mac/build-app.sh",
             ROOT / "installer-mac/GobboNet",
-            ROOT / "docs/MAC-START-HERE.md",
+            ROOT / "MAC-START-HERE.md",
         ]
         private = re.compile(r"/Users/[A-Za-z0-9._-]+|192\.168\.|10\.\d+\.\d+\.\d+")
         for path in files:
             self.assertIsNone(private.search(path.read_text()), str(path))
 
     def test_documented_unsigned_status_is_unambiguous(self):
-        guide = (ROOT / "docs/MAC-START-HERE.md").read_text()
+        guide = (ROOT / "MAC-START-HERE.md").read_text()
         self.assertIn("unsigned, unnotarized", guide)
         self.assertIn("support.apple.com/en-us/102445", guide)
         self.assertNotIn("right-click", guide.lower())

@@ -22,6 +22,24 @@ GobboNet stores configuration under `~/.config/gobbonet` and models, engine,
 logs, and conversations under `~/.local/share/gobbonet`. The app bundle itself
 contains no model and can be replaced without removing those files.
 
+## Build from source
+
+Go 1.25 or newer is required. From the repository root:
+
+```sh
+bash ./scripts/stage-web.sh
+go build ./cmd/gobbonet
+```
+
+To build the app ZIP on a Mac instead:
+
+```sh
+bash ./installer-mac/build-app.sh dist
+```
+
+The builder refuses a dirty tree by default so the version stamped into the
+binary names the code in the archive.
+
 ## What works
 
 - Apple Silicon and Intel Mac engine downloads are pinned by architecture.
@@ -30,11 +48,12 @@ contains no model and can be replaced without removing those files.
 - Chat model supervision, streaming, detached jobs, embeddings, tokenization,
   model stand-down and wake, and clean child-process shutdown use the same Go
   paths as Linux and Windows.
-- `GobboNet.app/Contents/MacOS/gobbonet doctor` prints the resolved paths,
+- `GobboNet.app/Contents/MacOS/gobbonet-bin doctor` prints the resolved paths,
   engine and Metal classification.
 
 Start at login is not offered by this package yet. The Linux XDG login entry is
-not written on macOS.
+not written on macOS. Automatic in-place app updates are also not offered; a
+new app ZIP replaces the bundle while keeping data outside it.
 
 ## LAN access and the firewall
 
