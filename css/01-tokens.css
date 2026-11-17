@@ -130,6 +130,21 @@ body::after {
 ::selection { background: var(--magenta); color: var(--white); }
 :focus-visible { outline: none; box-shadow: var(--glow-cyan); border-color: var(--cyan-bright); }
 
+/* Forced colours drop box-shadows, so the glow above vanishes there. */
+@media (forced-colors: active) {
+  :focus-visible { outline: 2px solid Highlight !important; outline-offset: 2px; }
+  input[type="range"] { border: 1px solid CanvasText; }
+}
+
+.cot-summary:focus-visible, .code-block pre:focus-visible, .landing-preset-card:focus-visible {
+  outline: 2px solid var(--cyan-bright); outline-offset: -2px;
+}
+/* The .form-group line outweighs `.form-group input:focus { outline: none }` in 05-modals.css. */
+input:is([type="range"], [type="radio"], [type="checkbox"]):focus-visible,
+.form-group input:is([type="range"], [type="radio"], [type="checkbox"]):focus-visible {
+  outline: 2px solid var(--cyan-bright); outline-offset: 3px;
+}
+
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: var(--black); }
 ::-webkit-scrollbar-thumb { background: var(--cyan-dim); border-radius: var(--radius); }

@@ -112,6 +112,7 @@
   flex-shrink: 0;
 }
 .folder-hdr:hover .folder-hdr-btns { opacity: 1; }
+.folder-hdr:has(:focus-visible) .folder-hdr-btns { opacity: 1; }
 .folder-btn {
   background: none;
   border: none;
