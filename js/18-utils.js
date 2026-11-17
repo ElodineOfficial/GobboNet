@@ -2628,3 +2628,17 @@ if (typeof document !== 'undefined' && document.addEventListener) {
     undoLast();
   });
 }
+
+// A row holds buttons of its own, so it can't be a <button>: its name is role="button", and this clicks it.
+if (typeof document !== 'undefined' && document.addEventListener) {
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    if (e.defaultPrevented) return;          // its own key handler took it (the lore chip has one)
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    const t = e.target;
+    if (!t || !t.matches || !t.matches('[role="button"][tabindex]')) return;
+    if (t.matches('button, a, input, select, textarea, summary') || t.isContentEditable) return;
+    e.preventDefault();                      // Space would scroll the list
+    t.click();
+  });
+}
