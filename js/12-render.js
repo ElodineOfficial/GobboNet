@@ -205,7 +205,7 @@ function openTagEditor(threadId, event) {
       <div class="pop-add-row">
         <input class="pop-tag-input" id="pop-tag-input" placeholder="new tag..." maxlength="24"
                onkeydown="handleTagKey('${escapeJsAttr(threadId)}',event)" autocomplete="off">
-        <button class="pop-add-btn" onclick="addTagFromInput('${escapeJsAttr(threadId)}')">+</button>
+        <button class="pop-add-btn" aria-label="Add" onclick="addTagFromInput('${escapeJsAttr(threadId)}')">+</button>
       </div>
       <div class="pop-hint">Enter to add &nbsp;&middot;&nbsp; type #tag in search to filter</div>
     </div>`);
@@ -287,13 +287,13 @@ function renderThreadItem(t) {
       </div>
       ${tagPills}
     </div>
-    <div class="thread-ctrl">
-      <button class="thread-ctrl-btn thread-pin-btn${t.pinned?' is-pinned':''}" onclick="togglePin('${escapeJsAttr(t.id)}',event)" title="${t.pinned?'Unpin':'Pin'}">&#128204;</button>
-      <button class="thread-ctrl-btn thread-folder-btn" onclick="openFolderPicker('${escapeJsAttr(t.id)}',event)" title="Move to folder">&#128193;</button>
-      <button class="thread-ctrl-btn thread-tag-btn" onclick="openTagEditor('${escapeJsAttr(t.id)}',event)" title="Tags">&#127991;</button>
-      <button class="thread-ctrl-btn thread-export-btn" onclick="exportThread('${escapeJsAttr(t.id)}',event)" title="Export this conversation as JSON, with the characters it was held with">&#8681;</button>
-      <button class="thread-ctrl-btn thread-edit-btn" onclick="startRename('${escapeJsAttr(t.id)}',event)" title="Rename">&#9998;</button>
-      <button class="thread-ctrl-btn thread-del-btn" onclick="deleteThread('${escapeJsAttr(t.id)}',event)" title="Delete">&times;</button>
+    <div class="thread-ctrl" role="group" aria-label="${escapeHtml(t.name)}">
+      <button class="thread-ctrl-btn thread-pin-btn${t.pinned?' is-pinned':''}" onclick="togglePin('${escapeJsAttr(t.id)}',event)" title="${t.pinned?'Unpin':'Pin'}" aria-label="${t.pinned?'Unpin':'Pin'}">&#128204;</button>
+      <button class="thread-ctrl-btn thread-folder-btn" onclick="openFolderPicker('${escapeJsAttr(t.id)}',event)" title="Move to folder" aria-label="Move to folder">&#128193;</button>
+      <button class="thread-ctrl-btn thread-tag-btn" onclick="openTagEditor('${escapeJsAttr(t.id)}',event)" title="Tags" aria-label="Tags">&#127991;</button>
+      <button class="thread-ctrl-btn thread-export-btn" onclick="exportThread('${escapeJsAttr(t.id)}',event)" title="Export this conversation as JSON, with the characters it was held with" aria-label="Export">&#8681;</button>
+      <button class="thread-ctrl-btn thread-edit-btn" onclick="startRename('${escapeJsAttr(t.id)}',event)" title="Rename" aria-label="Rename">&#9998;</button>
+      <button class="thread-ctrl-btn thread-del-btn" onclick="deleteThread('${escapeJsAttr(t.id)}',event)" title="Delete" aria-label="Delete">&times;</button>
     </div>
   </div>`;
 }
@@ -353,8 +353,8 @@ function renderSidebar() {
         <span class="folder-name-text">${escapeHtml(folder.name)}</span>
         <span class="folder-count">${totalInFolder}</span>
         <div class="folder-hdr-btns">
-          <button class="folder-btn" onclick="startFolderRename('${escapeJsAttr(folder.id)}',event)" title="Rename">&#9998;</button>
-          <button class="folder-btn folder-del" onclick="deleteFolder('${escapeJsAttr(folder.id)}',event)" title="Delete">&times;</button>
+          <button class="folder-btn" onclick="startFolderRename('${escapeJsAttr(folder.id)}',event)" title="Rename" aria-label="Rename folder ${escapeHtml(folder.name)}">&#9998;</button>
+          <button class="folder-btn folder-del" onclick="deleteFolder('${escapeJsAttr(folder.id)}',event)" title="Delete" aria-label="Delete folder ${escapeHtml(folder.name)}">&times;</button>
         </div>
       </div>
       ${isOpen ? `<div class="folder-threads">${fThreads.length > 0 ? fThreads.map(renderThreadItem).join('') : '<div class="folder-empty">// empty</div>'}</div>` : ''}

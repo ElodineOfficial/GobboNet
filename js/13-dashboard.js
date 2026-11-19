@@ -283,9 +283,9 @@ function renderMessages() {
       const nextSib = siblings[myIdx + 1];
       sibNavHtml = `
         <div class="branch-sibling-nav">
-          <button class="branch-nav-btn" ${!prevSib ? 'disabled' : ''} onclick="switchToBranch('${escapeJsAttr(prevSib ? prevSib.id : '')}')" title="Previous branch">◀</button>
+          <button class="branch-nav-btn" ${!prevSib ? 'disabled' : ''} onclick="switchToBranch('${escapeJsAttr(prevSib ? prevSib.id : '')}')" title="Previous branch" aria-label="Previous branch">◀</button>
           <span class="branch-nav-label">Branch ${myIdx + 1} / ${totalSibs}</span>
-          <button class="branch-nav-btn" ${!nextSib ? 'disabled' : ''} onclick="switchToBranch('${escapeJsAttr(nextSib ? nextSib.id : '')}')" title="Next branch">▶</button>
+          <button class="branch-nav-btn" ${!nextSib ? 'disabled' : ''} onclick="switchToBranch('${escapeJsAttr(nextSib ? nextSib.id : '')}')" title="Next branch" aria-label="Next branch">▶</button>
         </div>`;
     }
 
@@ -378,9 +378,9 @@ function renderMessages() {
           const atLast  = (m.activeVariant ?? 0) === total - 1;
           actionsHtml += `
           <span class="variant-nav" title="Flip between prior wordings — each keeps its own AI replies and rerolls. Flipping restores that wording's whole branch below; it doesn't regenerate or spend tokens. To branch anew from a wording, flip to it and Edit.">
-            <button class="variant-nav-btn" ${atFirst ? 'disabled' : ''} onclick="switchVariant(${i}, -1)" title="Previous wording (restores its branch)">◀</button>
+            <button class="variant-nav-btn" ${atFirst ? 'disabled' : ''} onclick="switchVariant(${i}, -1)" title="Previous wording (restores its branch)" aria-label="Previous wording">◀</button>
             <span class="variant-nav-label">${cur}/${total}</span>
-            <button class="variant-nav-btn" ${atLast ? 'disabled' : ''} onclick="switchVariant(${i}, 1)" title="Next wording (restores its branch)">▶</button>
+            <button class="variant-nav-btn" ${atLast ? 'disabled' : ''} onclick="switchVariant(${i}, 1)" title="Next wording (restores its branch)" aria-label="Next wording">▶</button>
           </span>`;
         }
       } else {
@@ -402,9 +402,9 @@ function renderMessages() {
           const atLast  = (m.activeVariant ?? 0) === total - 1;
           actionsHtml += `
           <span class="variant-nav" title="Flip between reroll variants — every regeneration is kept">
-            <button class="variant-nav-btn" ${atFirst ? 'disabled' : ''} onclick="switchVariant(${i}, -1)" title="Previous variant">◀</button>
+            <button class="variant-nav-btn" ${atFirst ? 'disabled' : ''} onclick="switchVariant(${i}, -1)" title="Previous variant" aria-label="Previous variant">◀</button>
             <span class="variant-nav-label">${cur}/${total}</span>
-            <button class="variant-nav-btn" ${atLast ? 'disabled' : ''} onclick="switchVariant(${i}, 1)" title="Next variant">▶</button>
+            <button class="variant-nav-btn" ${atLast ? 'disabled' : ''} onclick="switchVariant(${i}, 1)" title="Next variant" aria-label="Next variant">▶</button>
           </span>`;
         }
 

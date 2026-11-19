@@ -387,7 +387,11 @@ function filesPanelSync(force) {
   if (els.count) {
     const n = _fp.files.length;
     els.count.textContent = n ? String(n) : '';
-    if (els.toggle) els.toggle.title = n ? 'Files in this chat (' + n + ')' : 'Files in this chat';
+    if (els.toggle) {
+      const name = n ? 'Files in this chat (' + n + ')' : 'Files in this chat';
+      els.toggle.title = name;
+      els.toggle.setAttribute('aria-label', name);   // its text is a symbol and a number
+    }
   }
   _filesShowToggle(els);
   if (!_fp.open || (!changed && !force)) return;
