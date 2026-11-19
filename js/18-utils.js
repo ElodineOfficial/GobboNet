@@ -2642,3 +2642,16 @@ if (typeof document !== 'undefined' && document.addEventListener) {
     t.click();
   });
 }
+
+// After a mouse click, focus that a screen reader moves isn't keyboard focus to the browser (:focus-visible),
+// so a row's hidden buttons stayed hidden under it. This marks focus that came from a click; the CSS opens
+// the buttons for any other.
+if (typeof document !== 'undefined' && document.addEventListener) {
+  let pointerAt = 0;
+  const pointer = () => { pointerAt = Date.now(); };
+  document.addEventListener('pointerdown', pointer, true);
+  document.addEventListener('pointerup', pointer, true);
+  document.addEventListener('focusin', () => {
+    document.documentElement.toggleAttribute('data-pointer-focus', Date.now() - pointerAt < 500);
+  }, true);
+}

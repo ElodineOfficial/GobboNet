@@ -41,7 +41,9 @@ on it with the keyboard, every five seconds.
   `renderPersonaGrid` (`data-card-id` is new on character and persona rows) and
   `renderMessages()`, for the message rows and the home page; the home page
   keeps its existing rule, only when it was already showing, as the scroll
-  fix does. Nothing happens unless focus was inside the container. Opening a chat still moves focus to
+  fix does. Nothing happens unless focus was inside the container. Putting
+  focus back keeps the page's note of whether the last focus came from a click
+  (see the focus change), since it isn't a new move. Opening a chat still moves focus to
   the message box, as `switchThread` already did.
 - `sameMarkup(container, html)`, beside it: the sidebar and the home page skip
   a repaint whose HTML would build exactly what is already there (compared node

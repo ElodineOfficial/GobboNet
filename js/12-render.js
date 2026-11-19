@@ -417,7 +417,11 @@ function keepFocusAcross(container, paint) {
     for (const i of path) n = n && n.children[i];
     if (n && n.tagName === a.tagName) b = n;
   }
-  if (b && typeof b.focus === 'function') b.focus({ preventScroll: true });
+  if (b && typeof b.focus === 'function') {
+    const root = document.documentElement, byPointer = root.hasAttribute('data-pointer-focus');
+    b.focus({ preventScroll: true });
+    root.toggleAttribute('data-pointer-focus', byPointer);   // putting focus back isn't a new move
+  }
 }
 
 // A repaint that would change nothing is skipped: rebuilding moves focus, and a screen reader reads it out again.

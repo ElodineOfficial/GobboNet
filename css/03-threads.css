@@ -93,8 +93,10 @@
   transition: max-width 0.2s ease, opacity 0.15s ease;
 }
 .thread-item:hover .thread-ctrl { max-width: 200px; opacity: 1; }
-.thread-item:has(:focus-visible) .thread-ctrl { max-width: 200px; opacity: 1; }
-.thread-item:has(:focus-visible) .thread-pin-badge { display: none; }
+.thread-item:has(:focus-visible) .thread-ctrl,
+html:not([data-pointer-focus]) .thread-item:focus-within .thread-ctrl { max-width: 200px; opacity: 1; }
+.thread-item:has(:focus-visible) .thread-pin-badge,
+html:not([data-pointer-focus]) .thread-item:focus-within .thread-pin-badge { display: none; }
 .thread-ctrl-btn {
   background: none;
   border: none;

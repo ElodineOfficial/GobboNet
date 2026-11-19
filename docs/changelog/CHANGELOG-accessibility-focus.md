@@ -30,6 +30,18 @@ element.
   one of them has keyboard focus: `:has(:focus-visible)`, so a mouse click
   leaves nothing different behind, and a browser without `:has()` drops the
   rule and behaves as before.
+- They also open for any focus inside them that didn't come from a click
+  (`:focus-within` under `html:not([data-pointer-focus])`). After a mouse
+  click, focus that a screen reader moves (NVDA handling Tab itself) isn't
+  `:focus-visible` to the browser, so the buttons stayed hidden under it for
+  anyone who uses a screen reader and also sees the screen. `js/18-utils.js`
+  sets `data-pointer-focus` on `<html>` when focus arrives within half a
+  second of a pointer press, and clears it for any other focus.
+- The chat buttons draw focus as an inset outline too (`.thread-ctrl-btn` in
+  the `01-tokens.css` rule below). Their row hides whatever spills past it, so
+  the glow was cut off at the top and bottom and on the outer side of the
+  first and last button. The outline also shows for a screen reader's focus
+  after a click, which the browser draws no glow for.
 - `css/01-tokens.css`: `.cot-summary`, `.code-block pre` and
   `.landing-preset-card` draw keyboard focus as an inset outline; range,
   radio and checkbox inputs get an outline (with a `.form-group` copy,
@@ -49,4 +61,9 @@ element.
   to 0 as well. (More stops after, because chats and folders can be reached
   now; see the next change.) With a panel open, Tab still walks out behind
   it; that is a separate change.
+- A headless script (not in this repo) in Chromium, Firefox and WebKit: after a
+  mouse click, focus moved by script onto a chat's button (as a screen reader
+  moves it) opens the chat's buttons; and a chat pinned with the mouse hides
+  its buttons again once the mouse leaves. Both pass in all three; on main
+  the first fails and the second passes.
 - `tests/test-accessibility.mjs` section B; `tests/*.mjs` all pass.

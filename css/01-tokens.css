@@ -136,7 +136,8 @@ body::after {
   input[type="range"] { border: 1px solid CanvasText; }
 }
 
-.cot-summary:focus-visible, .code-block pre:focus-visible, .landing-preset-card:focus-visible {
+.cot-summary:focus-visible, .code-block pre:focus-visible, .landing-preset-card:focus-visible,
+.thread-ctrl-btn:focus-visible, html:not([data-pointer-focus]) .thread-ctrl-btn:focus {
   outline: 2px solid var(--cyan-bright); outline-offset: -2px;
 }
 /* The .form-group line outweighs `.form-group input:focus { outline: none }` in 05-modals.css. */

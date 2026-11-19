@@ -36,11 +36,18 @@ console.log('\n=== A. rows that open something work from the keyboard ===');
 
 console.log('\n=== B. focus you can see ===');
 {
-  ok(/\.thread-item:has\(:focus-visible\) \.thread-ctrl \{ max-width: 200px; opacity: 1; \}/.test(read('css/03-threads.css')), 'thread buttons open on keyboard focus');
-  ok(/\.message:has\(:focus-visible\) \.message-actions \{ opacity: 1; \}/.test(read('css/04-chat.css')), 'message buttons show on keyboard focus');
-  ok(/\.folder-hdr:has\(:focus-visible\) \.folder-hdr-btns \{ opacity: 1; \}/.test(read('css/12-organisation.css')), 'folder buttons show on keyboard focus');
-  ok(/\.cot-summary:focus-visible, \.code-block pre:focus-visible, \.landing-preset-card:focus-visible \{\s*outline: 2px solid var\(--cyan-bright\); outline-offset: -2px;/.test(TOKENS),
-     'focus is drawn inside boxes that clip the glow');
+  ok(/\.thread-item:has\(:focus-visible\) \.thread-ctrl,\s*html:not\(\[data-pointer-focus\]\) \.thread-item:focus-within \.thread-ctrl \{ max-width: 200px; opacity: 1; \}/.test(read('css/03-threads.css')),
+     'thread buttons open on keyboard focus, and on any focus that didn\'t come from a click');
+  ok(/\.message:has\(:focus-visible\) \.message-actions,\s*html:not\(\[data-pointer-focus\]\) \.message:focus-within \.message-actions \{ opacity: 1; \}/.test(read('css/04-chat.css')),
+     'message buttons show the same way');
+  ok(/\.folder-hdr:has\(:focus-visible\) \.folder-hdr-btns,\s*html:not\(\[data-pointer-focus\]\) \.folder-hdr:focus-within \.folder-hdr-btns \{ opacity: 1; \}/.test(read('css/12-organisation.css')),
+     'folder buttons show the same way');
+  ok(/toggleAttribute\('data-pointer-focus', Date\.now\(\) - pointerAt < 500\)/.test(UTILS) && /addEventListener\('pointerdown', pointer, true\)/.test(UTILS),
+     'focus that came from a click is marked, so the rules above can tell it apart (a screen reader\'s focus isn\'t :focus-visible after a click)');
+  ok(/b\.focus\(\{ preventScroll: true \}\);\s*root\.toggleAttribute\('data-pointer-focus', byPointer\);/.test(RENDER),
+     'putting focus back after a repaint keeps that mark');
+  ok(/\.cot-summary:focus-visible, \.code-block pre:focus-visible, \.landing-preset-card:focus-visible,\s*\.thread-ctrl-btn:focus-visible, html:not\(\[data-pointer-focus\]\) \.thread-ctrl-btn:focus \{\s*outline: 2px solid var\(--cyan-bright\); outline-offset: -2px;/.test(TOKENS),
+     'focus is drawn inside boxes that clip the glow, the chat buttons\' row included');
   ok(/\.form-group input:is\(\[type="range"\], \[type="radio"\], \[type="checkbox"\]\):focus-visible \{/.test(TOKENS), 'sliders, radio buttons and checkboxes get an outline');
   ok(/@media \(forced-colors: active\) \{\s*:focus-visible \{ outline: 2px solid Highlight !important;/.test(TOKENS), 'forced colours draw a focus outline');
 }
