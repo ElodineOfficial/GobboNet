@@ -2508,6 +2508,127 @@ function _scheduleHideTip() {
 })();
 
 /* ================================================================
+   PANELS ARE DIALOGS (accessibility) -- CONFIG, CHARS, MODS and the rest.
+
+   A panel opens by adding `open` to its .modal-backdrop. One watcher on that
+   class handles every panel, so no open or close function changes: each panel
+   is a named dialog, opening moves focus into it and hides the page behind it
+   from screen readers, Tab stays inside, and closing puts focus back on
+   whatever opened it.
+================================================================ */
+(function wireDialogs() {
+  if (typeof document === 'undefined' || !document.querySelectorAll || typeof MutationObserver === 'undefined') return;
+  const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), ' +
+    'select:not([disabled]), textarea:not([disabled]), summary, [tabindex]:not([tabindex="-1"]), [contenteditable="true"]';
+  const openers = new WeakMap();
+  const shown = el => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length) &&
+    getComputedStyle(el).visibility !== 'hidden';
+  const controls = box => Array.from(box.querySelectorAll(FOCUSABLE)).filter(shown);
+  const boxOf = back => back.querySelector('.modal') || back;
+  // The page behind a panel: the app, or another panel. Focus anywhere else (the first-run tour's card, a mod's
+  // own panel) is left where it is: opening a panel doesn't take it, and Tab there isn't pulled into the panel.
+  const inPage = el => !el || el === document.body || !!(el.closest && el.closest('#app, .modal-backdrop'));
+
+  function mark(back) {
+    const box = boxOf(back);
+    box.setAttribute('role', 'dialog');
+    box.setAttribute('aria-modal', 'true');
+    const h = box.querySelector('h2');
+    if (h && !box.hasAttribute('aria-labelledby') && !box.hasAttribute('aria-label')) {
+      if (!h.id) h.id = back.id + '-title';
+      box.setAttribute('aria-labelledby', h.id);
+    }
+    if (!box.hasAttribute('tabindex')) box.setAttribute('tabindex', '-1');
+  }
+  function opened(back) {
+    const from = document.activeElement;
+    if (from && from !== document.body && !back.contains(from)) openers.set(back, from);
+    // Once the open function has filled the panel in, and only if it didn't place focus itself (sign-in
+    // focuses its password). The panel, not its first field: a screen reader says the panel's name, and a
+    // phone doesn't raise its keyboard for CONFIG's search box.
+    setTimeout(() => {
+      if (!back.classList.contains('open')) return;
+      const now = document.activeElement;
+      if (!back.contains(now) && inPage(now)) boxOf(back).focus({ preventScroll: true });
+      hideBehind();
+    }, 0);
+  }
+  function closed(back) {
+    const to = openers.get(back);
+    openers.delete(back);
+    const now = document.activeElement;
+    if (now && now !== document.body && !back.contains(now)) return;   // something else already took focus
+    if (to && document.contains(to) && shown(to)) to.focus({ preventScroll: true });
+  }
+  function topPanel() {   // the open one with the highest z-index, the later one on a tie
+    let best = null, bestZ = -Infinity;
+    for (const b of document.querySelectorAll('.modal-backdrop.open')) {
+      const z = parseInt(getComputedStyle(b).zIndex, 10) || 0;
+      if (z >= bestZ) { best = b; bestZ = z; }
+    }
+    return best;
+  }
+  // While a panel is open, what's behind it (the app, or CONFIG under ADD A MODEL) is hidden from screen readers,
+  // as a browser's own modal dialog does. aria-modal alone didn't do it: NVDA in Edge still read the page behind,
+  // and on a Shift+Tab pressed just after CONFIG opened it moved focus there itself. aria-hidden rather than inert,
+  // so code that sends focus into the page as a panel closes still can.
+  const hidden = new Set();
+  function hideBehind() {
+    const top = topPanel(), want = new Set();
+    if (top) {
+      const app = document.getElementById('app');
+      if (app) want.add(app);
+      for (const b of document.querySelectorAll('.modal-backdrop.open')) if (b !== top) want.add(b);
+    }
+    for (const el of hidden) if (!want.has(el)) { el.removeAttribute('aria-hidden'); hidden.delete(el); }
+    for (const el of want) if (!el.hasAttribute('aria-hidden')) { el.setAttribute('aria-hidden', 'true'); hidden.add(el); }
+  }
+
+  const watch = new MutationObserver((records) => {
+    for (const r of records) {
+      const back = r.target;
+      const was = (r.oldValue || '').split(/\s+/).includes('open');
+      const is = back.classList.contains('open');
+      if (is && !was) opened(back);
+      else if (was && !is) { hideBehind(); closed(back); }
+    }
+  });
+  for (const back of document.querySelectorAll('.modal-backdrop')) {
+    mark(back);
+    watch.observe(back, { attributes: true, attributeFilter: ['class'], attributeOldValue: true });
+  }
+
+  document.addEventListener('keydown', (e) => {
+    // WebKit on Linux names Shift+Tab's key "Unidentified"; its code is still "Tab".
+    if ((e.key !== 'Tab' && e.code !== 'Tab') || e.ctrlKey || e.metaKey || e.altKey) return;
+    const back = topPanel();
+    if (!back) return;
+    const items = controls(boxOf(back));
+    if (!items.length) return;
+    const first = items[0], last = items[items.length - 1];
+    const now = document.activeElement;
+    if (!back.contains(now)) {
+      if (!inPage(now)) return;
+      e.preventDefault(); (e.shiftKey ? last : first).focus(); return;
+    }
+    // Just opened, focus is on the panel itself, and Shift+Tab from there would leave it for the page behind.
+    if (!e.shiftKey && now === last) { e.preventDefault(); first.focus(); }
+    else if (e.shiftKey && (now === first || now === boxOf(back))) { e.preventDefault(); last.focus(); }
+  }, true);
+
+  // The page's own Escape closes the other panels but not ADD A MODEL, which opens over CONFIG: it closed
+  // CONFIG underneath and left the catalogue on its own. Now it closes just the catalogue (a download keeps
+  // running) and goes no further. An open "?" tooltip still takes the first Escape. LORE SUMMARY is unchanged.
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape' || e.cancelBubble) return;
+    const back = topPanel();
+    if (!back || back.id !== 'model-catalog-modal' || typeof closeModelCatalog !== 'function') return;
+    closeModelCatalog();
+    e.stopPropagation();
+  }, true);
+})();
+
+/* ================================================================
    UNDO (1.7.9, F8) -- "Deleted 'Tifa' -- Undo" for 10 seconds.
 
    undoable({ label, undo, commit }) is called by a delete right AFTER it has
