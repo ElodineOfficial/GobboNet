@@ -1322,7 +1322,7 @@ function landingGroupsHtml() {
       : `<div class="group-avatar group-avatar-stack group-avatar-n${Math.min(4, present.length) || 1}">${faces || escapeHtml(String(g.name || '?').charAt(0).toUpperCase())}</div>`;
     const who = present.length ? present.map(p => p.card.name || 'Unnamed').join(', ') : 'no characters yet';
     return `
-      <div class="landing-char-card landing-group-card" onclick="startGroupChat('${escapeJsAttr(g.id)}')" title="Start a chat with this group">
+      <div class="landing-char-card landing-group-card" role="button" tabindex="0" onclick="startGroupChat('${escapeJsAttr(g.id)}')" title="Start a chat with this group">
         ${avatar}
         <div class="landing-char-info">
           <div class="landing-char-name">${escapeHtml(g.name)}</div>

@@ -92,7 +92,7 @@ function renderLandingPage() {
     const avatarHtml = renderAvatar(c.avatar, c.name);
     const desc = (c.personality || c.writingStyle || '').slice(0, 72);
     return `
-      <div class="landing-char-card ${isActive ? 'landing-char-active' : ''}"
+      <div class="landing-char-card ${isActive ? 'landing-char-active' : ''}" role="button" tabindex="0"${isActive ? ' aria-current="true"' : ''}
            onclick="activateCard('${escapeJsAttr(c.id)}')" title="Set as active character">
         <div class="landing-char-avatar">${avatarHtml}</div>
         <div class="landing-char-info">
@@ -123,9 +123,9 @@ function renderLandingPage() {
       // UPDATE instead of an "already in your list" dead end.
       const st = hasCardData ? defaultCharState(p) : 'preset';
       const clickAttr = st === 'new'
-        ? `onclick="installDefaultChar(${i})" title="Install as character card"`
+        ? `onclick="installDefaultChar(${i})" role="button" tabindex="0" title="Install as character card"`
         : st === 'update'
-        ? `onclick="installDefaultChar(${i})" title="Replace your copy's prompt with the version that ships with GobboNet (UNDO brings yours back)"`
+        ? `onclick="installDefaultChar(${i})" role="button" tabindex="0" title="Replace your copy's prompt with the version that ships with GobboNet (UNDO brings yours back)"`
         : st === 'same'
         ? `title="Already in your characters; pick it in CHARS"`
         : `title="${name}"`;
@@ -212,7 +212,10 @@ function renderMessages() {
     const wasLanding = !!container.querySelector('.landing-page');
     const pageTop = container.scrollTop;
     const listTops = [...container.querySelectorAll(LANDING_SCROLLERS)].map(l => l.scrollTop);
-    container.innerHTML = renderLandingPage();
+    const html = renderLandingPage();
+    const paintLanding = () => { container.innerHTML = html; };
+    if (!wasLanding || typeof keepFocusAcross !== 'function') paintLanding();
+    else if (!sameMarkup(container, html)) keepFocusAcross(container, paintLanding);
     if (wasLanding) {
       container.scrollTop = pageTop;
       container.querySelectorAll(LANDING_SCROLLERS).forEach((l, i) => { l.scrollTop = listTops[i] || 0; });
@@ -573,7 +576,8 @@ function renderMessages() {
       </div>`;
   });
 
-  container.innerHTML = branchBannerHtml + rowsWithForks.join('');
+  const paintRows = () => { container.innerHTML = branchBannerHtml + rowsWithForks.join(''); };
+  if (typeof keepFocusAcross === 'function') keepFocusAcross(container, paintRows); else paintRows();
 
   // Persistent lore-compression marker. summarizeForLore shows a transient
   // "compressing..." indicator while it runs, but that vanishes the moment

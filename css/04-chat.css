@@ -288,6 +288,8 @@
   transition: opacity var(--transition);
 }
 .message:hover .message-actions { opacity: 1; }
+.message:has(:focus-visible) .message-actions,
+html:not([data-pointer-focus]) .message:focus-within .message-actions { opacity: 1; }
 
 .msg-action-btn {
   background: rgba(0,0,0,0.6);

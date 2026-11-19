@@ -899,6 +899,8 @@ function updateSyncIndicator() {
     el.id = 'sync-indicator';
     el.className = 'sync-indicator';
     el.title = 'Click to manually restore from the server backup';
+    el.setAttribute('role', 'button');
+    el.tabIndex = 0;
     el.addEventListener('click', () => {
       if (stateSync.status === 'locked') {
         // Offering a restore here would be answering the wrong question: the

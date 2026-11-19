@@ -391,14 +391,14 @@ function moveCard(id, delta, btn) {
 function renderCardGrid() {
   const grid = document.getElementById('card-grid');
   const total = state.characterCards.length;
-  grid.innerHTML = state.characterCards.map((c, i) => {
+  const paint = () => { grid.innerHTML = state.characterCards.map((c, i) => {
     const av = renderAvatar(c.avatar, c.name);
     return `
-    <div class="card-item ${c.id === state.activeCardId ? 'active' : ''}" onclick="activateCard('${escapeJsAttr(c.id)}')">
+    <div class="card-item ${c.id === state.activeCardId ? 'active' : ''}" data-card-id="${escapeHtml(c.id)}" onclick="activateCard('${escapeJsAttr(c.id)}')">
       ${moveColumnHtml(c.id, c.name, i, total, 'moveCard')}
       <div class="card-avatar">${av}</div>
       <div class="card-info">
-        <div class="card-name">${escapeHtml(c.name)}</div>
+        <div role="button" tabindex="0"${c.id === state.activeCardId ? ' aria-current="true"' : ''} class="card-name">${escapeHtml(c.name)}</div>
         <div class="card-desc">${escapeHtml((c.writingStyle || '').slice(0, 60))}</div>
       </div>
       <div class="card-actions">
@@ -408,7 +408,8 @@ function renderCardGrid() {
         ${state.characterCards.length > 1 ? `<button class="msg-action-btn btn-delete" onclick="event.stopPropagation();deleteCardById('${escapeJsAttr(c.id)}')" title="Delete this character">Del</button>` : ''}
       </div>
     </div>`;
-  }).join('');
+  }).join(''); };
+  if (typeof keepFocusAcross === 'function') keepFocusAcross(grid, paint); else paint();
   // The groups list shows its members' names and faces, so it is redrawn
   // whenever the characters are (1.8.0, js/29-groups.js).
   if (typeof renderGroupGrid === 'function') { try { renderGroupGrid(); } catch (e) { console.error('[group]', e); } }

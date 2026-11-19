@@ -19,7 +19,7 @@ function renderPersonaGrid() {
     return;
   }
   const total = state.personaCards.length;
-  grid.innerHTML = state.personaCards.map((p, i) => {
+  const paint = () => { grid.innerHTML = state.personaCards.map((p, i) => {
     const av = renderAvatar(p.avatar, p.name);
     const freq = (typeof p.injectionFrequency === 'number') ? p.injectionFrequency : 5;
     const freqLabel = freq === 0
@@ -32,11 +32,11 @@ function renderPersonaGrid() {
       ? `${escapeHtml(desc.slice(0, 50))}${desc.length > 50 ? '\u2026' : ''} \u00b7 ${freqLabel}`
       : freqLabel;
     return `
-    <div class="card-item ${p.id === state.activePersonaId ? 'active' : ''}" onclick="activatePersona('${escapeJsAttr(p.id)}')">
+    <div class="card-item ${p.id === state.activePersonaId ? 'active' : ''}" data-card-id="${escapeHtml(p.id)}" onclick="activatePersona('${escapeJsAttr(p.id)}')">
       ${moveColumnHtml(p.id, p.name, i, total, 'movePersona')}
       <div class="card-avatar">${av}</div>
       <div class="card-info">
-        <div class="card-name">${escapeHtml(p.name || 'Unnamed')}</div>
+        <div role="button" tabindex="0"${p.id === state.activePersonaId ? ' aria-current="true"' : ''} class="card-name">${escapeHtml(p.name || 'Unnamed')}</div>
         <div class="card-desc">${subline}</div>
       </div>
       <div class="card-actions">
@@ -45,7 +45,8 @@ function renderPersonaGrid() {
         ${state.personaCards.length > 1 ? `<button class="msg-action-btn btn-delete" onclick="event.stopPropagation();deletePersonaById('${escapeJsAttr(p.id)}')" title="Delete this persona">Del</button>` : ''}
       </div>
     </div>`;
-  }).join('');
+  }).join(''); };
+  if (typeof keepFocusAcross === 'function') keepFocusAcross(grid, paint); else paint();
 }
 
 /* Reorder engine is shared with character cards — see moveCastEntry() in

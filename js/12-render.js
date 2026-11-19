@@ -282,7 +282,7 @@ function renderThreadItem(t) {
        ondragend="onThreadDragEnd(event)">
     <div class="thread-body">
       <div class="thread-name-row">
-        <span class="thread-name" title="${escapeHtml(t.name)}">${escapeHtml(t.name)}</span>
+        <span class="thread-name" role="button" tabindex="0"${isActive ? ' aria-current="true"' : ''} title="${escapeHtml(t.name)}">${escapeHtml(t.name)}</span>
         ${genBadge}${pinBadge}${groupBadge}${branchBadge}${forkBadge}
       </div>
       ${tagPills}
@@ -350,7 +350,7 @@ function renderSidebar() {
       <div class="folder-hdr" onclick="toggleFolderCollapse('${escapeJsAttr(folder.id)}')" ondragover="onFolderDragOver('${escapeJsAttr(folder.id)}',event)" ondragleave="onFolderDragLeave(event)" ondrop="onFolderDrop('${escapeJsAttr(folder.id)}',event)">
         <span class="folder-chevron">${isOpen?'&#9660;':'&#9658;'}</span>
         <span class="folder-icon">&#128193;</span>
-        <span class="folder-name-text">${escapeHtml(folder.name)}</span>
+        <span class="folder-name-text" role="button" tabindex="0" aria-expanded="${isOpen ? 'true' : 'false'}">${escapeHtml(folder.name)}</span>
         <span class="folder-count">${totalInFolder}</span>
         <div class="folder-hdr-btns">
           <button class="folder-btn" onclick="startFolderRename('${escapeJsAttr(folder.id)}',event)" title="Rename">&#9998;</button>
@@ -381,7 +381,56 @@ function renderSidebar() {
   // ── New folder button ────────────────────────────────────────────
   html += `<button class="new-folder-btn" onclick="startNewFolder()">+ FOLDER</button>`;
 
-  list.innerHTML = html;
+  if (!sameMarkup(list, html)) keepFocusAcross(list, () => { list.innerHTML = html; });
+}
+
+// Repainting replaces whatever has focus, and the browser drops focus to the top of the page.
+// This notes what had it, repaints, and puts focus back on the same thing in the new copy.
+function keepFocusAcross(container, paint) {
+  const a = typeof document !== 'undefined' ? document.activeElement : null;
+  if (!container || !a || a === document.body || !container.contains(a)) { paint(); return; }
+  // "The same thing": same row (its data-*-id), same id or first two classes, and the same one of
+  // those if several match (Edit and Copy share theirs). Its position is only used outside a row,
+  // because rows move (pinning sends a chat to the top).
+  const KEYS = ['data-thread-id', 'data-folder-id', 'data-index', 'data-card-id'];
+  const row = a.closest('[' + KEYS.join('],[') + ']');
+  const esc = v => (typeof CSS !== 'undefined' && CSS.escape) ? CSS.escape(v) : String(v).replace(/["\\]/g, '\\$&');
+  const rowSel = row ? KEYS.filter(k => row.hasAttribute(k)).map(k => '[' + k + '="' + esc(row.getAttribute(k)) + '"]').join('') : '';
+  const ownSel = a.id ? '#' + esc(a.id)
+    : a.tagName.toLowerCase() + Array.from(a.classList).slice(0, 2).map(c => '.' + esc(c)).join('');
+  let nth = 0;
+  try { if (row) nth = Math.max(0, Array.prototype.indexOf.call(row.querySelectorAll(ownSel), a)); } catch (_) {}
+  const path = [];
+  for (let n = a; n && n !== container; n = n.parentElement) path.unshift(Array.prototype.indexOf.call(n.parentElement.children, n));
+  paint();
+  const now = document.activeElement;
+  if (now && now !== document.body && container.contains(now)) return;
+  let b = null;
+  try {
+    if (rowSel) {
+      const same = container.querySelectorAll(rowSel + ' ' + ownSel);
+      b = same[nth] || same[0] || container.querySelector(rowSel + ownSel);
+    }
+  } catch (_) { b = null; }
+  if (!b && !rowSel) {
+    let n = container;
+    for (const i of path) n = n && n.children[i];
+    if (n && n.tagName === a.tagName) b = n;
+  }
+  if (b && typeof b.focus === 'function') {
+    const root = document.documentElement, byPointer = root.hasAttribute('data-pointer-focus');
+    b.focus({ preventScroll: true });
+    root.toggleAttribute('data-pointer-focus', byPointer);   // putting focus back isn't a new move
+  }
+}
+
+// A repaint that would change nothing is skipped: rebuilding moves focus, and a screen reader reads it out again.
+function sameMarkup(container, html) {
+  if (!container.childNodes) return false;
+  const t = document.createElement('template');
+  t.innerHTML = html;
+  const now = container.childNodes, next = t.content.childNodes;
+  return now.length === next.length && Array.prototype.every.call(now, (n, i) => n.isEqualNode(next[i]));
 }
 
 function filterThreads() {
