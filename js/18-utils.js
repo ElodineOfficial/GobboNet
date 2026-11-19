@@ -2628,6 +2628,20 @@ function _scheduleHideTip() {
   }, true);
 })();
 
+// IMPORT CARD, "Browse file...", DATA's imports and a mod's file button are labels around a hidden file
+// input, so Tab never reached them. They take focus now (tabindex="0" role="button" on the label), and Enter
+// or Space clicks the label, which opens the file picker as a mouse click does.
+if (typeof document !== 'undefined' && document.addEventListener) {
+  document.addEventListener('keydown', (e) => {
+    if ((e.key !== 'Enter' && e.key !== ' ') || e.defaultPrevented) return;
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    const t = e.target;
+    if (!t || !t.matches || !t.matches('label[role="button"]')) return;
+    e.preventDefault();                      // Space would scroll the panel
+    t.click();
+  });
+}
+
 /* ================================================================
    UNDO (1.7.9, F8) -- "Deleted 'Tifa' -- Undo" for 10 seconds.
 

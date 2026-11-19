@@ -1,4 +1,5 @@
-// Accessibility: panels behave as dialogs (docs/changelog/CHANGELOG-accessibility-dialogs.md).
+// Accessibility: panels behave as dialogs, and their file buttons take focus
+// (docs/changelog/CHANGELOG-accessibility-dialogs.md, CHANGELOG-accessibility-file-buttons.md).
 // Static checks on the real files, like test-hint-tooltips.mjs.
 import { fileURLToPath } from 'node:url';
 import fs from 'fs';
@@ -7,6 +8,7 @@ const ROOT = fileURLToPath(new URL('..', import.meta.url)).replace(/\/$/, '');
 const read = (p) => fs.readFileSync(ROOT + '/' + p, 'utf8');
 const HTML = read('chat.html');
 const UTILS = read('js/18-utils.js');
+const EXT = read('js/19-extensions.js');
 
 let pass = 0, fail = 0;
 const ok = (c, l, extra) => {
@@ -47,6 +49,17 @@ console.log('\n=== B. the watcher (js/18-utils.js) ===');
      'Tab and Shift+Tab wrap inside the panel on top, Shift+Tab from the panel itself too, and in WebKit on Linux');
   ok(/e\.key !== 'Escape' \|\| e\.cancelBubble/.test(WIRE) && /back\.id !== 'model-catalog-modal'/.test(WIRE) && /closeModelCatalog\(\);\s*e\.stopPropagation\(\);/.test(WIRE),
      'Esc closes ADD A MODEL alone, not CONFIG under it, and leaves an open "?" tooltip the first Esc');
+}
+
+console.log('\n=== C. file buttons take focus ===');
+{
+  // A label around a hidden file input is what the mouse clicks; without tabindex Tab skips it.
+  const labels = (src) => [...src.matchAll(/<label\b[^>]*>(?:(?!<\/label>)[\s\S])*?type="file"[\s\S]*?<\/label>/g)].map(m => m[0].match(/<label\b[^>]*>/)[0]);
+  const all = [...labels(HTML), ...labels(EXT)];
+  const missing = all.filter(l => !/tabindex="0"/.test(l) || !/role="button"/.test(l));
+  ok(all.length >= 10 && missing.length === 0, `each of the ${all.length} file buttons (chat.html, js/19-extensions.js) has tabindex="0" role="button"`, missing.join('\n      '));
+  ok(/t\.matches\('label\[role="button"\]'\)\) return;\s*e\.preventDefault\(\);[^\n]*\n\s*t\.click\(\);/.test(UTILS) && /e\.key !== 'Enter' && e\.key !== ' '\) \|\| e\.defaultPrevented/.test(UTILS),
+     'Enter or Space on one clicks it, unless another handler already took the key');
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
