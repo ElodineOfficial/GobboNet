@@ -990,7 +990,7 @@ function renderExtEntryList(kind) {
       <input type="text" class="ext-entry-url" placeholder="${urlPh}" value="${escapeHtml(e.url || '')}">
       <textarea class="ext-code-area ext-entry-raw" rows="${rows}" placeholder="${rawPh}">${escapeHtml(e.raw || '')}</textarea>
       <div style="display:flex;gap:8px;margin-top:6px;align-items:center;">
-        <label class="avatar-file-btn" style="margin:0;">
+        <label class="avatar-file-btn" tabindex="0" role="button" style="margin:0;">
           ${fileLabel}
           <input type="file" accept="${accept}" style="display:none" onchange="handleExtFileEntry(this,'${escapeJsAttr(kind)}','${escapeJsAttr(e.id)}')">
         </label>

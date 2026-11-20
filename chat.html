@@ -812,7 +812,7 @@
       </div>
       <div class="card-grid" id="card-grid"></div>
       <button class="btn btn-fill btn-block" onclick="createCard()" style="margin-bottom:8px;">+ NEW CHARACTER</button>
-      <label class="btn btn-block" style="margin-bottom:20px; cursor:pointer;" title="Import a SillyTavern / TavernAI character card (V1, V2 or V3) — .png, .json, .charx, or a .zip exported for Discord">
+      <label class="btn btn-block" tabindex="0" role="button" style="margin-bottom:20px; cursor:pointer;" title="Import a SillyTavern / TavernAI character card (V1, V2 or V3) — .png, .json, .charx, or a .zip exported for Discord">
         &#8593; IMPORT CARD
         <input type="file" accept=".png,.jpg,.jpeg,.zip,.json,.charx,image/png,image/jpeg,application/zip,application/json" style="display:none" onchange="importCharacterCard(this)">
       </label>
@@ -851,7 +851,7 @@
           <div class="avatar-preview" id="card-avatar-preview">--</div>
           <div class="avatar-picker-controls">
             <input type="text" id="card-avatar" placeholder="Paste image URL..." oninput="previewAvatar('card-avatar','card-avatar-preview')">
-            <label class="avatar-file-btn">
+            <label class="avatar-file-btn" tabindex="0" role="button">
               Browse file...
               <input type="file" accept="image/*" style="display:none" onchange="handleAvatarFile(this,'card-avatar','card-avatar-preview')">
             </label>
@@ -865,7 +865,7 @@
           <div class="avatar-preview" id="card-bg-preview" style="width:80px;height:48px;">--</div>
           <div class="avatar-picker-controls">
             <input type="text" id="card-bg" placeholder="Image URL for chat background..." oninput="previewBg()">
-            <label class="avatar-file-btn">
+            <label class="avatar-file-btn" tabindex="0" role="button">
               Browse file...
               <input type="file" accept="image/*" style="display:none" onchange="handleBgFile(this)">
             </label>
@@ -1343,7 +1343,7 @@ gobbo.tool(&#39;roll_dice&#39;, {
           <div class="avatar-preview" id="persona-avatar-preview">--</div>
           <div class="avatar-picker-controls">
             <input type="text" id="persona-avatar" placeholder="Paste image URL..." oninput="previewAvatar('persona-avatar','persona-avatar-preview')">
-            <label class="avatar-file-btn">
+            <label class="avatar-file-btn" tabindex="0" role="button">
               Browse file...
               <input type="file" accept="image/*" style="display:none" onchange="handleAvatarFile(this,'persona-avatar','persona-avatar-preview')">
             </label>
@@ -1413,7 +1413,7 @@ gobbo.tool(&#39;roll_dice&#39;, {
           <div class="avatar-preview" id="group-avatar-preview">--</div>
           <div class="avatar-picker-controls">
             <input type="text" id="group-avatar" placeholder="Paste image URL..." oninput="previewAvatar('group-avatar','group-avatar-preview')">
-            <label class="avatar-file-btn">
+            <label class="avatar-file-btn" tabindex="0" role="button">
               Browse file...
               <input type="file" accept="image/*" style="display:none" onchange="handleAvatarFile(this,'group-avatar','group-avatar-preview')">
             </label>
@@ -1797,19 +1797,19 @@ gobbo.tool(&#39;roll_dice&#39;, {
         <div class="form-hint" style="margin-bottom:10px;">Imports keep what you have and add what is new, while <strong>a full backup replaces everything</strong>.<button type="button" class="tip-btn" aria-label="More about importing" aria-describedby="tip-data-import" aria-expanded="false">?</button></div>
         <div class="tip-body" id="tip-data-import" hidden>Threads, characters, and personas are <strong>merged</strong> &mdash; existing entries are kept and only new IDs are added. Full backup replaces everything.</div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-          <label class="avatar-file-btn" style="margin:0;" title="Import a threads JSON">
+          <label class="avatar-file-btn" tabindex="0" role="button" style="margin:0;" title="Import a threads JSON">
             Threads&hellip;
             <input type="file" accept=".json,application/json" style="display:none" onchange="importData(this,'threads')">
           </label>
-          <label class="avatar-file-btn" style="margin:0;" title="Import a characters JSON">
+          <label class="avatar-file-btn" tabindex="0" role="button" style="margin:0;" title="Import a characters JSON">
             Characters&hellip;
             <input type="file" accept=".json,application/json" style="display:none" onchange="importData(this,'cards')">
           </label>
-          <label class="avatar-file-btn" style="margin:0;" title="Import a personas JSON">
+          <label class="avatar-file-btn" tabindex="0" role="button" style="margin:0;" title="Import a personas JSON">
             Personas&hellip;
             <input type="file" accept=".json,application/json" style="display:none" onchange="importData(this,'personas')">
           </label>
-          <label class="avatar-file-btn" style="margin:0;" title="Import a full backup &mdash; replaces all current data">
+          <label class="avatar-file-btn" tabindex="0" role="button" style="margin:0;" title="Import a full backup &mdash; replaces all current data">
             Full Backup&hellip;
             <input type="file" accept=".json,application/json" style="display:none" onchange="importData(this,'all')">
           </label>
